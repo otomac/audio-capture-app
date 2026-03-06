@@ -28,6 +28,9 @@ public class AudioCaptureService : IDisposable
     private RecordingSession? _currentSession;
     private bool _hasWrittenData;
 
+    // 文字起こし
+    private TranscriptionService? _transcriptionService;
+
     private Thread? _writerThread;
     private volatile bool _isWriting;
 
@@ -39,6 +42,8 @@ public class AudioCaptureService : IDisposable
     public RecordingSession? CurrentSession => _currentSession;
     public float MicPeakLevel => _micPeakLevel;
     public float LoopbackPeakLevel => _loopbackPeakLevel;
+
+    public TranscriptionService? TranscriptionService => _transcriptionService;
 
     public event Action<string>? RecordingError;
 
@@ -109,6 +114,11 @@ public class AudioCaptureService : IDisposable
 
     // --- 録音制御 ---
 
+    public void SetTranscriptionService(TranscriptionService? service)
+    {
+        _transcriptionService = service;
+    }
+
     public void StartRecording(AudioDevice? micDevice, AudioDevice? loopbackDevice, string outputFolder)
     {
         if (IsRecording)
@@ -153,6 +163,12 @@ public class AudioCaptureService : IDisposable
         }
 
         _hasWrittenData = false;
+
+        // 文字起こしセッション開始
+        if (_transcriptionService is { IsModelLoaded: true })
+        {
+            _transcriptionService.StartSession(filePath, _outputFormat!.SampleRate, _outputFormat.Channels);
+        }
 
         // マイクバッファをクリアして録音開始時点からの音声のみ使う
         _micBuffer?.ClearBuffer();
@@ -277,6 +293,9 @@ public class AudioCaptureService : IDisposable
 
                 _mp3Writer!.Write(byteBuf, 0, read * 4);
                 _hasWrittenData = true;
+
+                // 文字起こしサービスにサンプルを渡す
+                _transcriptionService?.AddSamples(sampleBuf, read);
             }
 
             // 残りデータをフラッシュ
@@ -334,6 +353,9 @@ public class AudioCaptureService : IDisposable
         _isWriting = false;
         _writerThread?.Join(timeout: TimeSpan.FromSeconds(2));
         _writerThread = null;
+
+        // 文字起こしセッション停止（残りバッファを処理してから終了）
+        _transcriptionService?.StopSession();
 
         CleanupLoopback();
 

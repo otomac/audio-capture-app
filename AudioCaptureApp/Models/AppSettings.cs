@@ -9,4 +9,9 @@ public class AppSettings
 
     public string? LastSelectedDeviceId { get; set; }
     public string? LastSelectedLoopbackDeviceId { get; set; }
+
+    public bool TranscriptionEnabled { get; set; }
+    public string WhisperModelPath { get; set; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "AudioCaptureApp", "models", "ggml-small.bin");
 }

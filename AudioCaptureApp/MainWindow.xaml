@@ -49,6 +49,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Row 0: 入力デバイス GroupBox -->
@@ -144,8 +145,44 @@
             </Grid>
         </GroupBox>
 
-        <!-- Row 5: ステータスバー -->
-        <Border Grid.Row="5" Background="#FFF0F0F0" Padding="8,4" CornerRadius="2">
+        <!-- Row 5: 文字起こし設定 -->
+        <GroupBox Grid.Row="5" Margin="0,0,0,16">
+            <GroupBox.Header>
+                <StackPanel Orientation="Horizontal">
+                    <CheckBox Content="文字起こし (Whisper)" IsChecked="{Binding TranscriptionEnabled}"
+                              VerticalAlignment="Center"
+                              IsEnabled="{Binding IsRecording, Converter={StaticResource InverseBoolConverter}}"/>
+                </StackPanel>
+            </GroupBox.Header>
+            <Grid Margin="16,12,16,16"
+                  IsEnabled="{Binding TranscriptionEnabled}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="モデル" VerticalAlignment="Center" Margin="0,0,0,8"/>
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,8"/>
+                <TextBox Grid.Row="0" Grid.Column="2" Text="{Binding WhisperModelPath, Mode=OneWay}"
+                         IsReadOnly="True" VerticalContentAlignment="Center" Margin="0,0,8,8"/>
+                <Button Grid.Row="0" Grid.Column="3" Content="選択" Command="{Binding SelectWhisperModelCommand}"
+                        Padding="12,2" Margin="0,0,0,8"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="状態" VerticalAlignment="Center"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Text="{Binding TranscriptionStatus}"
+                           VerticalAlignment="Center" Foreground="#FF555555"/>
+            </Grid>
+        </GroupBox>
+
+        <!-- Row 6: ステータスバー -->
+        <Border Grid.Row="6" Background="#FFF0F0F0" Padding="8,4" CornerRadius="2">
             <TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
                        Foreground="#FF555555"/>
         </Border>

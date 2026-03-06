@@ -10,6 +10,7 @@ namespace AudioCaptureApp.ViewModels;
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AudioCaptureService _audioCaptureService = new();
+    private readonly TranscriptionService _transcriptionService = new();
     private readonly SettingsService _settingsService = new();
     private readonly DispatcherTimer _meterTimer;
     private readonly DispatcherTimer _clockTimer;
@@ -31,9 +32,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
 
         _audioCaptureService.RecordingError += OnRecordingError;
+        _transcriptionService.Error += msg =>
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                StatusMessage = $"文字起こしエラー: {msg}");
 
         var settings = _settingsService.Load();
         OutputFolder = settings.OutputFolder;
+        TranscriptionEnabled = settings.TranscriptionEnabled;
+        WhisperModelPath = settings.WhisperModelPath;
+
+        // 文字起こし有効時、モデルを読み込む
+        if (TranscriptionEnabled)
+            TryLoadWhisperModel();
 
         RefreshDevicesInternal();
 
@@ -75,6 +85,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     private bool _isRecording;
 
     public string RecordingStatusText => IsRecording ? "録音中" : "停止中";
@@ -94,6 +105,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _statusMessage = "待機中";
+
+    // --- 文字起こし設定 ---
+    [ObservableProperty]
+    private bool _transcriptionEnabled;
+
+    partial void OnTranscriptionEnabledChanged(bool value)
+    {
+        if (value)
+            TryLoadWhisperModel();
+        else
+            _audioCaptureService.SetTranscriptionService(null);
+        SaveSettings();
+    }
+
+    [ObservableProperty]
+    private string _whisperModelPath = string.Empty;
+
+    [ObservableProperty]
+    private string _transcriptionStatus = "";
 
     [ObservableProperty]
     private double _micLevelDb = -60.0;
@@ -136,9 +166,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LoopbackLevelDb = -60.0;
 
         var session = _audioCaptureService.CurrentSession;
-        StatusMessage = session != null
-            ? $"保存完了: {session.FilePath}"
-            : "録音データなし（ファイルは作成されませんでした）";
+        if (session != null)
+        {
+            var txtPath = System.IO.Path.ChangeExtension(session.FilePath, ".txt");
+            var hasTxt = TranscriptionEnabled && System.IO.File.Exists(txtPath);
+            StatusMessage = hasTxt
+                ? $"保存完了: {session.FilePath} (文字起こし: {txtPath})"
+                : $"保存完了: {session.FilePath}";
+        }
+        else
+        {
+            StatusMessage = "録音データなし（ファイルは作成されませんでした）";
+        }
     }
 
     private bool CanSelectOutputFolder => !IsRecording;
@@ -207,13 +246,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    private bool CanSelectWhisperModel => !IsRecording;
+
+    [RelayCommand(CanExecute = nameof(CanSelectWhisperModel))]
+    private void SelectWhisperModel()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Whisperモデルファイルを選択",
+            Filter = "GGMLモデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            WhisperModelPath = dialog.FileName;
+            TryLoadWhisperModel();
+            SaveSettings();
+        }
+    }
+
+    private void TryLoadWhisperModel()
+    {
+        if (string.IsNullOrEmpty(WhisperModelPath))
+        {
+            TranscriptionStatus = "モデルパス未設定";
+            _audioCaptureService.SetTranscriptionService(null);
+            return;
+        }
+
+        if (!System.IO.File.Exists(WhisperModelPath))
+        {
+            TranscriptionStatus = "モデルファイルが見つかりません";
+            _audioCaptureService.SetTranscriptionService(null);
+            return;
+        }
+
+        TranscriptionStatus = "モデル読み込み中...";
+        if (_transcriptionService.LoadModel(WhisperModelPath))
+        {
+            TranscriptionStatus = "モデル読み込み完了";
+            _audioCaptureService.SetTranscriptionService(_transcriptionService);
+        }
+        else
+        {
+            TranscriptionStatus = "モデル読み込み失敗";
+            _audioCaptureService.SetTranscriptionService(null);
+        }
+    }
+
     private void SaveSettings()
     {
         _settingsService.Save(new AppSettings
         {
             OutputFolder = OutputFolder,
             LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId,
-            LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId
+            LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId,
+            TranscriptionEnabled = TranscriptionEnabled,
+            WhisperModelPath = WhisperModelPath
         });
     }
 
@@ -222,5 +310,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _meterTimer.Stop();
         _clockTimer.Stop();
         _audioCaptureService.Dispose();
+        _transcriptionService.Dispose();
     }
 }
