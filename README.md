@@ -46,4 +46,7 @@ dotnet publish AudioCaptureApp/AudioCaptureApp.csproj -c Release -r win-x64 --se
 
 ## ライセンス
 
+MIT License
+Copyright (c) 2026 otomac
+
 NAudio.Lame は LGPL ライセンスの LAME を使用しています。商用配布時は要確認。
