@@ -4,19 +4,32 @@ using Whisper.net;
 
 namespace AudioCaptureApp.Services;
 
+public enum AudioSourceType { Mic, Speaker }
+
 public class TranscriptionService : IDisposable
 {
+    private class SourceState
+    {
+        public readonly List<float> Pcm16kBuffer = new(BufferThresholdSamples + TargetRate);
+        public readonly object BufferLock = new();
+        public TimeSpan ChunkOffset = TimeSpan.Zero;
+        public int SourceRate;
+        public int SourceChannels;
+        public double ResamplePos;
+        public string Label = "";
+        public WhisperProcessor? Processor;
+        // ローパスフィルタ用
+        public float LpfAlpha;
+        public float LpfPrev;
+    }
+
     private WhisperFactory? _factory;
-    private WhisperProcessor? _processor;
-    private readonly List<float> _pcm16kBuffer = new();
-    private readonly object _bufferLock = new();
+    private readonly Dictionary<AudioSourceType, SourceState> _sources = new();
     private Thread? _thread;
     private volatile bool _isRunning;
+    private CancellationTokenSource? _cts;
     private string _outputPath = "";
-    private TimeSpan _chunkOffset;
-    private int _sourceRate;
-    private int _sourceChannels;
-    private double _resamplePos;
+    private DateTime _sessionStartTime;
 
     private const int TargetRate = 16000;
     private const int BufferThresholdSamples = TargetRate * 20; // 20秒分
@@ -24,7 +37,7 @@ public class TranscriptionService : IDisposable
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
 
-    public bool IsModelLoaded => _processor != null;
+    public bool IsModelLoaded => _factory != null;
 
     public bool LoadModel(string modelPath)
     {
@@ -36,9 +49,6 @@ public class TranscriptionService : IDisposable
         try
         {
             _factory = WhisperFactory.FromPath(modelPath);
-            _processor = _factory.CreateBuilder()
-                .WithLanguage("ja")
-                .Build();
             return true;
         }
         catch (Exception ex)
@@ -49,99 +59,169 @@ public class TranscriptionService : IDisposable
         }
     }
 
-    public void StartSession(string mp3FilePath, int sourceRate, int sourceChannels)
+    public void RegisterSource(AudioSourceType type, string label, int sourceRate, int sourceChannels)
     {
-        if (_processor == null)
+        // 既存のプロセッサがあれば破棄
+        if (_sources.TryGetValue(type, out var existing))
+            existing.Processor?.Dispose();
+
+        // α = 2π·fc / (2π·fc + sourceRate),  fc = TargetRate / 2
+        float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
+
+        _sources[type] = new SourceState
+        {
+            SourceRate = sourceRate,
+            SourceChannels = sourceChannels,
+            Label = label,
+            Processor = _factory!.CreateBuilder().WithLanguage("ja").Build(),
+            LpfAlpha = alpha
+        };
+    }
+
+    public void StartSession(string mp3FilePath, DateTime startTime)
+    {
+        if (_factory == null)
             throw new InvalidOperationException("Whisperモデルが読み込まれていません。");
+        if (_sources.Count == 0)
+            throw new InvalidOperationException("音声ソースが登録されていません。先にRegisterSourceを呼び出してください。");
 
         _outputPath = Path.ChangeExtension(mp3FilePath, ".txt");
-        _sourceRate = sourceRate;
-        _sourceChannels = sourceChannels;
-        _chunkOffset = TimeSpan.Zero;
-        _resamplePos = 0;
+        _sessionStartTime = startTime;
 
-        lock (_bufferLock)
-            _pcm16kBuffer.Clear();
+        foreach (var state in _sources.Values)
+        {
+            lock (state.BufferLock)
+                state.Pcm16kBuffer.Clear();
+            state.ChunkOffset = TimeSpan.Zero;
+            state.ResamplePos = 0;
+            state.LpfPrev = 0f;
+        }
 
+        _cts = new CancellationTokenSource();
         _isRunning = true;
         _thread = new Thread(TranscriptionLoop) { IsBackground = true, Name = "WhisperTranscription" };
         _thread.Start();
     }
 
-    public void AddSamples(float[] samples, int sampleCount)
+    public void AddSamples(AudioSourceType type, float[] samples, int sampleCount)
     {
-        if (!_isRunning) return;
+        if (!_isRunning || !_sources.TryGetValue(type, out var state)) return;
 
-        // ステレオ→モノ変換 + ダウンサンプリング (sourceRate → 16kHz)
-        int channels = _sourceChannels;
+        // ステレオ→モノ変換 + アンチエイリアシングLPF + ダウンサンプリング (sourceRate → 16kHz)
+        int channels = state.SourceChannels;
         int frames = sampleCount / channels;
-        double ratio = (double)_sourceRate / TargetRate;
+        double ratio = (double)state.SourceRate / TargetRate;
+        float alpha = state.LpfAlpha;
 
-        var converted = new List<float>(frames / (int)ratio + 1);
-        for (; _resamplePos < frames; _resamplePos += ratio)
+        int estimatedCount = (int)(frames / ratio) + 1;
+        var converted = new float[estimatedCount];
+        int writeIndex = 0;
+
+        lock (state.BufferLock)
         {
-            int idx = (int)_resamplePos;
-            if (idx >= frames) break;
+            float prev = state.LpfPrev;
 
-            float sample = 0;
-            for (int ch = 0; ch < channels; ch++)
-                sample += samples[idx * channels + ch];
-            sample /= channels;
+            for (; state.ResamplePos < frames; state.ResamplePos += ratio)
+            {
+                int idx = (int)state.ResamplePos;
+                if (idx >= frames) break;
 
-            converted.Add(sample);
-        }
-        _resamplePos -= frames;
+                float sample = 0;
+                for (int ch = 0; ch < channels; ch++)
+                    sample += samples[idx * channels + ch];
+                sample /= channels;
 
-        if (converted.Count > 0)
-        {
-            lock (_bufferLock)
-                _pcm16kBuffer.AddRange(converted);
+                // 1次IIRローパスフィルタ適用
+                prev = prev + alpha * (sample - prev);
+
+                if (writeIndex < converted.Length)
+                    converted[writeIndex++] = prev;
+            }
+            state.ResamplePos -= frames;
+            state.LpfPrev = prev;
+
+            for (int i = 0; i < writeIndex; i++)
+                state.Pcm16kBuffer.Add(converted[i]);
         }
     }
 
     private void TranscriptionLoop()
     {
+        var token = _cts!.Token;
+
         while (_isRunning)
         {
-            Thread.Sleep(1000);
+            try { token.WaitHandle.WaitOne(1000); }
+            catch (ObjectDisposedException) { break; }
 
-            float[]? chunk = null;
-            lock (_bufferLock)
+            if (token.IsCancellationRequested) break;
+
+            foreach (var (_, state) in _sources)
             {
-                if (_pcm16kBuffer.Count >= BufferThresholdSamples)
+                if (token.IsCancellationRequested) break;
+
+                float[]? chunk = null;
+                lock (state.BufferLock)
                 {
-                    chunk = _pcm16kBuffer.ToArray();
-                    _pcm16kBuffer.Clear();
+                    if (state.Pcm16kBuffer.Count >= BufferThresholdSamples)
+                    {
+                        chunk = state.Pcm16kBuffer.ToArray();
+                        state.Pcm16kBuffer.Clear();
+                    }
                 }
+
+                if (chunk != null)
+                    ProcessChunk(chunk, state, token);
             }
-
-            if (chunk != null)
-                ProcessChunk(chunk);
         }
 
-        // 残りバッファを処理
-        float[]? remaining;
-        lock (_bufferLock)
+        // 残りバッファを処理（キャンセルされていなければ）
+        if (!token.IsCancellationRequested)
         {
-            remaining = _pcm16kBuffer.Count > TargetRate // 1秒以上あれば処理
-                ? _pcm16kBuffer.ToArray()
-                : null;
-            _pcm16kBuffer.Clear();
-        }
+            foreach (var (_, state) in _sources)
+            {
+                float[]? remaining;
+                lock (state.BufferLock)
+                {
+                    remaining = state.Pcm16kBuffer.Count > TargetRate // 1秒以上あれば処理
+                        ? state.Pcm16kBuffer.ToArray()
+                        : null;
+                    state.Pcm16kBuffer.Clear();
+                }
 
-        if (remaining != null)
-            ProcessChunk(remaining);
+                if (remaining != null)
+                    ProcessChunk(remaining, state, token);
+            }
+        }
     }
 
-    private void ProcessChunk(float[] samples)
+    private static bool IsSilent(float[] samples)
+    {
+        // RMS（二乗平均平方根）で音声エネルギーを測定
+        double sumSquares = 0;
+        for (int i = 0; i < samples.Length; i++)
+            sumSquares += samples[i] * (double)samples[i];
+        double rms = Math.Sqrt(sumSquares / samples.Length);
+        // RMS が -40dB 未満なら無音とみなす
+        return rms < 0.01;
+    }
+
+    private void ProcessChunk(float[] samples, SourceState state, CancellationToken token)
     {
         try
         {
+            // 無音チャンクはWhisperに渡さない（ハルシネーション防止）
+            if (IsSilent(samples))
+            {
+                state.ChunkOffset += TimeSpan.FromSeconds((double)samples.Length / TargetRate);
+                return;
+            }
+
             var results = new List<string>();
 
             // ProcessAsync を同期的に消費
-            var asyncEnum = _processor!.ProcessAsync(samples, CancellationToken.None);
-            var enumerator = asyncEnum.GetAsyncEnumerator(CancellationToken.None);
+            var asyncEnum = state.Processor!.ProcessAsync(samples, token);
+            var enumerator = asyncEnum.GetAsyncEnumerator(token);
             try
             {
                 while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())
@@ -150,9 +230,9 @@ public class TranscriptionService : IDisposable
                     var text = segment.Text?.Trim();
                     if (string.IsNullOrEmpty(text)) continue;
 
-                    var start = _chunkOffset + segment.Start;
-                    var end = _chunkOffset + segment.End;
-                    var line = $"[{start:hh\\:mm\\:ss} - {end:hh\\:mm\\:ss}] {text}";
+                    var startTime = _sessionStartTime + state.ChunkOffset + segment.Start;
+                    var endTime = _sessionStartTime + state.ChunkOffset + segment.End;
+                    var line = $"[{startTime:HH:mm:ss} - {endTime:HH:mm:ss}] [{state.Label}] {text}";
                     results.Add(line);
                     SegmentTranscribed?.Invoke(line);
                 }
@@ -167,7 +247,11 @@ public class TranscriptionService : IDisposable
                 File.AppendAllLines(_outputPath, results, Encoding.UTF8);
             }
 
-            _chunkOffset += TimeSpan.FromSeconds((double)samples.Length / TargetRate);
+            state.ChunkOffset += TimeSpan.FromSeconds((double)samples.Length / TargetRate);
+        }
+        catch (OperationCanceledException)
+        {
+            // キャンセルによる中断は正常終了扱い
         }
         catch (Exception ex)
         {
@@ -178,15 +262,29 @@ public class TranscriptionService : IDisposable
     public void StopSession()
     {
         _isRunning = false;
-        // Whisper処理に時間がかかる可能性があるため長めのタイムアウト
-        _thread?.Join(TimeSpan.FromSeconds(120));
+
+        // まず残りバッファ処理の完了を待つ（最大30秒）
+        if (_thread != null && !_thread.Join(TimeSpan.FromSeconds(30)))
+        {
+            // タイムアウト時はキャンセルして強制終了
+            _cts?.Cancel();
+            _thread.Join(TimeSpan.FromSeconds(5));
+        }
         _thread = null;
+
+        _cts?.Dispose();
+        _cts = null;
+
+        foreach (var state in _sources.Values)
+            state.Processor?.Dispose();
+        _sources.Clear();
     }
 
     private void DisposeProcessor()
     {
-        _processor?.Dispose();
-        _processor = null;
+        foreach (var state in _sources.Values)
+            state.Processor?.Dispose();
+        _sources.Clear();
         _factory?.Dispose();
         _factory = null;
     }
