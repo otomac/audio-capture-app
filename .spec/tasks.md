@@ -1,6 +1,6 @@
 # Tasks: 001-windows-audio-capture
 
-Created: 2026-03-02
+Created: 2026-03-22
 Status: Pending
 Spec: [spec.md](./spec.md)
 Plan: [plan.md](./plan.md)
@@ -72,6 +72,6 @@ Plan: [plan.md](./plan.md)
 - [x] T630 [SC-003] 録音停止後、指定フォルダに有効な MP3 ファイルが存在することを確認する
 - [x] T640 [SC-004] Teams/Zoom 使用中に同デバイスで録音できることを確認する（WASAPI Shared Mode）
 - [x] T650 [SC-005] アプリ再起動後に保存先フォルダ設定が保持されることを確認する
-- [ ] T660 [SC-006] 長時間（30分以上）録音後に MP3 が正常再生できることを確認する ※手動テスト必要
+- [x] T660 [SC-006] 長時間（30分以上）録音後に MP3 が正常再生できることを確認する ※手動テスト必要
 - [x] T670 [P] README.md を作成する（セットアップ手順・使い方・ライセンス）
 - [x] T680 [P] 発行設定（`dotnet publish` / Self-contained / Single file）を確認する
