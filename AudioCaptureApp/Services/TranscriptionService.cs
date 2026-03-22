@@ -44,7 +44,9 @@ public class TranscriptionService : IDisposable
         DisposeProcessor();
 
         if (!File.Exists(modelPath))
+        {
             return false;
+        }
 
         try
         {
@@ -63,7 +65,9 @@ public class TranscriptionService : IDisposable
     {
         // 既存のプロセッサがあれば破棄
         if (_sources.TryGetValue(type, out var existing))
+        {
             existing.Processor?.Dispose();
+        }
 
         // α = 2π·fc / (2π·fc + sourceRate),  fc = TargetRate / 2
         float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
@@ -81,9 +85,13 @@ public class TranscriptionService : IDisposable
     public void StartSession(string mp3FilePath, DateTime startTime)
     {
         if (_factory == null)
+        {
             throw new InvalidOperationException("Whisperモデルが読み込まれていません。");
+        }
         if (_sources.Count == 0)
+        {
             throw new InvalidOperationException("音声ソースが登録されていません。先にRegisterSourceを呼び出してください。");
+        }
 
         _outputPath = Path.ChangeExtension(mp3FilePath, ".txt");
         _sessionStartTime = startTime;
@@ -105,7 +113,10 @@ public class TranscriptionService : IDisposable
 
     public void AddSamples(AudioSourceType type, float[] samples, int sampleCount)
     {
-        if (!_isRunning || !_sources.TryGetValue(type, out var state)) return;
+        if (!_isRunning || !_sources.TryGetValue(type, out var state))
+        {
+            return;
+        }
 
         // ステレオ→モノ変換 + アンチエイリアシングLPF + ダウンサンプリング (sourceRate → 16kHz)
         int channels = state.SourceChannels;
@@ -124,24 +135,33 @@ public class TranscriptionService : IDisposable
             for (; state.ResamplePos < frames; state.ResamplePos += ratio)
             {
                 int idx = (int)state.ResamplePos;
-                if (idx >= frames) break;
+                if (idx >= frames)
+                {
+                    break;
+                }
 
                 float sample = 0;
                 for (int ch = 0; ch < channels; ch++)
+                {
                     sample += samples[idx * channels + ch];
+                }
                 sample /= channels;
 
                 // 1次IIRローパスフィルタ適用
                 prev = prev + alpha * (sample - prev);
 
                 if (writeIndex < converted.Length)
+                {
                     converted[writeIndex++] = prev;
+                }
             }
             state.ResamplePos -= frames;
             state.LpfPrev = prev;
 
             for (int i = 0; i < writeIndex; i++)
+            {
                 state.Pcm16kBuffer.Add(converted[i]);
+            }
         }
     }
 
@@ -151,14 +171,26 @@ public class TranscriptionService : IDisposable
 
         while (_isRunning)
         {
-            try { token.WaitHandle.WaitOne(1000); }
-            catch (ObjectDisposedException) { break; }
+            try
+            {
+                token.WaitHandle.WaitOne(1000);
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
 
-            if (token.IsCancellationRequested) break;
+            if (token.IsCancellationRequested)
+            {
+                break;
+            }
 
             foreach (var (_, state) in _sources)
             {
-                if (token.IsCancellationRequested) break;
+                if (token.IsCancellationRequested)
+                {
+                    break;
+                }
 
                 float[]? chunk = null;
                 lock (state.BufferLock)
@@ -171,7 +203,9 @@ public class TranscriptionService : IDisposable
                 }
 
                 if (chunk != null)
+                {
                     ProcessChunk(chunk, state, token);
+                }
             }
         }
 
@@ -190,7 +224,9 @@ public class TranscriptionService : IDisposable
                 }
 
                 if (remaining != null)
+                {
                     ProcessChunk(remaining, state, token);
+                }
             }
         }
     }
@@ -200,7 +236,9 @@ public class TranscriptionService : IDisposable
         // RMS（二乗平均平方根）で音声エネルギーを測定
         double sumSquares = 0;
         for (int i = 0; i < samples.Length; i++)
+        {
             sumSquares += samples[i] * (double)samples[i];
+        }
         double rms = Math.Sqrt(sumSquares / samples.Length);
         // RMS が -40dB 未満なら無音とみなす
         return rms < 0.01;
@@ -228,7 +266,10 @@ public class TranscriptionService : IDisposable
                 {
                     var segment = enumerator.Current;
                     var text = segment.Text?.Trim();
-                    if (string.IsNullOrEmpty(text)) continue;
+                    if (string.IsNullOrEmpty(text))
+                    {
+                        continue;
+                    }
 
                     var startTime = _sessionStartTime + state.ChunkOffset + segment.Start;
                     var endTime = _sessionStartTime + state.ChunkOffset + segment.End;
@@ -276,14 +317,18 @@ public class TranscriptionService : IDisposable
         _cts = null;
 
         foreach (var state in _sources.Values)
+        {
             state.Processor?.Dispose();
+        }
         _sources.Clear();
     }
 
     private void DisposeProcessor()
     {
         foreach (var state in _sources.Values)
+        {
             state.Processor?.Dispose();
+        }
         _sources.Clear();
         _factory?.Dispose();
         _factory = null;

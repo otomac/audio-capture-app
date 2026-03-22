@@ -35,7 +35,10 @@ public partial class LevelMeterControl : UserControl
     private void UpdateMeter()
     {
         double totalWidth = MeterGrid.ActualWidth;
-        if (totalWidth <= 0) return;
+        if (totalWidth <= 0)
+        {
+            return;
+        }
 
         double db = Math.Clamp(Level, MinDb, MaxDb);
         double fraction = (db - MinDb) / (MaxDb - MinDb); // 0.0 ~ 1.0

@@ -44,18 +44,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 文字起こし有効時、モデルを読み込む
         if (TranscriptionEnabled)
+        {
             TryLoadWhisperModel();
+        }
 
         RefreshDevicesInternal();
 
         // 前回のマイク選択を復元
         if (settings.LastSelectedDeviceId != null)
+        {
             SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedDeviceId);
+        }
         SelectedCaptureDevice ??= CaptureDevices.FirstOrDefault(d => d.IsDefault) ?? CaptureDevices.FirstOrDefault();
 
         // 前回のスピーカー選択を復元
         if (settings.LastSelectedLoopbackDeviceId != null)
+        {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedLoopbackDeviceId);
+        }
     }
 
     // --- マイク入力デバイス ---
@@ -68,9 +74,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedCaptureDeviceChanged(AudioDevice? value)
     {
         if (value != null)
+        {
             _audioCaptureService.StartMicMonitor(value);
+        }
         else
+        {
             _audioCaptureService.StopMicMonitor();
+        }
     }
 
     // --- スピーカー（ループバック）デバイス ---
@@ -140,9 +150,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnTranscriptionEnabledChanged(bool value)
     {
         if (value)
+        {
             TryLoadWhisperModel();
+        }
         else
+        {
             _audioCaptureService.SetTranscriptionService(null);
+        }
         SaveSettings();
     }
 
@@ -259,16 +273,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         CaptureDevices.Clear();
         foreach (var d in _audioCaptureService.GetCaptureDevices())
+        {
             CaptureDevices.Add(d);
+        }
 
         RenderDevices.Clear();
         foreach (var d in _audioCaptureService.GetRenderDevices())
+        {
             RenderDevices.Add(d);
+        }
 
         if (prevCapture != null)
+        {
             SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == prevCapture);
+        }
         if (prevRender != null)
+        {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == prevRender);
+        }
     }
 
     private void UpdateMeters()
@@ -279,7 +301,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private static double PeakToDb(float peak)
     {
-        if (peak <= 0f) return -60.0;
+        if (peak <= 0f)
+        {
+            return -60.0;
+        }
         double db = 20.0 * Math.Log10(peak);
         return Math.Clamp(db, -60.0, 3.0);
     }
@@ -331,7 +356,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (_isLoadingModel) return;
+        if (_isLoadingModel)
+        {
+            return;
+        }
 
         try
         {

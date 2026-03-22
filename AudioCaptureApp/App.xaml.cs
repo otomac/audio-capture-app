@@ -10,4 +10,3 @@ namespace AudioCaptureApp;
 public partial class App : Application
 {
 }
-

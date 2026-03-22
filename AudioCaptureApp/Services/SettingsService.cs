@@ -20,7 +20,9 @@ public class SettingsService
     public AppSettings Load()
     {
         if (!File.Exists(SettingsFilePath))
+        {
             return new AppSettings();
+        }
 
         try
         {
