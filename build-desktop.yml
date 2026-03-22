@@ -1,0 +1,146 @@
+name: build-desktop
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - "release_*"
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: "8.0.x"
+
+  # ===== あなたの環境に合わせて変更 =====
+  SOLUTION_PATH: "AudioCaptureApp.sln"
+  #TEST_PROJECT_PATH: "AudioCaptureApp.Tests/AudioCaptureApp.Tests.csproj"
+  APP_PROJECT_PATH: "AudioCaptureApp/AudioCaptureApp.csproj"
+
+  # WPF / WinForms の Windows 配布想定
+  RUNTIME: "win-x64"
+  CONFIGURATION: "Release"
+
+  # Self-contained にすると .NET ランタイム同梱の単独配布向けになる
+  # サイズを抑えたいなら false
+  SELF_CONTAINED: "true"
+
+jobs:
+  build-test-publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Show .NET info
+        shell: pwsh
+        run: dotnet --info
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore $env:SOLUTION_PATH
+
+      - name: Build with analyzers (fail on warnings)
+        shell: pwsh
+        run: >
+          dotnet build $env:SOLUTION_PATH
+          -c $env:CONFIGURATION
+          --no-restore
+          /p:EnableNETAnalyzers=true
+          /p:AnalysisLevel=latest
+          /p:TreatWarningsAsErrors=true
+          /warnaserror
+
+      # - name: Test
+      #   shell: pwsh
+      #   run: >
+      #     dotnet test $env:TEST_PROJECT_PATH
+      #     -c $env:CONFIGURATION
+      #     --no-build
+      #     --logger "trx;LogFileName=test-results.trx"
+      #     --results-directory "./TestResults"
+      #     /p:CollectCoverage=true
+      #     /p:CoverletOutput="./TestResults/coverage/"
+      #     /p:CoverletOutputFormat="cobertura"
+
+      - name: Publish desktop app
+        shell: pwsh
+        run: >
+          dotnet publish $env:APP_PROJECT_PATH
+          -c $env:CONFIGURATION
+          -r $env:RUNTIME
+          --self-contained $env:SELF_CONTAINED
+          /p:PublishSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          /p:DebugType=None
+          /p:DebugSymbols=false
+          -o "./publish"
+
+      - name: Create zip package
+        id: package
+        shell: pwsh
+        run: |
+          $appName = Split-Path $env:APP_PROJECT_PATH -LeafBase
+          $version = if ($env:GITHUB_REF -like "refs/tags/*") {
+            $env:GITHUB_REF.Substring(10)
+          } else {
+            "ci-$($env:GITHUB_RUN_NUMBER)"
+          }
+
+          $zipName = "$appName-$version-$($env:RUNTIME).zip"
+          Compress-Archive -Path "./publish/*" -DestinationPath "./$zipName" -Force
+
+          "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload packaged app artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-package
+          path: ./${{ steps.package.outputs.zip_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+      # - name: Upload test results artifact
+      #   uses: actions/upload-artifact@v6
+      #   with:
+      #     name: test-results
+      #     path: |
+      #       ./TestResults/**/*.trx
+      #       ./TestResults/**/coverage.cobertura.xml
+      #     if-no-files-found: error
+      #     retention-days: 14
+
+      - name: Write job summary
+        if: always()
+        shell: pwsh
+        run: |
+          @"
+          ## Build summary
+
+          - Configuration: `${{ env.CONFIGURATION }}`
+          - Runtime: `${{ env.RUNTIME }}`
+          - Self-contained: `${{ env.SELF_CONTAINED }}`
+          - Package: `${{ steps.package.outputs.zip_name }}`
+
+          ### Reports
+          - Unit test report: `test-results.trx`
+          - Coverage report: `coverage.cobertura.xml`
+
+          > 詳細は Artifacts の `test-results` を確認してください。
+          "@ >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Create GitHub Release and upload zip
+        if: startsWith(github.ref, 'refs/tags/release_')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./${{ steps.package.outputs.zip_name }}
+          generate_release_notes: true
