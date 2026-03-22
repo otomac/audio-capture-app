@@ -26,7 +26,7 @@ env:
 
   # Self-contained にすると .NET ランタイム同梱の単独配布向けになる
   # サイズを抑えたいなら false
-  SELF_CONTAINED: "false"
+  SELF_CONTAINED: "true"
 
 jobs:
   build-test-publish:

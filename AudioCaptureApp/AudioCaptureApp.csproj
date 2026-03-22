@@ -23,4 +23,11 @@
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
   </ItemGroup>
 
+  <!-- PublishSingleFile 時: 不要な runtimes (arm64/x86) と .pdb を削除 -->
+  <Target Name="CleanPublishOutput" AfterTargets="Publish" Condition="'$(PublishSingleFile)' == 'true'">
+    <RemoveDir Directories="$(PublishDir)runtimes\win-arm64" />
+    <RemoveDir Directories="$(PublishDir)runtimes\win-x86" />
+    <Delete Files="$(PublishDir)AudioCaptureApp.pdb" />
+  </Target>
+
 </Project>
