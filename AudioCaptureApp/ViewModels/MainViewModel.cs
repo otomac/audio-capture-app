@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows.Media;
 using System.Windows.Threading;
 using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
@@ -33,7 +34,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _audioCaptureService.RecordingError += OnRecordingError;
         _transcriptionService.Error += msg =>
-            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
 
         var settings = _settingsService.Load();
@@ -43,18 +44,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 文字起こし有効時、モデルを読み込む
         if (TranscriptionEnabled)
+        {
             TryLoadWhisperModel();
+        }
 
         RefreshDevicesInternal();
 
         // 前回のマイク選択を復元
         if (settings.LastSelectedDeviceId != null)
+        {
             SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedDeviceId);
+        }
         SelectedCaptureDevice ??= CaptureDevices.FirstOrDefault(d => d.IsDefault) ?? CaptureDevices.FirstOrDefault();
 
         // 前回のスピーカー選択を復元
         if (settings.LastSelectedLoopbackDeviceId != null)
+        {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedLoopbackDeviceId);
+        }
     }
 
     // --- マイク入力デバイス ---
@@ -67,9 +74,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedCaptureDeviceChanged(AudioDevice? value)
     {
         if (value != null)
+        {
             _audioCaptureService.StartMicMonitor(value);
+        }
         else
+        {
             _audioCaptureService.StopMicMonitor();
+        }
     }
 
     // --- スピーカー（ループバック）デバイス ---
@@ -88,13 +99,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     private bool _isRecording;
 
-    public string RecordingStatusText => IsRecording ? "録音中" : "停止中";
-    public string RecordingStatusColor => IsRecording ? "#FFCC0000" : "#FF000000";
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
+    private bool _isStopping;
+
+    private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
+    private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));
+
+    static MainViewModel()
+    {
+        RecordingBrush.Freeze();
+        StoppedBrush.Freeze();
+    }
+
+    public string RecordingStatusText => IsStopping ? "停止処理中" : IsRecording ? "録音中" : "停止中";
+    public SolidColorBrush RecordingStatusColor => IsRecording ? RecordingBrush : StoppedBrush;
+
+    public bool IsNotBusy => !IsRecording && !IsStopping;
 
     partial void OnIsRecordingChanged(bool value)
     {
         OnPropertyChanged(nameof(RecordingStatusText));
         OnPropertyChanged(nameof(RecordingStatusColor));
+        OnPropertyChanged(nameof(IsNotBusy));
+    }
+
+    partial void OnIsStoppingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(RecordingStatusText));
+        OnPropertyChanged(nameof(IsNotBusy));
     }
 
     [ObservableProperty]
@@ -113,9 +150,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnTranscriptionEnabledChanged(bool value)
     {
         if (value)
+        {
             TryLoadWhisperModel();
+        }
         else
+        {
             _audioCaptureService.SetTranscriptionService(null);
+        }
         SaveSettings();
     }
 
@@ -126,6 +167,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _transcriptionStatus = "";
 
     [ObservableProperty]
+    private bool _isMicMuted;
+
+    partial void OnIsMicMutedChanged(bool value)
+    {
+        _audioCaptureService.IsMicMuted = value;
+    }
+
+    [ObservableProperty]
+    private bool _isSpeakerMuted;
+
+    partial void OnIsSpeakerMutedChanged(bool value)
+    {
+        _audioCaptureService.IsSpeakerMuted = value;
+    }
+
+    [ObservableProperty]
     private double _micLevelDb = -60.0;
 
     [ObservableProperty]
@@ -134,18 +191,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // --- コマンド ---
 
     private bool CanStartRecording =>
-        (SelectedCaptureDevice != null || SelectedRenderDevice != null) && !IsRecording;
+        (SelectedCaptureDevice != null || SelectedRenderDevice != null) && !IsRecording && !IsStopping;
 
-    private bool CanStopRecording => IsRecording;
+    private bool CanStopRecording => IsRecording && !IsStopping;
 
     [RelayCommand(CanExecute = nameof(CanStartRecording))]
     private void StartRecording()
     {
         try
         {
-            _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, OutputFolder);
+            _recordingStartTime = _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, OutputFolder);
             IsRecording = true;
-            _recordingStartTime = DateTime.Now;
             ElapsedTime = "00:00:00";
             _clockTimer.Start();
             StatusMessage = "録音中...";
@@ -158,18 +214,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
-    private void StopRecording()
+    private async Task StopRecordingAsync()
     {
         _clockTimer.Stop();
-        _audioCaptureService.StopRecording();
-        IsRecording = false;
+        IsStopping = true;
         LoopbackLevelDb = -60.0;
+        StatusMessage = "停止処理中...";
+
+        var transcriptionEnabled = TranscriptionEnabled;
+        await Task.Run(() => _audioCaptureService.StopRecording());
+
+        IsRecording = false;
+        IsStopping = false;
 
         var session = _audioCaptureService.CurrentSession;
         if (session != null)
         {
             var txtPath = System.IO.Path.ChangeExtension(session.FilePath, ".txt");
-            var hasTxt = TranscriptionEnabled && System.IO.File.Exists(txtPath);
+            var hasTxt = transcriptionEnabled && System.IO.File.Exists(txtPath);
             StatusMessage = hasTxt
                 ? $"保存完了: {session.FilePath} (文字起こし: {txtPath})"
                 : $"保存完了: {session.FilePath}";
@@ -180,7 +242,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanSelectOutputFolder => !IsRecording;
+    private bool CanSelectOutputFolder => !IsRecording && !IsStopping;
 
     [RelayCommand(CanExecute = nameof(CanSelectOutputFolder))]
     private void SelectOutputFolder()
@@ -193,7 +255,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanRefreshDevices => !IsRecording;
+    private bool CanRefreshDevices => !IsRecording && !IsStopping;
 
     [RelayCommand(CanExecute = nameof(CanRefreshDevices))]
     private void RefreshDevices()
@@ -211,16 +273,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         CaptureDevices.Clear();
         foreach (var d in _audioCaptureService.GetCaptureDevices())
+        {
             CaptureDevices.Add(d);
+        }
 
         RenderDevices.Clear();
         foreach (var d in _audioCaptureService.GetRenderDevices())
+        {
             RenderDevices.Add(d);
+        }
 
         if (prevCapture != null)
+        {
             SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == prevCapture);
+        }
         if (prevRender != null)
+        {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == prevRender);
+        }
     }
 
     private void UpdateMeters()
@@ -231,22 +301,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private static double PeakToDb(float peak)
     {
-        if (peak <= 0f) return -60.0;
+        if (peak <= 0f)
+        {
+            return -60.0;
+        }
         double db = 20.0 * Math.Log10(peak);
         return Math.Clamp(db, -60.0, 3.0);
     }
 
     private void OnRecordingError(string message)
     {
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
         {
             _clockTimer.Stop();
             IsRecording = false;
+            IsStopping = false;
             StatusMessage = $"エラー: {message}";
         });
     }
 
-    private bool CanSelectWhisperModel => !IsRecording;
+    private bool CanSelectWhisperModel => !IsRecording && !IsStopping;
 
     [RelayCommand(CanExecute = nameof(CanSelectWhisperModel))]
     private void SelectWhisperModel()
@@ -264,7 +338,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void TryLoadWhisperModel()
+    private bool _isLoadingModel;
+
+    private async void TryLoadWhisperModel()
     {
         if (string.IsNullOrEmpty(WhisperModelPath))
         {
@@ -280,16 +356,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        TranscriptionStatus = "モデル読み込み中...";
-        if (_transcriptionService.LoadModel(WhisperModelPath))
+        if (_isLoadingModel)
         {
-            TranscriptionStatus = "モデル読み込み完了";
-            _audioCaptureService.SetTranscriptionService(_transcriptionService);
+            return;
         }
-        else
+
+        try
         {
-            TranscriptionStatus = "モデル読み込み失敗";
+            _isLoadingModel = true;
+            TranscriptionStatus = "モデル読み込み中...";
+            var modelPath = WhisperModelPath;
+            var success = await Task.Run(() => _transcriptionService.LoadModel(modelPath));
+            if (success)
+            {
+                TranscriptionStatus = "モデル読み込み完了";
+                _audioCaptureService.SetTranscriptionService(_transcriptionService);
+            }
+            else
+            {
+                TranscriptionStatus = "モデル読み込み失敗";
+                _audioCaptureService.SetTranscriptionService(null);
+            }
+        }
+        catch (Exception ex)
+        {
+            TranscriptionStatus = $"モデル読み込みエラー: {ex.Message}";
             _audioCaptureService.SetTranscriptionService(null);
+        }
+        finally
+        {
+            _isLoadingModel = false;
         }
     }
 

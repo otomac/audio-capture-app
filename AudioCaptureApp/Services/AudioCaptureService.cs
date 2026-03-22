@@ -15,10 +15,12 @@ public class AudioCaptureService : IDisposable
     private List<AudioDevice> _renderDevices = new();
 
     // マイク常時キャプチャ（録音と独立したライフサイクル）
+    private MMDevice? _micDevice;
     private WasapiCapture? _micCapture;
     private BufferedWaveProvider? _micBuffer;
 
     // ループバックキャプチャ（録音時のみ）
+    private MMDevice? _loopbackDevice;
     private WasapiLoopbackCapture? _loopbackCapture;
     private BufferedWaveProvider? _loopbackBuffer;
 
@@ -34,16 +36,31 @@ public class AudioCaptureService : IDisposable
     private Thread? _writerThread;
     private volatile bool _isWriting;
 
+    // ミュート
+    private volatile bool _isMicMuted;
+    private volatile bool _isSpeakerMuted;
+    private byte[]? _silenceBuffer;
+
     // ピークレベル測定
     private volatile float _micPeakLevel;
     private volatile float _loopbackPeakLevel;
 
     public bool IsRecording => _isWriting;
     public RecordingSession? CurrentSession => _currentSession;
+    public bool IsMicMuted
+    {
+        get => _isMicMuted;
+        set => _isMicMuted = value;
+    }
+
+    public bool IsSpeakerMuted
+    {
+        get => _isSpeakerMuted;
+        set => _isSpeakerMuted = value;
+    }
+
     public float MicPeakLevel => _micPeakLevel;
     public float LoopbackPeakLevel => _loopbackPeakLevel;
-
-    public TranscriptionService? TranscriptionService => _transcriptionService;
 
     public event Action<string>? RecordingError;
 
@@ -59,7 +76,11 @@ public class AudioCaptureService : IDisposable
     private List<AudioDevice> EnumerateDevices(DataFlow dataFlow, Role role)
     {
         string? defaultId = null;
-        try { defaultId = _enumerator.GetDefaultAudioEndpoint(dataFlow, role).ID; }
+        try
+        {
+            using var defaultDevice = _enumerator.GetDefaultAudioEndpoint(dataFlow, role);
+            defaultId = defaultDevice.ID;
+        }
         catch { }
 
         var devices = new List<AudioDevice>();
@@ -71,6 +92,7 @@ public class AudioCaptureService : IDisposable
                 FriendlyName = device.FriendlyName,
                 IsDefault = device.ID == defaultId
             });
+            device.Dispose();
         }
         return devices;
     }
@@ -81,8 +103,8 @@ public class AudioCaptureService : IDisposable
     {
         StopMicMonitor();
 
-        var mmDevice = _enumerator.GetDevice(device.DeviceId);
-        _micCapture = new WasapiCapture(mmDevice) { ShareMode = AudioClientShareMode.Shared };
+        _micDevice = _enumerator.GetDevice(device.DeviceId);
+        _micCapture = new WasapiCapture(_micDevice) { ShareMode = AudioClientShareMode.Shared };
         _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
         {
             BufferDuration = TimeSpan.FromSeconds(5),
@@ -93,8 +115,27 @@ public class AudioCaptureService : IDisposable
         {
             if (e.BytesRecorded > 0)
             {
-                _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                _micPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _micCapture.WaveFormat);
+                if (_isMicMuted)
+                {
+                    // ミュート時はバッファに無音を書き込む
+                    if (_silenceBuffer == null || _silenceBuffer.Length < e.BytesRecorded)
+                        _silenceBuffer = new byte[e.BytesRecorded];
+                    _micBuffer.AddSamples(_silenceBuffer, 0, e.BytesRecorded);
+                    _micPeakLevel = 0f;
+                }
+                else
+                {
+                    _micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                    _micPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _micCapture.WaveFormat);
+
+                    // 録音中は文字起こしサービスにマイク音声を渡す
+                    if (_isWriting && _transcriptionService != null)
+                    {
+                        var floats = BytesToFloats(e.Buffer, e.BytesRecorded, _micCapture.WaveFormat);
+                        if (floats != null)
+                            _transcriptionService.AddSamples(AudioSourceType.Mic, floats, floats.Length);
+                    }
+                }
             }
         };
         _micCapture.StartRecording();
@@ -109,6 +150,9 @@ public class AudioCaptureService : IDisposable
             _micCapture = null;
         }
         _micBuffer = null;
+        _silenceBuffer = null;
+        _micDevice?.Dispose();
+        _micDevice = null;
         _micPeakLevel = 0f;
     }
 
@@ -119,7 +163,7 @@ public class AudioCaptureService : IDisposable
         _transcriptionService = service;
     }
 
-    public void StartRecording(AudioDevice? micDevice, AudioDevice? loopbackDevice, string outputFolder)
+    public DateTime StartRecording(AudioDevice? micDevice, AudioDevice? loopbackDevice, string outputFolder)
     {
         if (IsRecording)
             throw new InvalidOperationException("Already recording.");
@@ -167,7 +211,13 @@ public class AudioCaptureService : IDisposable
         // 文字起こしセッション開始
         if (_transcriptionService is { IsModelLoaded: true })
         {
-            _transcriptionService.StartSession(filePath, _outputFormat!.SampleRate, _outputFormat.Channels);
+            if (_micCapture != null)
+                _transcriptionService.RegisterSource(AudioSourceType.Mic, "マイク",
+                    _micCapture.WaveFormat.SampleRate, _micCapture.WaveFormat.Channels);
+            if (_loopbackCapture != null)
+                _transcriptionService.RegisterSource(AudioSourceType.Speaker, "スピーカー",
+                    _loopbackCapture.WaveFormat.SampleRate, _loopbackCapture.WaveFormat.Channels);
+            _transcriptionService.StartSession(filePath, now);
         }
 
         // マイクバッファをクリアして録音開始時点からの音声のみ使う
@@ -178,14 +228,16 @@ public class AudioCaptureService : IDisposable
         _isWriting = true;
         _writerThread = new Thread(WriterLoop) { IsBackground = true, Name = "AudioMixerWriter" };
         _writerThread.Start();
+
+        return now;
     }
 
     private void SetupLoopbackCapture(AudioDevice? loopbackDevice)
     {
         if (loopbackDevice != null)
         {
-            var mmDevice = _enumerator.GetDevice(loopbackDevice.DeviceId);
-            _loopbackCapture = new WasapiLoopbackCapture(mmDevice);
+            _loopbackDevice = _enumerator.GetDevice(loopbackDevice.DeviceId);
+            _loopbackCapture = new WasapiLoopbackCapture(_loopbackDevice);
             _loopbackBuffer = new BufferedWaveProvider(_loopbackCapture.WaveFormat)
             {
                 BufferDuration = TimeSpan.FromSeconds(5),
@@ -196,8 +248,27 @@ public class AudioCaptureService : IDisposable
             {
                 if (e.BytesRecorded > 0)
                 {
-                    _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                    _loopbackPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+                    if (_isSpeakerMuted)
+                    {
+                        // ミュート時はバッファに無音を書き込む
+                        if (_silenceBuffer == null || _silenceBuffer.Length < e.BytesRecorded)
+                            _silenceBuffer = new byte[e.BytesRecorded];
+                        _loopbackBuffer.AddSamples(_silenceBuffer, 0, e.BytesRecorded);
+                        _loopbackPeakLevel = 0f;
+                    }
+                    else
+                    {
+                        _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                        _loopbackPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+
+                        // 文字起こしサービスにスピーカー音声を渡す
+                        if (_isWriting && _transcriptionService != null)
+                        {
+                            var floats = BytesToFloats(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+                            if (floats != null)
+                                _transcriptionService.AddSamples(AudioSourceType.Speaker, floats, floats.Length);
+                        }
+                    }
                 }
             };
         }
@@ -293,9 +364,6 @@ public class AudioCaptureService : IDisposable
 
                 _mp3Writer!.Write(byteBuf, 0, read * 4);
                 _hasWrittenData = true;
-
-                // 文字起こしサービスにサンプルを渡す
-                _transcriptionService?.AddSamples(sampleBuf, read);
             }
 
             // 残りデータをフラッシュ
@@ -316,27 +384,45 @@ public class AudioCaptureService : IDisposable
         }
     }
 
+    private static float[]? BytesToFloats(byte[] buffer, int bytesRecorded, WaveFormat format)
+    {
+        if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
+        {
+            int count = bytesRecorded / 4;
+            var floats = new float[count];
+            Buffer.BlockCopy(buffer, 0, floats, 0, bytesRecorded);
+            return floats;
+        }
+        if (format.BitsPerSample == 16)
+        {
+            int count = bytesRecorded / 2;
+            var floats = new float[count];
+            for (int i = 0; i < count; i++)
+                floats[i] = BitConverter.ToInt16(buffer, i * 2) / 32768f;
+            return floats;
+        }
+        return null;
+    }
+
     private static float CalculatePeak(byte[] buffer, int bytesRecorded, WaveFormat format)
     {
         float peak = 0f;
-        int bytesPerSample = format.BitsPerSample / 8;
-        int sampleCount = bytesRecorded / bytesPerSample;
 
-        if (format.Encoding == WaveFormatEncoding.IeeeFloat && bytesPerSample == 4)
+        if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
-            for (int i = 0; i < sampleCount; i++)
+            int count = bytesRecorded / 4;
+            for (int i = 0; i < count; i++)
             {
-                float sample = BitConverter.ToSingle(buffer, i * 4);
-                float abs = Math.Abs(sample);
+                float abs = Math.Abs(BitConverter.ToSingle(buffer, i * 4));
                 if (abs > peak) peak = abs;
             }
         }
         else if (format.BitsPerSample == 16)
         {
-            for (int i = 0; i < sampleCount; i++)
+            int count = bytesRecorded / 2;
+            for (int i = 0; i < count; i++)
             {
-                short sample = BitConverter.ToInt16(buffer, i * 2);
-                float abs = Math.Abs(sample / 32768f);
+                float abs = Math.Abs(BitConverter.ToInt16(buffer, i * 2) / 32768f);
                 if (abs > peak) peak = abs;
             }
         }
@@ -351,7 +437,14 @@ public class AudioCaptureService : IDisposable
         if (!_isWriting) return;
 
         _isWriting = false;
-        _writerThread?.Join(timeout: TimeSpan.FromSeconds(2));
+
+        // ライタースレッドの終了を待つ（_mp3Writer を安全に Dispose するため）
+        if (_writerThread != null && !_writerThread.Join(timeout: TimeSpan.FromSeconds(5)))
+        {
+            // タイムアウト時でもスレッドは _isWriting=false で間もなく終了するため
+            // ログだけ残して続行する
+            RecordingError?.Invoke("録音スレッドの停止がタイムアウトしました");
+        }
         _writerThread = null;
 
         // 文字起こしセッション停止（残りバッファを処理してから終了）
@@ -387,6 +480,8 @@ public class AudioCaptureService : IDisposable
             _loopbackCapture = null;
         }
         _loopbackBuffer = null;
+        _loopbackDevice?.Dispose();
+        _loopbackDevice = null;
     }
 
     public void Dispose()

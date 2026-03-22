@@ -12,7 +12,12 @@
         Background="#FFE0E0E0">
 
     <Window.Resources>
-        <local:InverseBoolConverter x:Key="InverseBoolConverter"/>
+        <Style TargetType="Button">
+            <Setter Property="Height" Value="26"/>
+        </Style>
+        <Style TargetType="ToggleButton">
+            <Setter Property="Height" Value="26"/>
+        </Style>
         <Style TargetType="GroupBox">
             <Setter Property="BorderBrush" Value="#FFA0A0A0"/>
             <Setter Property="BorderThickness" Value="1"/>
@@ -77,7 +82,7 @@
                           ItemsSource="{Binding CaptureDevices}"
                           SelectedItem="{Binding SelectedCaptureDevice}"
                           DisplayMemberPath="FriendlyName"
-                          IsEnabled="{Binding IsRecording, Converter={StaticResource InverseBoolConverter}}"
+                          IsEnabled="{Binding IsNotBusy}"
                           Margin="0,0,0,12"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="スピーカー" VerticalAlignment="Center"/>
@@ -86,7 +91,7 @@
                           ItemsSource="{Binding RenderDevices}"
                           SelectedItem="{Binding SelectedRenderDevice}"
                           DisplayMemberPath="FriendlyName"
-                          IsEnabled="{Binding IsRecording, Converter={StaticResource InverseBoolConverter}}"/>
+                          IsEnabled="{Binding IsNotBusy}"/>
             </Grid>
         </GroupBox>
 
@@ -108,10 +113,10 @@
         <!-- Row 2: 録音ボタン -->
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,12">
             <Button Content="● 録音開始" Command="{Binding StartRecordingCommand}"
-                    Width="150" Padding="20,8" Margin="0,0,16,0" FontSize="14"
+                    Width="150" Height="Auto" Padding="20,8" Margin="0,0,16,0" FontSize="14"
                     Background="#FFCC0000" Foreground="White"/>
             <Button Content="■ 停止" Command="{Binding StopRecordingCommand}"
-                    Width="150" Padding="20,8" FontSize="14"/>
+                    Width="150" Height="Auto" Padding="20,8" FontSize="14"/>
         </StackPanel>
 
         <!-- Row 3: 録音ステータス + 経過時間 -->
@@ -133,15 +138,46 @@
                     <ColumnDefinition Width="90"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="マイク" VerticalAlignment="Center" Margin="0,0,0,12"/>
                 <TextBlock Grid.Row="0" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,12"/>
-                <controls:LevelMeterControl Grid.Row="0" Grid.Column="2" Level="{Binding MicLevelDb}" Margin="0,0,0,12"/>
+                <controls:LevelMeterControl Grid.Row="0" Grid.Column="2" Level="{Binding MicLevelDb}" Margin="0,0,8,12"/>
+                <ToggleButton Grid.Row="0" Grid.Column="3" IsChecked="{Binding IsMicMuted}"
+                              MinWidth="60" Padding="8,0" Margin="0,0,0,12" VerticalAlignment="Center">
+                    <ToggleButton.Style>
+                        <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+                            <Setter Property="Content" Value="ミュート"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Content" Value="ミュート中"/>
+                                    <Setter Property="Background" Value="#FFCC0000"/>
+                                    <Setter Property="Foreground" Value="White"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ToggleButton.Style>
+                </ToggleButton>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="スピーカー" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="1" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <controls:LevelMeterControl Grid.Row="1" Grid.Column="2" Level="{Binding LoopbackLevelDb}"/>
+                <controls:LevelMeterControl Grid.Row="1" Grid.Column="2" Level="{Binding LoopbackLevelDb}" Margin="0,0,8,0"/>
+                <ToggleButton Grid.Row="1" Grid.Column="3" IsChecked="{Binding IsSpeakerMuted}"
+                              MinWidth="60" Padding="8,0" VerticalAlignment="Center">
+                    <ToggleButton.Style>
+                        <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+                            <Setter Property="Content" Value="ミュート"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Content" Value="ミュート中"/>
+                                    <Setter Property="Background" Value="#FFCC0000"/>
+                                    <Setter Property="Foreground" Value="White"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ToggleButton.Style>
+                </ToggleButton>
             </Grid>
         </GroupBox>
 
@@ -151,7 +187,7 @@
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="文字起こし (Whisper)" IsChecked="{Binding TranscriptionEnabled}"
                               VerticalAlignment="Center"
-                              IsEnabled="{Binding IsRecording, Converter={StaticResource InverseBoolConverter}}"/>
+                              IsEnabled="{Binding IsNotBusy}"/>
                 </StackPanel>
             </GroupBox.Header>
             <Grid Margin="16,12,16,16"
