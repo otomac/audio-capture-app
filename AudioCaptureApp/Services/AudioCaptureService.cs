@@ -384,7 +384,7 @@ public class AudioCaptureService : IDisposable
         }
     }
 
-    private static float[]? BytesToFloats(byte[] buffer, int bytesRecorded, WaveFormat format)
+    internal static float[]? BytesToFloats(byte[] buffer, int bytesRecorded, WaveFormat format)
     {
         if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
@@ -404,7 +404,7 @@ public class AudioCaptureService : IDisposable
         return null;
     }
 
-    private static float CalculatePeak(byte[] buffer, int bytesRecorded, WaveFormat format)
+    internal static float CalculatePeak(byte[] buffer, int bytesRecorded, WaveFormat format)
     {
         float peak = 0f;
 

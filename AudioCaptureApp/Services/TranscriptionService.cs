@@ -231,7 +231,7 @@ public class TranscriptionService : IDisposable
         }
     }
 
-    private static bool IsSilent(float[] samples)
+    internal static bool IsSilent(float[] samples)
     {
         // RMS（二乗平均平方根）で音声エネルギーを測定
         double sumSquares = 0;

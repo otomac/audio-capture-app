@@ -17,7 +17,7 @@ env:
 
   # ===== あなたの環境に合わせて変更 =====
   SOLUTION_PATH: "AudioCaptureApp.sln"
-  #TEST_PROJECT_PATH: "AudioCaptureApp.Tests/AudioCaptureApp.Tests.csproj"
+  TEST_PROJECT_PATH: "AudioCaptureApp.Tests/AudioCaptureApp.Tests.csproj"
   APP_PROJECT_PATH: "AudioCaptureApp/AudioCaptureApp.csproj"
 
   # WPF / WinForms の Windows 配布想定
@@ -60,17 +60,17 @@ jobs:
           /p:TreatWarningsAsErrors=true
           /warnaserror
 
-      # - name: Test
-      #   shell: pwsh
-      #   run: >
-      #     dotnet test $env:TEST_PROJECT_PATH
-      #     -c $env:CONFIGURATION
-      #     --no-build
-      #     --logger "trx;LogFileName=test-results.trx"
-      #     --results-directory "./TestResults"
-      #     /p:CollectCoverage=true
-      #     /p:CoverletOutput="./TestResults/coverage/"
-      #     /p:CoverletOutputFormat="cobertura"
+      - name: Test
+        shell: pwsh
+        run: >
+          dotnet test $env:TEST_PROJECT_PATH
+          -c $env:CONFIGURATION
+          --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory "./TestResults"
+          /p:CollectCoverage=true
+          /p:CoverletOutput="./TestResults/coverage/"
+          /p:CoverletOutputFormat="cobertura"
 
       - name: Publish desktop app
         shell: pwsh
@@ -109,15 +109,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # - name: Upload test results artifact
-      #   uses: actions/upload-artifact@v6
-      #   with:
-      #     name: test-results
-      #     path: |
-      #       ./TestResults/**/*.trx
-      #       ./TestResults/**/coverage.cobertura.xml
-      #     if-no-files-found: error
-      #     retention-days: 14
+      - name: Upload test results artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results
+          path: |
+            ./TestResults/**/*.trx
+            ./TestResults/**/coverage.cobertura.xml
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Write job summary
         if: always()

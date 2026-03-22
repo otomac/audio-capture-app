@@ -299,7 +299,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LoopbackLevelDb = PeakToDb(_audioCaptureService.LoopbackPeakLevel);
     }
 
-    private static double PeakToDb(float peak)
+    internal static double PeakToDb(float peak)
     {
         if (peak <= 0f)
         {
