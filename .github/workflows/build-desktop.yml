@@ -85,6 +85,8 @@ jobs:
           /p:DebugSymbols=false
           -o "./publish"
 
+          Get-ChildItem "./publish" -Recurse
+
       - name: Create zip package
         id: package
         shell: pwsh
