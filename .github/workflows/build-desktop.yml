@@ -79,11 +79,11 @@ jobs:
           -c $env:CONFIGURATION
           -r $env:RUNTIME
           --self-contained $env:SELF_CONTAINED
-          /p:PublishSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
           /p:DebugType=None
           /p:DebugSymbols=false
           -o "./publish"
+
+          Get-ChildItem "./publish" -Recurse
 
       - name: Create zip package
         id: package
