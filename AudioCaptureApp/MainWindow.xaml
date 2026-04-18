@@ -185,14 +185,15 @@
         <GroupBox Grid.Row="5" Margin="0,0,0,16">
             <GroupBox.Header>
                 <StackPanel Orientation="Horizontal">
-                    <CheckBox Content="文字起こし (Whisper)" IsChecked="{Binding TranscriptionEnabled}"
+                    <CheckBox Content="録音中にライブ文字起こしする" IsChecked="{Binding TranscriptionEnabled}"
                               VerticalAlignment="Center"
                               IsEnabled="{Binding IsNotBusy}"/>
                 </StackPanel>
             </GroupBox.Header>
-            <Grid Margin="16,12,16,16"
-                  IsEnabled="{Binding TranscriptionEnabled}">
+            <Grid Margin="16,12,16,16">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
@@ -210,10 +211,61 @@
                 <Button Grid.Row="0" Grid.Column="3" Content="選択" Command="{Binding SelectWhisperModelCommand}"
                         Padding="12,2" Margin="0,0,0,8"/>
 
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="状態" VerticalAlignment="Center"/>
-                <TextBlock Grid.Row="1" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="状態" VerticalAlignment="Center" Margin="0,0,0,12"/>
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,12"/>
                 <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Text="{Binding TranscriptionStatus}"
-                           VerticalAlignment="Center" Foreground="#FF555555"/>
+                           VerticalAlignment="Center" Foreground="#FF555555" Margin="0,0,0,12"/>
+
+                <!-- ファイルから文字起こし: 開始/中止ボタン -->
+                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4"
+                            Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button Content="音声ファイルから文字起こし"
+                            Command="{Binding TranscribeFromFileCommand}"
+                            Padding="12,2" Margin="0,0,8,0">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="中止"
+                            Command="{Binding CancelFileTranscriptionCommand}"
+                            Padding="12,2" Background="#FFCC0000" Foreground="White">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+
+                <!-- 進捗表示 -->
+                <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4"
+                            Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <ProgressBar IsIndeterminate="True" Width="180" Height="12" Margin="0,0,8,0"/>
+                    <TextBlock Text="{Binding FileTranscriptionStatus}"
+                               VerticalAlignment="Center" Foreground="#FF555555"/>
+                </StackPanel>
             </Grid>
         </GroupBox>
 

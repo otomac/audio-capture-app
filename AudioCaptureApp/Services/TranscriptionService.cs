@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using NAudio.Wave;
 using Whisper.net;
 
 namespace AudioCaptureApp.Services;
@@ -118,51 +119,192 @@ public class TranscriptionService : IDisposable
             return;
         }
 
-        // ステレオ→モノ変換 + アンチエイリアシングLPF + ダウンサンプリング (sourceRate → 16kHz)
-        int channels = state.SourceChannels;
-        int frames = sampleCount / channels;
-        double ratio = (double)state.SourceRate / TargetRate;
-        float alpha = state.LpfAlpha;
-
-        int estimatedCount = (int)(frames / ratio) + 1;
-        var converted = new float[estimatedCount];
-        int writeIndex = 0;
-
         lock (state.BufferLock)
         {
-            float prev = state.LpfPrev;
+            double resamplePos = state.ResamplePos;
+            float lpfPrev = state.LpfPrev;
+            DownmixResampleAppend(
+                samples, sampleCount, state.SourceChannels, state.SourceRate,
+                state.LpfAlpha, ref resamplePos, ref lpfPrev, state.Pcm16kBuffer);
+            state.ResamplePos = resamplePos;
+            state.LpfPrev = lpfPrev;
+        }
+    }
 
-            for (; state.ResamplePos < frames; state.ResamplePos += ratio)
+    // ステレオ→モノ変換 + 1次IIRローパス + 線形リサンプル (sourceRate → 16kHz)
+    // 状態 (resamplePos / lpfPrev) は呼び出し側が保持する
+    private static void DownmixResampleAppend(
+        float[] input, int sampleCount, int channels, int sourceRate,
+        float alpha, ref double resamplePos, ref float lpfPrev,
+        List<float> output)
+    {
+        int frames = sampleCount / channels;
+        double ratio = (double)sourceRate / TargetRate;
+        float prev = lpfPrev;
+
+        for (; resamplePos < frames; resamplePos += ratio)
+        {
+            int idx = (int)resamplePos;
+            if (idx >= frames)
             {
-                int idx = (int)state.ResamplePos;
-                if (idx >= frames)
-                {
-                    break;
-                }
+                break;
+            }
 
-                float sample = 0;
-                for (int ch = 0; ch < channels; ch++)
-                {
-                    sample += samples[idx * channels + ch];
-                }
-                sample /= channels;
+            float sample = 0;
+            for (int ch = 0; ch < channels; ch++)
+            {
+                sample += input[idx * channels + ch];
+            }
+            sample /= channels;
 
-                // 1次IIRローパスフィルタ適用
-                prev = prev + alpha * (sample - prev);
+            prev = prev + alpha * (sample - prev);
+            output.Add(prev);
+        }
+        resamplePos -= frames;
+        lpfPrev = prev;
+    }
 
-                if (writeIndex < converted.Length)
+    public async Task<bool> TranscribeFileAsync(
+        string audioFilePath,
+        IProgress<(TimeSpan processed, TimeSpan total)>? progress,
+        CancellationToken ct)
+    {
+        if (_factory == null)
+        {
+            Error?.Invoke("Whisperモデルが読み込まれていません。");
+            return false;
+        }
+
+        WhisperProcessor? processor = null;
+        StreamWriter? writer = null;
+        AudioFileReader? reader = null;
+        string outputPath = BuildTranscriptPath(audioFilePath);
+        try
+        {
+            reader = new AudioFileReader(audioFilePath);
+            int sourceRate = reader.WaveFormat.SampleRate;
+            int channels = reader.WaveFormat.Channels;
+            TimeSpan totalTime = reader.TotalTime;
+            float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
+
+            writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
+
+            processor = _factory.CreateBuilder().WithLanguage("ja").Build();
+
+            // ファイル読み込みバッファ（約1秒分）
+            var readBuffer = new float[sourceRate * channels];
+            var pcm16kBuffer = new List<float>(BufferThresholdSamples + TargetRate);
+            double resamplePos = 0;
+            float lpfPrev = 0f;
+            TimeSpan chunkOffset = TimeSpan.Zero;
+            const string label = "ファイル";
+
+            progress?.Report((TimeSpan.Zero, totalTime));
+
+            int samplesRead;
+            while ((samplesRead = reader.Read(readBuffer, 0, readBuffer.Length)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                DownmixResampleAppend(
+                    readBuffer, samplesRead, channels, sourceRate,
+                    alpha, ref resamplePos, ref lpfPrev, pcm16kBuffer);
+
+                while (pcm16kBuffer.Count >= BufferThresholdSamples)
                 {
-                    converted[writeIndex++] = prev;
+                    ct.ThrowIfCancellationRequested();
+                    var chunk = new float[BufferThresholdSamples];
+                    pcm16kBuffer.CopyTo(0, chunk, 0, BufferThresholdSamples);
+                    pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
+
+                    await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                        .ConfigureAwait(false);
+                    chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
+                    progress?.Report((chunkOffset, totalTime));
                 }
             }
-            state.ResamplePos -= frames;
-            state.LpfPrev = prev;
 
-            for (int i = 0; i < writeIndex; i++)
+            // 残りバッファ（1秒以上あれば処理）
+            if (pcm16kBuffer.Count > TargetRate)
             {
-                state.Pcm16kBuffer.Add(converted[i]);
+                ct.ThrowIfCancellationRequested();
+                var chunk = pcm16kBuffer.ToArray();
+                await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                    .ConfigureAwait(false);
+                chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
+            }
+
+            progress?.Report((totalTime, totalTime));
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            // 部分出力ファイルは削除する（ユーザーが完結したと誤認しないように）
+            writer?.Dispose();
+            writer = null;
+            TryDeleteFile(outputPath);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Error?.Invoke($"ファイル文字起こしエラー: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            processor?.Dispose();
+            writer?.Dispose();
+            reader?.Dispose();
+        }
+    }
+
+    // {入力ファイル名}.transcript.txt を同じフォルダに配置
+    // 例: audio.mp3 → audio.transcript.txt
+    // （録音時に生成される audio.txt と名前衝突しないように）
+    internal static string BuildTranscriptPath(string audioFilePath)
+    {
+        return Path.ChangeExtension(audioFilePath, ".transcript.txt");
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
             }
         }
+        catch
+        {
+            // 削除失敗は無視（ロック中など）
+        }
+    }
+
+    private async Task ProcessFileChunkAsync(
+        WhisperProcessor processor, float[] samples, TimeSpan chunkOffset,
+        string label, StreamWriter writer, CancellationToken ct)
+    {
+        if (IsSilent(samples))
+        {
+            return;
+        }
+
+        await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
+        {
+            var text = segment.Text?.Trim();
+            if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            var startTime = chunkOffset + segment.Start;
+            var endTime = chunkOffset + segment.End;
+            var line = $"[{startTime:hh\\:mm\\:ss} - {endTime:hh\\:mm\\:ss}] [{label}] {text}";
+            await writer.WriteLineAsync(line).ConfigureAwait(false);
+            SegmentTranscribed?.Invoke(line);
+        }
+        await writer.FlushAsync().ConfigureAwait(false);
     }
 
     private void TranscriptionLoop()

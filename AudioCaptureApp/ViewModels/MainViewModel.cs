@@ -16,9 +16,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _meterTimer;
     private readonly DispatcherTimer _clockTimer;
     private DateTime _recordingStartTime;
+    private bool _initializing;
 
     public MainViewModel()
     {
+        _initializing = true;
         // dBメーター用タイマー（常時動作、50ms間隔）
         _meterTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _meterTimer.Tick += (_, _) => UpdateMeters();
@@ -42,8 +44,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TranscriptionEnabled = settings.TranscriptionEnabled;
         WhisperModelPath = settings.WhisperModelPath;
 
-        // 文字起こし有効時、モデルを読み込む
-        if (TranscriptionEnabled)
+        // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
+        // ライブ用チェックボックスと独立して動作する）
+        if (!string.IsNullOrEmpty(WhisperModelPath))
         {
             TryLoadWhisperModel();
         }
@@ -62,6 +65,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedLoopbackDeviceId);
         }
+
+        _initializing = false;
     }
 
     // --- マイク入力デバイス ---
@@ -97,6 +102,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     private bool _isRecording;
 
     [ObservableProperty]
@@ -105,7 +111,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     private bool _isStopping;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
+    [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
+    private bool _isTranscribingFile;
+
+    [ObservableProperty]
+    private string _fileTranscriptionStatus = "";
+
+    private CancellationTokenSource? _fileTranscriptionCts;
 
     private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
     private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));
@@ -119,7 +141,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string RecordingStatusText => IsStopping ? "停止処理中" : IsRecording ? "録音中" : "停止中";
     public SolidColorBrush RecordingStatusColor => IsRecording ? RecordingBrush : StoppedBrush;
 
-    public bool IsNotBusy => !IsRecording && !IsStopping;
+    public bool IsNotBusy => !IsRecording && !IsStopping && !IsTranscribingFile;
 
     partial void OnIsRecordingChanged(bool value)
     {
@@ -131,6 +153,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnIsStoppingChanged(bool value)
     {
         OnPropertyChanged(nameof(RecordingStatusText));
+        OnPropertyChanged(nameof(IsNotBusy));
+    }
+
+    partial void OnIsTranscribingFileChanged(bool value)
+    {
         OnPropertyChanged(nameof(IsNotBusy));
     }
 
@@ -149,15 +176,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnTranscriptionEnabledChanged(bool value)
     {
+        // このチェックボックスは「録音中のライブ文字起こし」の ON/OFF のみを司る
+        // モデルのロード自体はパスが設定されていれば常に行う
         if (value)
         {
-            TryLoadWhisperModel();
+            if (_transcriptionService.IsModelLoaded)
+            {
+                _audioCaptureService.SetTranscriptionService(_transcriptionService);
+            }
+            else
+            {
+                TryLoadWhisperModel();
+            }
         }
         else
         {
             _audioCaptureService.SetTranscriptionService(null);
         }
-        SaveSettings();
+        if (!_initializing)
+        {
+            SaveSettings();
+        }
     }
 
     [ObservableProperty]
@@ -191,7 +230,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // --- コマンド ---
 
     private bool CanStartRecording =>
-        (SelectedCaptureDevice != null || SelectedRenderDevice != null) && !IsRecording && !IsStopping;
+        (SelectedCaptureDevice != null || SelectedRenderDevice != null)
+        && !IsRecording && !IsStopping && !IsTranscribingFile;
 
     private bool CanStopRecording => IsRecording && !IsStopping;
 
@@ -242,7 +282,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanSelectOutputFolder => !IsRecording && !IsStopping;
+    private bool CanSelectOutputFolder => !IsRecording && !IsStopping && !IsTranscribingFile;
 
     [RelayCommand(CanExecute = nameof(CanSelectOutputFolder))]
     private void SelectOutputFolder()
@@ -255,7 +295,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanRefreshDevices => !IsRecording && !IsStopping;
+    private bool CanRefreshDevices => !IsRecording && !IsStopping && !IsTranscribingFile;
 
     [RelayCommand(CanExecute = nameof(CanRefreshDevices))]
     private void RefreshDevices()
@@ -320,7 +360,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private bool CanSelectWhisperModel => !IsRecording && !IsStopping;
+    private bool CanSelectWhisperModel => !IsRecording && !IsStopping && !IsTranscribingFile;
 
     [RelayCommand(CanExecute = nameof(CanSelectWhisperModel))]
     private void SelectWhisperModel()
@@ -370,7 +410,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (success)
             {
                 TranscriptionStatus = "モデル読み込み完了";
-                _audioCaptureService.SetTranscriptionService(_transcriptionService);
+                // ライブ文字起こしが ON のときのみ、録音サービスにワイヤする
+                if (TranscriptionEnabled)
+                {
+                    _audioCaptureService.SetTranscriptionService(_transcriptionService);
+                }
             }
             else
             {
@@ -386,7 +430,78 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _isLoadingModel = false;
+            TranscribeFromFileCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    private bool CanTranscribeFromFile =>
+        !IsRecording && !IsStopping && !IsTranscribingFile
+        && _transcriptionService.IsModelLoaded;
+
+    [RelayCommand(CanExecute = nameof(CanTranscribeFromFile))]
+    private async Task TranscribeFromFileAsync()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "文字起こしする音声ファイルを選択",
+            Filter = "音声ファイル (*.wav;*.mp3)|*.wav;*.mp3|すべてのファイル (*.*)|*.*"
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        _fileTranscriptionCts = new CancellationTokenSource();
+        IsTranscribingFile = true;
+        FileTranscriptionStatus = "準備中...";
+        StatusMessage = "音声ファイルから文字起こし中...";
+        try
+        {
+            var progress = new Progress<(TimeSpan processed, TimeSpan total)>(v =>
+                FileTranscriptionStatus =
+                    $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}");
+            var filePath = dialog.FileName;
+            var token = _fileTranscriptionCts.Token;
+            // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
+            var ok = await Task.Run(() =>
+                _transcriptionService.TranscribeFileAsync(filePath, progress, token));
+            if (ok)
+            {
+                var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
+                FileTranscriptionStatus = "完了";
+                StatusMessage = $"文字起こし完了: {txtPath}";
+            }
+            else
+            {
+                FileTranscriptionStatus = "失敗";
+                StatusMessage = "文字起こしに失敗しました";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            FileTranscriptionStatus = "中止しました";
+            StatusMessage = "文字起こしを中止しました";
+        }
+        catch (Exception ex)
+        {
+            FileTranscriptionStatus = $"エラー: {ex.Message}";
+            StatusMessage = $"エラー: {ex.Message}";
+        }
+        finally
+        {
+            _fileTranscriptionCts?.Dispose();
+            _fileTranscriptionCts = null;
+            IsTranscribingFile = false;
+        }
+    }
+
+    private bool CanCancelFileTranscription => IsTranscribingFile;
+
+    [RelayCommand(CanExecute = nameof(CanCancelFileTranscription))]
+    private void CancelFileTranscription()
+    {
+        _fileTranscriptionCts?.Cancel();
+        FileTranscriptionStatus = "中止中...";
     }
 
     private void SaveSettings()
