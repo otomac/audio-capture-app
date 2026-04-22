@@ -247,6 +247,15 @@ public class TranscriptionService : IDisposable
         }
         catch (Exception ex)
         {
+            // Whisper のネイティブ処理はキャンセル時に OperationCanceledException 以外を
+            // 投げることがあるため、トークンがキャンセル済みなら中止として扱う
+            if (ct.IsCancellationRequested)
+            {
+                writer?.Dispose();
+                writer = null;
+                TryDeleteFile(outputPath);
+                throw new OperationCanceledException(ct);
+            }
             Error?.Invoke($"ファイル文字起こしエラー: {ex.Message}");
             return false;
         }
