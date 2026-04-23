@@ -38,6 +38,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transcriptionService.Error += msg =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
+        _transcriptionService.RuntimeInfo += runtime =>
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+                StatusMessage = $"Whisperランタイム: {runtime}");
 
         var settings = _settingsService.Load();
         OutputFolder = settings.OutputFolder;
@@ -451,6 +454,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        await RunFileTranscriptionAsync(dialog.FileName);
+    }
+
+    public bool CanAcceptFileDrop => CanTranscribeFromFile;
+
+    public async Task TranscribeDroppedFileAsync(string filePath)
+    {
+        if (!CanTranscribeFromFile)
+        {
+            return;
+        }
+
+        if (!IsSupportedAudioExtension(filePath))
+        {
+            var ext = System.IO.Path.GetExtension(filePath);
+            StatusMessage = $"エラー: 対応していないファイル形式です ({ext})";
+            return;
+        }
+
+        await RunFileTranscriptionAsync(filePath);
+    }
+
+    internal static bool IsSupportedAudioExtension(string filePath)
+    {
+        var ext = System.IO.Path.GetExtension(filePath);
+        return string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task RunFileTranscriptionAsync(string filePath)
+    {
         _fileTranscriptionCts = new CancellationTokenSource();
         IsTranscribingFile = true;
         FileTranscriptionStatus = "準備中...";
@@ -460,7 +494,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var progress = new Progress<(TimeSpan processed, TimeSpan total)>(v =>
                 FileTranscriptionStatus =
                     $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}");
-            var filePath = dialog.FileName;
             var token = _fileTranscriptionCts.Token;
             // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
             var ok = await Task.Run(() =>

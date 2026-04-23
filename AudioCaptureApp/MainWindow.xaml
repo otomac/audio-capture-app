@@ -182,7 +182,12 @@
         </GroupBox>
 
         <!-- Row 5: 文字起こし設定 -->
-        <GroupBox Grid.Row="5" Margin="0,0,0,16">
+        <GroupBox Grid.Row="5" Margin="0,0,0,16"
+                  AllowDrop="True"
+                  DragEnter="TranscriptionGroup_DragOver"
+                  DragOver="TranscriptionGroup_DragOver"
+                  DragLeave="TranscriptionGroup_DragLeave"
+                  Drop="TranscriptionGroup_Drop">
             <GroupBox.Header>
                 <StackPanel Orientation="Horizontal">
                     <CheckBox Content="録音中にライブ文字起こしする" IsChecked="{Binding TranscriptionEnabled}"
@@ -190,6 +195,7 @@
                               IsEnabled="{Binding IsNotBusy}"/>
                 </StackPanel>
             </GroupBox.Header>
+            <Grid Background="Transparent">
             <Grid Margin="16,12,16,16">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -266,6 +272,16 @@
                     <TextBlock Text="{Binding FileTranscriptionStatus}"
                                VerticalAlignment="Center" Foreground="#FF555555"/>
                 </StackPanel>
+            </Grid>
+
+                <!-- ドラッグ＆ドロップ用オーバーレイ -->
+                <Border x:Name="DropOverlay"
+                        Background="#CC1E88E5" BorderBrush="#FF0D47A1" BorderThickness="2"
+                        Visibility="Collapsed" IsHitTestVisible="False">
+                    <TextBlock Text="ここにドロップして文字起こしを開始"
+                               Foreground="White" FontSize="16" FontWeight="Bold"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
             </Grid>
         </GroupBox>
 
