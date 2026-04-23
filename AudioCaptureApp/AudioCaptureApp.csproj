@@ -20,6 +20,12 @@
     <PackageReference Include="NAudio.Lame" Version="2.1.0" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
     <PackageReference Include="Whisper.net" Version="1.9.0" />
+    <!--
+      Whisper 実行ランタイムは複数同梱し、起動時に利用可能な最速のものを自動選択する。
+      優先順: Cuda (NVIDIA) > Vulkan (Intel/AMD iGPU, その他 GPU) > CPU
+    -->
+    <PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
   </ItemGroup>
 

@@ -38,6 +38,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transcriptionService.Error += msg =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
+        _transcriptionService.RuntimeInfo += runtime =>
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+                StatusMessage = $"Whisperランタイム: {runtime}");
 
         var settings = _settingsService.Load();
         OutputFolder = settings.OutputFolder;

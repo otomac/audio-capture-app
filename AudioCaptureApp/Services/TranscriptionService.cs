@@ -37,6 +37,7 @@ public class TranscriptionService : IDisposable
 
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
+    public event Action<string>? RuntimeInfo;
 
     public bool IsModelLoaded => _factory != null;
 
@@ -52,6 +53,12 @@ public class TranscriptionService : IDisposable
         try
         {
             _factory = WhisperFactory.FromPath(modelPath);
+            // ランタイムは FromPath の内部で初めてロードされるため、ここで選択結果を通知する
+            var runtime = TryGetLoadedRuntimeName();
+            if (runtime != null)
+            {
+                RuntimeInfo?.Invoke(runtime);
+            }
             return true;
         }
         catch (Exception ex)
@@ -59,6 +66,31 @@ public class TranscriptionService : IDisposable
             Error?.Invoke($"Whisperモデル読み込み失敗: {ex.Message}");
             DisposeProcessor();
             return false;
+        }
+    }
+
+    // Whisper.net は RuntimeOptions.Instance.LoadedLibrary で選択済みランタイムを返すが、
+    // バージョンによって型配置が変わる可能性があるためリフレクションで拾う
+    private static string? TryGetLoadedRuntimeName()
+    {
+        try
+        {
+            var asm = typeof(WhisperFactory).Assembly;
+            var optionsType = asm.GetType("Whisper.net.LibraryLoader.RuntimeOptions");
+            if (optionsType == null) return null;
+
+            var instanceProp = optionsType.GetProperty("Instance",
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            var instance = instanceProp?.GetValue(null);
+            if (instance == null) return null;
+
+            var loadedProp = optionsType.GetProperty("LoadedLibrary");
+            var value = loadedProp?.GetValue(instance);
+            return value?.ToString();
+        }
+        catch
+        {
+            return null;
         }
     }
 
