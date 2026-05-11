@@ -41,6 +41,12 @@ public class AudioCaptureService : IDisposable
     private volatile bool _isSpeakerMuted;
     private byte[]? _silenceBuffer;
 
+    // ハードウェアミュート同期
+    private AudioEndpointVolume? _micEndpointVolume;
+    private AudioEndpointVolumeNotificationDelegate? _micVolumeHandler;
+    // アプリ→OS 書き込み中フラグ。OS からの折り返し通知を弾く
+    private volatile bool _suppressMuteNotification;
+
     // ピークレベル測定
     private volatile float _micPeakLevel;
     private volatile float _loopbackPeakLevel;
@@ -50,7 +56,29 @@ public class AudioCaptureService : IDisposable
     public bool IsMicMuted
     {
         get => _isMicMuted;
-        set => _isMicMuted = value;
+        set
+        {
+            if (_isMicMuted == value) return;
+            _isMicMuted = value;
+            TryApplyMuteToEndpoint(value);
+        }
+    }
+
+    private void TryApplyMuteToEndpoint(bool mute)
+    {
+        var vol = _micEndpointVolume;
+        if (vol == null) return;
+        try
+        {
+            if (vol.Mute == mute) return;
+            _suppressMuteNotification = true;
+            vol.Mute = mute;
+        }
+        catch { /* デバイス権限不足等は黙殺。ソフトミュートで動作継続 */ }
+        finally
+        {
+            _suppressMuteNotification = false;
+        }
     }
 
     public bool IsSpeakerMuted
@@ -63,6 +91,9 @@ public class AudioCaptureService : IDisposable
     public float LoopbackPeakLevel => _loopbackPeakLevel;
 
     public event Action<string>? RecordingError;
+
+    /// <summary>OS 側からマイクミュート状態が変わった時に発火（非UIスレッド）</summary>
+    public event Action<bool>? MicMuteChangedExternally;
 
     public IReadOnlyList<AudioDevice> GetCaptureDevices() => _captureDevices;
     public IReadOnlyList<AudioDevice> GetRenderDevices() => _renderDevices;
@@ -104,6 +135,25 @@ public class AudioCaptureService : IDisposable
         StopMicMonitor();
 
         _micDevice = _enumerator.GetDevice(device.DeviceId);
+
+        // ハードウェアミュート同期セットアップ
+        try
+        {
+            _micEndpointVolume = _micDevice.AudioEndpointVolume;
+            // 起動時 / デバイス切替時の初期同期。setter ではなくフィールドに直接書く
+            // （setter 経由だと OS へ無駄な書き戻しが発生する）
+            _isMicMuted = _micEndpointVolume.Mute;
+
+            _micVolumeHandler = OnMicVolumeNotification;
+            _micEndpointVolume.OnVolumeNotification += _micVolumeHandler;
+        }
+        catch
+        {
+            // AudioEndpointVolume が取れないデバイスはソフトミュートのみで動作
+            _micEndpointVolume = null;
+            _micVolumeHandler = null;
+        }
+
         _micCapture = new WasapiCapture(_micDevice) { ShareMode = AudioClientShareMode.Shared };
         _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
         {
@@ -143,6 +193,14 @@ public class AudioCaptureService : IDisposable
 
     public void StopMicMonitor()
     {
+        // 先にイベント購読を外す（コールバック競合の最小化）
+        if (_micEndpointVolume != null && _micVolumeHandler != null)
+        {
+            try { _micEndpointVolume.OnVolumeNotification -= _micVolumeHandler; } catch { }
+        }
+        _micVolumeHandler = null;
+        _micEndpointVolume = null; // MMDevice の Dispose で解放される
+
         if (_micCapture != null)
         {
             try { _micCapture.StopRecording(); } catch { }
@@ -154,6 +212,15 @@ public class AudioCaptureService : IDisposable
         _micDevice?.Dispose();
         _micDevice = null;
         _micPeakLevel = 0f;
+    }
+
+    private void OnMicVolumeNotification(AudioVolumeNotificationData data)
+    {
+        if (_suppressMuteNotification) return; // アプリ発の書き込みによる通知ならスキップ
+        var newMute = data.Muted;
+        if (_isMicMuted == newMute) return;
+        _isMicMuted = newMute;
+        MicMuteChangedExternally?.Invoke(newMute);
     }
 
     // --- 録音制御 ---

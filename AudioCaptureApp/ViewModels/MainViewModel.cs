@@ -17,6 +17,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _clockTimer;
     private DateTime _recordingStartTime;
     private bool _initializing;
+    private bool _suppressMicMuteWriteBack;
 
     public MainViewModel()
     {
@@ -35,6 +36,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
 
         _audioCaptureService.RecordingError += OnRecordingError;
+        _audioCaptureService.MicMuteChangedExternally += OnMicMuteChangedExternally;
         _transcriptionService.Error += msg =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
@@ -84,6 +86,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (value != null)
         {
             _audioCaptureService.StartMicMonitor(value);
+            // 起動時／デバイス切替時に OS の現在ミュート値を ViewModel に反映
+            _suppressMicMuteWriteBack = true;
+            try { IsMicMuted = _audioCaptureService.IsMicMuted; }
+            finally { _suppressMicMuteWriteBack = false; }
         }
         else
         {
@@ -213,6 +219,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnIsMicMutedChanged(bool value)
     {
+        if (_suppressMicMuteWriteBack) return;
         _audioCaptureService.IsMicMuted = value;
     }
 
@@ -350,6 +357,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         double db = 20.0 * Math.Log10(peak);
         return Math.Clamp(db, -60.0, 3.0);
+    }
+
+    private void OnMicMuteChangedExternally(bool newMute)
+    {
+        // OnVolumeNotification は非UIスレッドで発火するため Dispatcher 経由
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (IsMicMuted == newMute) return;
+            _suppressMicMuteWriteBack = true;
+            try { IsMicMuted = newMute; }
+            finally { _suppressMicMuteWriteBack = false; }
+        });
     }
 
     private void OnRecordingError(string message)
