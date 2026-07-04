@@ -15,6 +15,7 @@ public class AppSettingsTests
         Assert.Null(settings.LastSelectedLoopbackDeviceId);
         Assert.False(settings.TranscriptionEnabled);
         Assert.Contains("ggml-small.bin", settings.WhisperModelPath);
+        Assert.True(settings.UseGpuForTranscription);
     }
 
     [Fact]
@@ -26,7 +27,8 @@ public class AppSettingsTests
             LastSelectedDeviceId = "device-123",
             LastSelectedLoopbackDeviceId = "loopback-456",
             TranscriptionEnabled = true,
-            WhisperModelPath = @"C:\models\test.bin"
+            WhisperModelPath = @"C:\models\test.bin",
+            UseGpuForTranscription = false
         };
 
         var json = JsonSerializer.Serialize(original);
@@ -38,6 +40,7 @@ public class AppSettingsTests
         Assert.Equal(original.LastSelectedLoopbackDeviceId, deserialized.LastSelectedLoopbackDeviceId);
         Assert.Equal(original.TranscriptionEnabled, deserialized.TranscriptionEnabled);
         Assert.Equal(original.WhisperModelPath, deserialized.WhisperModelPath);
+        Assert.Equal(original.UseGpuForTranscription, deserialized.UseGpuForTranscription);
     }
 
     [Fact]
@@ -50,5 +53,6 @@ public class AppSettingsTests
         Assert.NotNull(settings);
         Assert.Null(settings.LastSelectedDeviceId);
         Assert.False(settings.TranscriptionEnabled);
+        Assert.True(settings.UseGpuForTranscription);
     }
 }

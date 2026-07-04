@@ -239,6 +239,9 @@
                             </Style>
                         </Button.Style>
                     </Button>
+                    <CheckBox Content="文字起こしにGPUを使用する" IsChecked="{Binding UseGpuForTranscription}"
+                              IsEnabled="{Binding CanToggleGpu}"
+                              VerticalAlignment="Center" Margin="0,0,8,0"/>
                     <Button Content="中止"
                             Command="{Binding CancelFileTranscriptionCommand}"
                             Padding="12,2" Background="#FFCC0000" Foreground="White">
