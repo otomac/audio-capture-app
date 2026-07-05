@@ -2,6 +2,7 @@ using System.IO;
 using System.Text;
 using NAudio.Wave;
 using Whisper.net;
+using Whisper.net.LibraryLoader;
 
 namespace AudioCaptureApp.Services;
 
@@ -41,56 +42,58 @@ public class TranscriptionService : IDisposable
 
     public bool IsModelLoaded => _factory != null;
 
-    public bool LoadModel(string modelPath)
+    // GPU優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）と、CPU限定の順序
+    private static readonly List<RuntimeLibrary> GpuPreferredOrder = new()
+    {
+        RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.CoreML,
+        RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx
+    };
+    private static readonly List<RuntimeLibrary> CpuOnlyOrder = new()
+    {
+        RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx
+    };
+
+    private static bool IsGpuLibrary(RuntimeLibrary? library) =>
+        library is RuntimeLibrary.Cuda or RuntimeLibrary.Vulkan or RuntimeLibrary.CoreML or RuntimeLibrary.OpenVino;
+
+    // GPU利用可否は実際にランタイムを読み込んでみないと判定できないため、
+    // useGpu の指定に関わらず一度 GPU 優先順で読み込みを試して可否を判定する。
+    // ユーザー設定が CPU 使用の場合、GPU が利用可能でも CPU 限定で読み込み直す。
+    public (bool Success, bool GpuAvailable) LoadModel(string modelPath, bool useGpu)
     {
         DisposeProcessor();
 
         if (!File.Exists(modelPath))
         {
-            return false;
+            return (false, true);
         }
 
         try
         {
+            RuntimeOptions.RuntimeLibraryOrder = GpuPreferredOrder;
             _factory = WhisperFactory.FromPath(modelPath);
-            // ランタイムは FromPath の内部で初めてロードされるため、ここで選択結果を通知する
-            var runtime = TryGetLoadedRuntimeName();
-            if (runtime != null)
+            var loaded = RuntimeOptions.LoadedLibrary;
+            var gpuAvailable = IsGpuLibrary(loaded);
+
+            if (!useGpu && gpuAvailable)
             {
-                RuntimeInfo?.Invoke(runtime);
+                _factory.Dispose();
+                RuntimeOptions.RuntimeLibraryOrder = CpuOnlyOrder;
+                _factory = WhisperFactory.FromPath(modelPath);
+                loaded = RuntimeOptions.LoadedLibrary;
             }
-            return true;
+
+            if (loaded != null)
+            {
+                RuntimeInfo?.Invoke(loaded.Value.ToString());
+            }
+            return (true, gpuAvailable);
         }
         catch (Exception ex)
         {
             Error?.Invoke($"Whisperモデル読み込み失敗: {ex.Message}");
             DisposeProcessor();
-            return false;
-        }
-    }
-
-    // Whisper.net は RuntimeOptions.Instance.LoadedLibrary で選択済みランタイムを返すが、
-    // バージョンによって型配置が変わる可能性があるためリフレクションで拾う
-    private static string? TryGetLoadedRuntimeName()
-    {
-        try
-        {
-            var asm = typeof(WhisperFactory).Assembly;
-            var optionsType = asm.GetType("Whisper.net.LibraryLoader.RuntimeOptions");
-            if (optionsType == null) return null;
-
-            var instanceProp = optionsType.GetProperty("Instance",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-            var instance = instanceProp?.GetValue(null);
-            if (instance == null) return null;
-
-            var loadedProp = optionsType.GetProperty("LoadedLibrary");
-            var value = loadedProp?.GetValue(instance);
-            return value?.ToString();
-        }
-        catch
-        {
-            return null;
+            return (false, true);
         }
     }
 

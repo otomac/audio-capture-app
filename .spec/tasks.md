@@ -75,3 +75,15 @@ Plan: [plan.md](./plan.md)
 - [x] T660 [SC-006] 長時間（30分以上）録音後に MP3 が正常再生できることを確認する ※手動テスト必要
 - [x] T670 [P] README.md を作成する（セットアップ手順・使い方・ライセンス）
 - [x] T680 [P] 発行設定（`dotnet publish` / Self-contained / Single file）を確認する
+
+---
+
+## Phase 6: 文字起こしGPU使用切り替え（User Story 11）
+
+- [x] T710 [US11] `AppSettings.cs` に `UseGpuForTranscription` (bool, 既定値 true) を追加する
+- [x] T720 [US11] `TranscriptionService.LoadModel` を GPU優先順／CPU限定順の `RuntimeOptions.RuntimeLibraryOrder` 切り替えに対応させ、GPU利用可否を判定して返すようにする
+- [x] T730 [US11] `MainViewModel` に `UseGpuForTranscription` / `GpuAvailable` / `CanToggleGpu` を実装し、チェックボックス変更時にモデルを再読み込みする
+- [x] T740 [US11] `MainViewModel` - GPU利用不可判定時にチェックボックスを強制OFFにし、無効化する処理を実装する
+- [x] T750 [US11] `MainWindow.xaml` に「文字起こしにGPUを使用する」チェックボックスを追加する（ボタン右、`CanToggleGpu` で無効化制御）
+- [x] T760 [US11] `AppSettingsTests` / `TranscriptionServiceTests` にGPU設定関連のテストを追加する
+- [x] T770 [US11] `dotnet build` / `dotnet test` で全体の回帰がないことを確認する

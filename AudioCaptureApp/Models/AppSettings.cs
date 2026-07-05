@@ -14,4 +14,6 @@ public class AppSettings
     public string WhisperModelPath { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "AudioCaptureApp", "models", "ggml-small.bin");
+
+    public bool UseGpuForTranscription { get; set; } = true;
 }

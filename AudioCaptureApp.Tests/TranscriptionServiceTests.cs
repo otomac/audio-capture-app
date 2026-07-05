@@ -66,4 +66,17 @@ public class TranscriptionServiceTests
 
         Assert.False(TranscriptionService.IsSilent(samples));
     }
+
+    [Fact]
+    public void LoadModel_FileDoesNotExist_ReturnsFailureAndGpuAvailableUnknown()
+    {
+        using var service = new TranscriptionService();
+
+        var (success, gpuAvailable) = service.LoadModel(@"C:\nonexistent\model.bin", useGpu: true);
+
+        Assert.False(success);
+        // 判定不可の場合はGPU利用可能とみなす（チェックボックスをON扱いのままにするため）
+        Assert.True(gpuAvailable);
+        Assert.False(service.IsModelLoaded);
+    }
 }

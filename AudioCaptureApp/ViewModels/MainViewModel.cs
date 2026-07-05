@@ -18,6 +18,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DateTime _recordingStartTime;
     private bool _initializing;
     private bool _suppressMicMuteWriteBack;
+    private bool _suppressUseGpuWriteBack;
 
     public MainViewModel()
     {
@@ -48,6 +49,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OutputFolder = settings.OutputFolder;
         TranscriptionEnabled = settings.TranscriptionEnabled;
         WhisperModelPath = settings.WhisperModelPath;
+        UseGpuForTranscription = settings.UseGpuForTranscription;
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
         // ライブ用チェックボックスと独立して動作する）
@@ -157,17 +159,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(RecordingStatusText));
         OnPropertyChanged(nameof(RecordingStatusColor));
         OnPropertyChanged(nameof(IsNotBusy));
+        OnPropertyChanged(nameof(CanToggleGpu));
     }
 
     partial void OnIsStoppingChanged(bool value)
     {
         OnPropertyChanged(nameof(RecordingStatusText));
         OnPropertyChanged(nameof(IsNotBusy));
+        OnPropertyChanged(nameof(CanToggleGpu));
     }
 
     partial void OnIsTranscribingFileChanged(bool value)
     {
         OnPropertyChanged(nameof(IsNotBusy));
+        OnPropertyChanged(nameof(CanToggleGpu));
     }
 
     [ObservableProperty]
@@ -213,6 +218,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _transcriptionStatus = "";
+
+    // --- 文字起こしGPU使用設定 ---
+    [ObservableProperty]
+    private bool _useGpuForTranscription = true;
+
+    [ObservableProperty]
+    private bool _gpuAvailable = true;
+
+    public bool CanToggleGpu => IsNotBusy && GpuAvailable;
+
+    partial void OnGpuAvailableChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanToggleGpu));
+    }
+
+    partial void OnUseGpuForTranscriptionChanged(bool value)
+    {
+        if (_initializing || _suppressUseGpuWriteBack)
+        {
+            return;
+        }
+        SaveSettings();
+        TryLoadWhisperModel();
+    }
 
     [ObservableProperty]
     private bool _isMicMuted;
@@ -428,9 +457,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _isLoadingModel = true;
             TranscriptionStatus = "モデル読み込み中...";
             var modelPath = WhisperModelPath;
-            var success = await Task.Run(() => _transcriptionService.LoadModel(modelPath));
+            var requestGpu = UseGpuForTranscription;
+            var (success, gpuAvailable) = await Task.Run(() => _transcriptionService.LoadModel(modelPath, requestGpu));
             if (success)
             {
+                GpuAvailable = gpuAvailable;
+                if (!gpuAvailable && requestGpu)
+                {
+                    // GPUが利用不可と判明した場合は設定を強制的にOFFにする
+                    _suppressUseGpuWriteBack = true;
+                    try { UseGpuForTranscription = false; }
+                    finally { _suppressUseGpuWriteBack = false; }
+                    SaveSettings();
+                }
+
                 TranscriptionStatus = "モデル読み込み完了";
                 // ライブ文字起こしが ON のときのみ、録音サービスにワイヤする
                 if (TranscriptionEnabled)
@@ -564,7 +604,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId,
             LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId,
             TranscriptionEnabled = TranscriptionEnabled,
-            WhisperModelPath = WhisperModelPath
+            WhisperModelPath = WhisperModelPath,
+            UseGpuForTranscription = UseGpuForTranscription
         });
     }
 
