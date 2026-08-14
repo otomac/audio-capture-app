@@ -1,0 +1,39 @@
+<Project>
+
+  <!--
+    ソリューション全体のビルド／静的解析設定。
+    MSBuild がプロジェクトから上へ辿って最初に見つけたこのファイルを、
+    全 .NET プロジェクトへ自動的に適用する（.slnx の場所は無関係）。
+
+    根拠と配置理由: docs/harness/70-build-configuration.md
+    ゲートの定義    : docs/harness/40-quality-gates.md
+  -->
+
+  <PropertyGroup>
+    <!-- 言語／ランタイムの基準。TargetFramework は各 .csproj が宣言する（net8.0-windows）。 -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Label="StaticAnalysis">
+    <!--
+      品質ゲート G1 の歯。
+      AnalysisMode=All        : .NET 組み込みアナライザーを全ルール有効化
+      EnforceCodeStyleInBuild : IDE* スタイルルールをビルド時にも実行
+      TreatWarningsAsErrors   : 警告をエラーにする ＝ 警告 1 件でビルド失敗
+      個別ルールの severity は .editorconfig 側で調整する。
+    -->
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Reproducibility">
+    <Deterministic>true</Deterministic>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+  </PropertyGroup>
+
+</Project>

@@ -111,9 +111,11 @@ csharp_style_prefer_readonly_struct_member = true
 # Code-block preferences
 csharp_prefer_braces = true
 csharp_prefer_simple_using_statement = true
-csharp_style_namespace_declarations = block_scoped
+# ファイルスコープ名前空間。既存コードは全てこの形式 (docs/harness/30-coding-standards.md §3)
+csharp_style_namespace_declarations = file_scoped
 csharp_style_prefer_method_group_conversion = true
-csharp_style_prefer_primary_constructors = true
+# プライマリコンストラクターは使わない (docs/harness/30-coding-standards.md §5)
+csharp_style_prefer_primary_constructors = false
 csharp_style_prefer_top_level_statements = true
 
 # Expression-level preferences
@@ -229,3 +231,134 @@ dotnet_naming_style.begins_with_i.required_prefix = I
 dotnet_naming_style.begins_with_i.required_suffix = 
 dotnet_naming_style.begins_with_i.word_separator = 
 dotnet_naming_style.begins_with_i.capitalization = pascal_case
+##############################################################################
+# 命名規則 — severity (docs/harness/30-coding-standards.md §4)
+#
+# 上のセクションで定義済みの型/インターフェース/メンバー規則を warning に引き上げ、
+# private/internal フィールドの _camelCase 規則を追加する。
+##############################################################################
+
+dotnet_naming_rule.interface_should_be_begins_with_i.severity = warning
+dotnet_naming_rule.types_should_be_pascal_case.severity = warning
+dotnet_naming_rule.non_field_members_should_be_pascal_case.severity = warning
+
+# const と static readonly のフィールドは PascalCase。
+# 注意: 命名ルールは「最初に一致したものだけ」が適用されるため、
+#       より広い private_fields のルールより必ず前に置くこと。
+dotnet_naming_rule.const_fields_should_be_pascal_case.severity = warning
+dotnet_naming_rule.const_fields_should_be_pascal_case.symbols = const_fields
+dotnet_naming_rule.const_fields_should_be_pascal_case.style = pascal_case
+
+dotnet_naming_symbols.const_fields.applicable_kinds = field
+dotnet_naming_symbols.const_fields.applicable_accessibilities = *
+dotnet_naming_symbols.const_fields.required_modifiers = const
+
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.severity = warning
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.symbols = static_readonly_fields
+dotnet_naming_rule.static_readonly_fields_should_be_pascal_case.style = pascal_case
+
+dotnet_naming_symbols.static_readonly_fields.applicable_kinds = field
+dotnet_naming_symbols.static_readonly_fields.applicable_accessibilities = *
+dotnet_naming_symbols.static_readonly_fields.required_modifiers = static, readonly
+
+# 上記以外の private / internal インスタンスフィールドは _camelCase
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.severity = warning
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.symbols = private_fields
+dotnet_naming_rule.private_fields_should_be_underscore_camel_case.style = underscore_camel_case
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private, internal, private_protected
+dotnet_naming_symbols.private_fields.required_modifiers =
+
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.required_suffix =
+dotnet_naming_style.underscore_camel_case.word_separator =
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+# 非同期メソッドは Async サフィックス。
+# severity = suggestion にしている理由:
+#   このルールは戻り値型を判別できず async 修飾子にしか反応しないため、
+#   WPF の `async void` イベントハンドラー (TranscriptionGroup_Drop 等) まで
+#   誤検出する。イベントハンドラーに Async は付けないのが正しく、
+#   XAML 側の配線名でもあるため改名もできない。
+#   → 命名は手で正しく付ける。レビューで担保する。
+#      (docs/harness/40-quality-gates.md §4 の「既知の穴」)
+dotnet_naming_rule.async_methods_should_end_with_async.severity = suggestion
+dotnet_naming_rule.async_methods_should_end_with_async.symbols = async_methods
+dotnet_naming_rule.async_methods_should_end_with_async.style = ends_with_async
+
+dotnet_naming_symbols.async_methods.applicable_kinds = method
+dotnet_naming_symbols.async_methods.applicable_accessibilities = *
+dotnet_naming_symbols.async_methods.required_modifiers = async
+
+dotnet_naming_style.ends_with_async.required_prefix =
+dotnet_naming_style.ends_with_async.required_suffix = Async
+dotnet_naming_style.ends_with_async.word_separator =
+dotnet_naming_style.ends_with_async.capitalization = pascal_case
+
+##############################################################################
+# アナライザー severity — 恒久的な緩和
+#
+# TreatWarningsAsErrors=true のため、severity = warning のルールはビルドを落とす。
+# 以下は本プロジェクトの前提に合わないと判断済みのルール。技術的負債ではない。
+# 一覧と理由: docs/harness/40-quality-gates.md §5「恒久的な緩和」
+#
+# 書式: # <RULE_ID>: <理由> — <日付>
+##############################################################################
+
+# CA2007: WPF では継続を UI コンテキストへ戻す必要があり、ConfigureAwait(false) は誤動作を招く — 2026-08-14
+dotnet_diagnostic.CA2007.severity = none
+
+# CA1515: 単体実行ファイルであり、型を internal 化しても公開 API 面の縮小に意味がない — 2026-08-14
+dotnet_diagnostic.CA1515.severity = none
+
+# CA1003: NAudio 由来のイベント形状に合わせる必要があり、EventHandler<T> を強制できない — 2026-08-14
+dotnet_diagnostic.CA1003.severity = suggestion
+
+# CA1024: メソッドかプロパティかは副作用と計算コストを踏まえた設計判断であり、機械的に従わない — 2026-08-14
+dotnet_diagnostic.CA1024.severity = suggestion
+
+# CA1062: 外部公開ライブラリではなく単体アプリの内部呼び出しであり、引数 null 検証は過剰 — 2026-08-14
+dotnet_diagnostic.CA1062.severity = none
+
+##############################################################################
+# アナライザー severity — 技術的負債（期限付き緩和）
+#
+# ハーネス導入 (2026-08-14) 時点で既存コードに残っていた違反。
+# 新規コードでは守ること。解消タスクは docs/tasks/backlog.md の T101〜T105。
+# 解消したら該当行を「削除」すること（緩和を残さない）。
+##############################################################################
+
+# T101 — Dispose パターンの是正 — 2026-08-14
+dotnet_diagnostic.CA1063.severity = suggestion
+dotnet_diagnostic.CA1816.severity = suggestion
+dotnet_diagnostic.CA1001.severity = suggestion
+dotnet_diagnostic.CA2213.severity = suggestion
+dotnet_diagnostic.CA2000.severity = suggestion
+
+# T102 — カルチャー・文字列比較の明示 — 2026-08-14
+dotnet_diagnostic.CA1305.severity = suggestion
+dotnet_diagnostic.CA1307.severity = suggestion
+
+# T103 — catch (Exception) の局所化と理由付与 — 2026-08-14
+dotnet_diagnostic.CA1031.severity = suggestion
+
+# T104 — 非同期の是正（同期呼び出しの解消 / CancellationToken の伝播） — 2026-08-14
+dotnet_diagnostic.CA1849.severity = suggestion
+dotnet_diagnostic.CA2016.severity = suggestion
+
+# T105 — 軽微な静的解析指摘の解消 — 2026-08-14
+dotnet_diagnostic.CA1822.severity = suggestion
+dotnet_diagnostic.CA1825.severity = suggestion
+
+##############################################################################
+# テストプロジェクトの緩和
+#
+# [*.cs] より後ろに置くため、テストファイルではこちらが勝つ。
+# 根拠: docs/harness/70-build-configuration.md §4
+##############################################################################
+
+[AudioCaptureApp.Tests/**.cs]
+
+# CA1707: テストメソッド名は 対象_条件_期待結果 形式であり _ を含む — 2026-08-14
+dotnet_diagnostic.CA1707.severity = none

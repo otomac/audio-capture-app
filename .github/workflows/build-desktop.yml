@@ -13,10 +13,14 @@ permissions:
   contents: write
 
 env:
-  DOTNET_VERSION: "8.0.x"
+  # ソリューションは .slnx (XML 形式) のため SDK 9 以降が必要。
+  # ターゲットは net8.0-windows なので 8.0.x も併せて入れる。
+  # docs/harness/70-build-configuration.md §6
+  DOTNET_VERSION: |
+    8.0.x
+    9.0.x
 
-  # ===== あなたの環境に合わせて変更 =====
-  SOLUTION_PATH: "AudioCaptureApp.sln"
+  SOLUTION_PATH: "AudioCaptureApp.slnx"
   TEST_PROJECT_PATH: "AudioCaptureApp.Tests/AudioCaptureApp.Tests.csproj"
   APP_PROJECT_PATH: "AudioCaptureApp/AudioCaptureApp.csproj"
 
@@ -49,18 +53,25 @@ jobs:
         shell: pwsh
         run: dotnet restore $env:SOLUTION_PATH
 
-      - name: Build with analyzers (fail on warnings)
+      # ===== 品質ゲート (docs/harness/40-quality-gates.md) =====
+      # 解析設定はすべて Directory.Build.props と .editorconfig が持つ。
+      # CI 側でフラグを上書きしないこと（ローカルと CI を同一条件に保つため）。
+
+      - name: "G1: Build with analyzers (warnings are errors)"
         shell: pwsh
         run: >
           dotnet build $env:SOLUTION_PATH
           -c $env:CONFIGURATION
           --no-restore
-          /p:EnableNETAnalyzers=true
-          /p:AnalysisLevel=latest
-          /p:TreatWarningsAsErrors=true
-          /warnaserror
 
-      - name: Test
+      - name: "G2: Verify formatting and code style"
+        shell: pwsh
+        run: >
+          dotnet format $env:SOLUTION_PATH
+          --verify-no-changes
+          --no-restore
+
+      - name: "G3: Test"
         shell: pwsh
         run: >
           dotnet test $env:TEST_PROJECT_PATH

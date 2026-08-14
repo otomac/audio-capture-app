@@ -1,10 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    Nullable / ImplicitUsings / LangVersion と静的解析の設定は
+    ルートの Directory.Build.props が全プロジェクトへ適用する。ここで重複させない。
+    パッケージのバージョンは Directory.Packages.props (CPM) が持つため、
+    PackageReference に Version 属性を書かない。
+  -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
@@ -15,18 +19,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="NAudio.Lame" Version="2.1.0" />
-    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
-    <PackageReference Include="Whisper.net" Version="1.9.0" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="NAudio" />
+    <PackageReference Include="NAudio.Lame" />
+    <PackageReference Include="NAudio.Wasapi" />
+    <PackageReference Include="Whisper.net" />
     <!--
       Whisper 実行ランタイムは複数同梱し、起動時に利用可能な最速のものを自動選択する。
       優先順: Cuda (NVIDIA) > Vulkan (Intel/AMD iGPU, その他 GPU) > CPU
     -->
-    <PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.9.0" />
-    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime.Cuda" />
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" />
+    <PackageReference Include="Whisper.net.Runtime" />
   </ItemGroup>
 
   <!-- PublishSingleFile 時: 不要な runtimes (arm64/x86) と .pdb を削除 -->
