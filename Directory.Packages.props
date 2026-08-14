@@ -1,0 +1,57 @@
+<Project>
+
+  <!--
+    Central Package Management (CPM)。
+    NuGet のバージョンはここで一度だけ固定し、.csproj は名前のみで参照する
+    （.csproj に Version 属性を書かない）。
+
+    NuGet は複数の Directory.Packages.props をマージせず「最も近い 1 ファイル」だけを
+    評価するため、テスト専用パッケージも含めて必ずこの 1 ファイルに集約する。
+    根拠: docs/harness/70-build-configuration.md §5
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup Label="UI / MVVM">
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Audio">
+    <PackageVersion Include="NAudio" Version="2.2.1" />
+    <PackageVersion Include="NAudio.Wasapi" Version="2.2.1" />
+    <PackageVersion Include="NAudio.Lame" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Transcription">
+    <!--
+      Whisper 実行ランタイムは複数同梱し、起動時に利用可能な最速のものを自動選択する。
+      優先順: Cuda (NVIDIA) > Vulkan (Intel/AMD iGPU, その他 GPU) > CPU
+      3 つのランタイムは Whisper.net と同一バージョンに揃えること。
+    -->
+    <PackageVersion Include="Whisper.net" Version="1.9.0" />
+    <PackageVersion Include="Whisper.net.Runtime" Version="1.9.0" />
+    <PackageVersion Include="Whisper.net.Runtime.Cuda" Version="1.9.0" />
+    <PackageVersion Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+  </ItemGroup>
+
+  <!--
+    未導入のアナライザー（将来の強化候補 — docs/harness/40-quality-gates.md §6）。
+    既存コードへの影響が大きいため未導入。導入するときは
+      1. タスクを起票する
+      2. 下記を有効化し、Directory.Build.props に PrivateAssets=all 付きの
+         PackageReference を追加する
+      3. 警告数を実測してから、緩和するか修正するかを判断する
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.101" />
+    <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.27.0.140913" />
+  -->
+
+</Project>
