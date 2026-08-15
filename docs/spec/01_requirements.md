@@ -12,6 +12,9 @@
 | REQ-DEV-03 | マイクデバイスを選択すると、録音の有無に関わらず常時モニタリング（キャプチャ）を開始する | `AudioCaptureService.StartMicMonitor`, `MainViewModel.OnSelectedCaptureDeviceChanged` |
 | REQ-DEV-04 | マイクデバイスの選択を解除すると常時モニタリングを停止する | `AudioCaptureService.StopMicMonitor` |
 | REQ-DEV-05 | 前回選択したマイク／スピーカーデバイス ID を設定に保存し、次回起動時に一覧内に存在すれば自動選択する。見つからない場合、マイクは既定デバイスまたは先頭デバイスにフォールバックする | `MainViewModel` コンストラクタ, `AppSettings.LastSelectedDeviceId`, `LastSelectedLoopbackDeviceId` |
+| REQ-DEV-06 | スピーカーデバイスを選択すると、録音の有無に関わらず常時モニタリング（ループバックキャプチャ）を開始する | `AudioCaptureService.StartLoopbackMonitor`, `MainViewModel.OnSelectedRenderDeviceChanged` |
+| REQ-DEV-07 | スピーカーデバイスの選択を解除すると常時モニタリングを停止する | `AudioCaptureService.StopLoopbackMonitor` |
+| REQ-DEV-08 | スピーカーの常時モニタリング開始に失敗した場合（デバイスがループバックキャプチャに対応しない等）、例外を送出せずステータスメッセージで通知し、アプリの動作を継続する | `AudioCaptureService.StartLoopbackMonitor` (戻り値 `false`), `MainViewModel.OnSelectedRenderDeviceChanged` |
 
 ## 2. 録音制御
 
@@ -21,7 +24,7 @@
 | REQ-REC-02 | 録音中に再度開始しようとした場合はエラーとする（多重録音防止） | `AudioCaptureService.StartRecording` |
 | REQ-REC-03 | 録音は WASAPI Shared Mode で行い、他アプリと同一デバイスを排他せずに共有する | `WasapiCapture { ShareMode = AudioClientShareMode.Shared }` |
 | REQ-REC-04 | 録音開始時にファイル名 `yyyyMMdd_HHmmss.mp3` を自動生成し、保存先フォルダに出力する。フォルダが存在しない場合は自動作成する | `AudioCaptureService.StartRecording` |
-| REQ-REC-05 | 録音開始時、マイクの常時モニタバッファをクリアし、録音開始時点以降の音声のみを含める | `AudioCaptureService.StartRecording` (`_micBuffer?.ClearBuffer()`) |
+| REQ-REC-05 | 録音開始時、マイク**およびスピーカー**の常時モニタバッファをクリアし、録音開始時点以降の音声のみを含める | `AudioCaptureService.StartRecording` (`_micBuffer?.ClearBuffer()`, `_loopbackBuffer?.ClearBuffer()`) |
 | REQ-REC-06 | 録音停止時、実際に音声データが一度も書き込まれなかった場合は生成した MP3 ファイルを削除する | `AudioCaptureService.StopRecording` (`_hasWrittenData`) |
 | REQ-REC-07 | 録音の開始・停止に伴い UI に録音状態（停止中／録音中／停止処理中）と経過時間（1 秒更新）を表示する | `MainViewModel.IsRecording/IsStopping/ElapsedTime`, `_clockTimer` |
 | REQ-REC-08 | 録音停止操作はバックグラウンドスレッドで実行し、UI スレッドをブロックしない | `MainViewModel.StopRecordingAsync` (`Task.Run`) |
@@ -38,7 +41,7 @@
 | REQ-MIX-04 | ミキシング結果を `LameMP3FileWriter` で MP3 エンコードしながら専用スレッドで 20ms 周期でファイルに書き込む | `AudioCaptureService.WriterLoop` |
 | REQ-MIX-05 | 書き込みタイミングは `Stopwatch` による高精度タイマーで管理し、遅延が 60ms 以上蓄積した場合はタイミングをリセットしてスキップする | `AudioCaptureService.WriterLoop` |
 | REQ-MIX-06 | 録音停止時、バッファに残っているデータをすべて読み切ってからファイルをクローズする（データ欠落防止） | `AudioCaptureService.WriterLoop` 終端処理 |
-| REQ-MIX-07 | データが到着していないソースは自動的に無音（ゼロ埋め）として扱われる（`BufferedWaveProvider.ReadFully = true`） | `AudioCaptureService.SetupLoopbackCapture`, `StartMicMonitor` |
+| REQ-MIX-07 | データが到着していないソースは自動的に無音（ゼロ埋め）として扱われる（`BufferedWaveProvider.ReadFully = true`） | `AudioCaptureService.StartLoopbackMonitor`, `StartMicMonitor` |
 
 ## 4. ミュート制御
 
@@ -46,6 +49,7 @@
 |---|---|---|
 | REQ-MUTE-01 | マイクミュート ON 時、キャプチャした音声の代わりに無音データをバッファへ書き込む（ソフトミュート） | `AudioCaptureService` (`_isMicMuted` 分岐) |
 | REQ-MUTE-02 | スピーカー（ループバック）ミュート ON 時も同様にソフトミュートを適用し、マイク側には影響しない | `AudioCaptureService` (`_isSpeakerMuted` 分岐) |
+| REQ-MUTE-08 | ソフトミュート用の無音バッファはマイク／ループバックで**共有しない**。両キャプチャは別スレッドのコールバックで動作するため、共有すると再確保と読み取りが競合する | `AudioCaptureService` (`_micSilenceBuffer` / `_loopbackSilenceBuffer`) |
 | REQ-MUTE-03 | マイクデバイスが `AudioEndpointVolume` インターフェースをサポートする場合、アプリのミュート操作を OS 側のハードウェアミュートにも反映する | `AudioCaptureService.TryApplyMuteToEndpoint` |
 | REQ-MUTE-04 | OS 側（ハードウェアキー等）でマイクミュートが変更された場合、`OnVolumeNotification` を受けてアプリ側の状態と UI を同期する | `AudioCaptureService.OnMicVolumeNotification`, `MicMuteChangedExternally` イベント, `MainViewModel.OnMicMuteChangedExternally` |
 | REQ-MUTE-05 | アプリ発の OS への書き込みによって発生する通知の折り返し（無限ループ）を、書き込み中フラグで抑止する | `_suppressMuteNotification` |
@@ -59,7 +63,9 @@
 | REQ-LVL-01 | マイク／スピーカーそれぞれの音声バッファからピークレベル（0.0〜1.0）を算出する（IEEE Float 32bit / PCM 16bit に対応） | `AudioCaptureService.CalculatePeak` |
 | REQ-LVL-02 | ピークレベルを 50ms 間隔で dB 値（-60〜+3dB にクランプ）に変換して UI に反映する | `MainViewModel._meterTimer`, `PeakToDb` |
 | REQ-LVL-03 | ミュート中はピークレベルを 0（＝-60dB 相当）として扱う | `AudioCaptureService` (ミュート時 `_micPeakLevel = 0f` 等) |
-| REQ-LVL-04 | 録音停止時、スピーカー側のレベル表示を即座に -60dB にリセットする | `MainViewModel.StopRecordingAsync` |
+| REQ-LVL-04 | マイク・スピーカーの**いずれのレベルメーターも、録音の有無に関わらず**デバイスが選択されている間は動作する。録音停止によってメーターを停止・リセットしない | `AudioCaptureService.StartMicMonitor` / `StartLoopbackMonitor` |
+| REQ-LVL-05 | ループバックキャプチャは再生中の音声が無いとキャプチャコールバック自体が発生しない（WASAPI の仕様）。最後にデータを受け取ってから一定時間（200ms）が経過した場合、スピーカーのピークレベルを 0 として扱い、メーターが直前の値で固着することを防ぐ | `AudioCaptureService.LoopbackPeakLevel`, `ApplySilenceTimeout` |
+| REQ-LVL-06 | デバイスの選択が解除された場合、対応するピークレベルを 0 にリセットする | `AudioCaptureService.StopMicMonitor` / `StopLoopbackMonitor` |
 
 ## 6. 設定の永続化
 

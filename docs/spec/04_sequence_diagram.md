@@ -28,10 +28,17 @@ sequenceDiagram
 
     VM->>ACS: RefreshDevices()
     ACS-->>VM: CaptureDevices / RenderDevices
-    VM->>VM: 前回選択デバイスを復元（無ければ既定/先頭デバイス）
+    VM->>VM: 前回選択デバイスを復元（マイクは無ければ既定/先頭デバイス）
     VM->>ACS: StartMicMonitor(SelectedCaptureDevice)
     ACS->>ACS: WasapiCapture 開始・AudioEndpointVolume 初期同期
     ACS-->>VM: IsMicMuted（OS側の現在値）
+
+    opt SelectedRenderDevice != null
+        VM->>ACS: StartLoopbackMonitor(SelectedRenderDevice)
+        ACS->>ACS: WasapiLoopbackCapture 開始（録音と独立・常時稼働）
+        ACS-->>VM: false なら StatusMessage に機能低下を表示
+    end
+
     MW->>VM: DataContext = VM
 ```
 
@@ -47,7 +54,7 @@ sequenceDiagram
 
     User->>VM: 「録音開始」クリック (StartRecordingCommand)
     VM->>ACS: StartRecording(mic, loopback, outputFolder)
-    ACS->>ACS: SetupLoopbackCapture(loopback) ※マイクは常時稼働中のため対象外
+    Note over ACS: マイク・スピーカーとも常時モニタ稼働中のため<br/>ここでキャプチャの生成は行わない
     ACS->>ACS: SetupMixer() フォーマット決定・MixingSampleProvider構築
     ACS->>ACS: ファイル名生成 (yyyyMMdd_HHmmss.mp3) / フォルダ作成
     ACS->>Lame: new LameMP3FileWriter(filePath, format, STANDARD)
@@ -58,8 +65,7 @@ sequenceDiagram
         TS->>TS: WhisperTranscription スレッド起動
     end
 
-    ACS->>ACS: _micBuffer.ClearBuffer()
-    ACS->>ACS: _loopbackCapture.StartRecording()
+    ACS->>ACS: _micBuffer.ClearBuffer() / _loopbackBuffer.ClearBuffer()
     ACS->>ACS: AudioMixerWriter スレッド起動 (WriterLoop)
     ACS-->>VM: 開始時刻 (DateTime)
     VM->>VM: IsRecording = true / ElapsedTime 更新開始 (_clockTimer)
@@ -112,7 +118,7 @@ sequenceDiagram
     participant TS as TranscriptionService
 
     User->>VM: 「停止」クリック (StopRecordingCommand)
-    VM->>VM: IsStopping = true / LoopbackLevelDb = -60 / _clockTimer.Stop()
+    VM->>VM: IsStopping = true / _clockTimer.Stop()
     VM->>ACS: StopRecording() ※ Task.Run 上で実行
 
     ACS->>ACS: _isWriting = false
@@ -122,7 +128,7 @@ sequenceDiagram
     TS->>TS: スレッド終了待機 (最大30秒、超過時はキャンセルして5秒待機)
     TS-->>ACS: 完了
 
-    ACS->>ACS: CleanupLoopback() (WasapiLoopbackCapture 破棄)
+    Note over ACS: マイク・スピーカーの常時モニタは停止しない<br/>（レベルメーターは録音停止後も動き続ける）
     ACS->>ACS: Mp3Writer.Dispose()
     alt データが一度も書き込まれなかった
         ACS->>ACS: MP3ファイルを削除 / CurrentSession = null

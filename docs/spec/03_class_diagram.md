@@ -90,12 +90,15 @@ classDiagram
         +GetRenderDevices() IReadOnlyList~AudioDevice~
         +StartMicMonitor(AudioDevice)
         +StopMicMonitor()
+        +StartLoopbackMonitor(AudioDevice) bool
+        +StopLoopbackMonitor()
         +SetTranscriptionService(TranscriptionService)
         +StartRecording(AudioDevice, AudioDevice, string) DateTime
         +StopRecording()
         +Dispose()
         +BytesToFloats(byte[], int, WaveFormat) float[]
         +CalculatePeak(byte[], int, WaveFormat) float
+        +ApplySilenceTimeout(float, long, long, int) float
         event RecordingError
         event MicMuteChangedExternally
     }

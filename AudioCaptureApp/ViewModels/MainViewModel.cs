@@ -107,6 +107,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
     private AudioDevice? _selectedRenderDevice;
 
+    partial void OnSelectedRenderDeviceChanged(AudioDevice? value)
+    {
+        // マイクと同じく、録音の有無に関わらずデバイス選択でモニタリングを開始する
+        // （REQ-DEV-06 / REQ-DEV-07）
+        if (value != null)
+        {
+            if (!_audioCaptureService.StartLoopbackMonitor(value))
+            {
+                // REQ-DEV-08: 失敗しても選択操作自体は成功させ、機能低下として通知する
+                StatusMessage = $"スピーカーの音声を取得できません: {value.FriendlyName}";
+            }
+        }
+        else
+        {
+            _audioCaptureService.StopLoopbackMonitor();
+        }
+    }
+
     // --- 共通プロパティ ---
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
@@ -298,7 +316,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _clockTimer.Stop();
         IsStopping = true;
-        LoopbackLevelDb = -60.0;
+        // REQ-LVL-04: スピーカーも常時モニタのため、ここでレベルをリセットしない
         StatusMessage = "停止処理中...";
 
         var transcriptionEnabled = TranscriptionEnabled;

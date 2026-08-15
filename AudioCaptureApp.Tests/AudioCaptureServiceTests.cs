@@ -130,4 +130,63 @@ public class AudioCaptureServiceTests
 
         Assert.True(peak > 0.999f && peak <= 1.0f);
     }
+
+    // --- ApplySilenceTimeout (REQ-LVL-05) ---
+    //
+    // WASAPI のループバックキャプチャは再生音が無いとコールバックが発火しないため、
+    // 最後のピーク値がメーターに残り続ける。一定時間データが来なければ 0 とみなす。
+
+    [Fact]
+    public void ApplySilenceTimeout_WithinTimeout_ReturnsPeak()
+    {
+        var result = AudioCaptureService.ApplySilenceTimeout(
+            peak: 0.7f, lastDataTicks: 1_000, nowTicks: 1_150, timeoutMs: 200);
+
+        Assert.Equal(0.7f, result);
+    }
+
+    [Fact]
+    public void ApplySilenceTimeout_ExactlyAtTimeout_ReturnsPeak()
+    {
+        // 経過 == しきい値 はまだ「無音」と判定しない（超過して初めて 0 にする）
+        var result = AudioCaptureService.ApplySilenceTimeout(
+            peak: 0.7f, lastDataTicks: 1_000, nowTicks: 1_200, timeoutMs: 200);
+
+        Assert.Equal(0.7f, result);
+    }
+
+    [Fact]
+    public void ApplySilenceTimeout_BeyondTimeout_ReturnsZero()
+    {
+        var result = AudioCaptureService.ApplySilenceTimeout(
+            peak: 0.7f, lastDataTicks: 1_000, nowTicks: 1_201, timeoutMs: 200);
+
+        Assert.Equal(0.0f, result);
+    }
+
+    [Fact]
+    public void ApplySilenceTimeout_NeverReceivedData_ReturnsZero()
+    {
+        // モニター開始直後 (_loopbackLastDataTicks == 0) でまだ 1 度もデータが来ていない状態
+        var result = AudioCaptureService.ApplySilenceTimeout(
+            peak: 0.7f, lastDataTicks: 0, nowTicks: 5_000_000, timeoutMs: 200);
+
+        Assert.Equal(0.0f, result);
+    }
+
+    [Fact]
+    public void ApplySilenceTimeout_ZeroPeakStaysZero()
+    {
+        var result = AudioCaptureService.ApplySilenceTimeout(
+            peak: 0.0f, lastDataTicks: 1_000, nowTicks: 1_050, timeoutMs: 200);
+
+        Assert.Equal(0.0f, result);
+    }
+
+    [Fact]
+    public void ApplySilenceTimeout_UsesConfiguredTimeoutConstant()
+    {
+        // 定数が仕様（REQ-LVL-05 の 200ms）から動いていないことを固定する
+        Assert.Equal(200, AudioCaptureService.LoopbackSilenceTimeoutMs);
+    }
 }

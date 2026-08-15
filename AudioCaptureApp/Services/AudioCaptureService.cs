@@ -20,7 +20,7 @@ public class AudioCaptureService : IDisposable
     private WasapiCapture? _micCapture;
     private BufferedWaveProvider? _micBuffer;
 
-    // ループバックキャプチャ（録音時のみ）
+    // ループバック常時キャプチャ（マイクと同じく録音と独立したライフサイクル）
     private MMDevice? _loopbackDevice;
     private WasapiLoopbackCapture? _loopbackCapture;
     private BufferedWaveProvider? _loopbackBuffer;
@@ -40,7 +40,10 @@ public class AudioCaptureService : IDisposable
     // ミュート
     private volatile bool _isMicMuted;
     private volatile bool _isSpeakerMuted;
-    private byte[]? _silenceBuffer;
+    // REQ-MUTE-08: マイクとループバックは別スレッドのコールバックで動作するため、
+    //              無音バッファを共有すると再確保と読み取りが競合する。必ず分ける。
+    private byte[]? _micSilenceBuffer;
+    private byte[]? _loopbackSilenceBuffer;
 
     // ハードウェアミュート同期
     private AudioEndpointVolume? _micEndpointVolume;
@@ -51,6 +54,17 @@ public class AudioCaptureService : IDisposable
     // ピークレベル測定
     private volatile float _micPeakLevel;
     private volatile float _loopbackPeakLevel;
+
+    /// <summary>
+    /// ループバックのピークを 0 とみなすまでの無音許容時間 (ms)。
+    /// WASAPI のループバックキャプチャは再生エンドポイントがアイドルのとき
+    /// パケットを生成せず <c>DataAvailable</c> が発火しないため、これが無いと
+    /// メーターが最後の値で固着する（REQ-LVL-05）。
+    /// </summary>
+    internal const int LoopbackSilenceTimeoutMs = 200;
+
+    /// <summary>最後にループバックのデータを受け取った時刻 (<see cref="Environment.TickCount64"/>)。</summary>
+    private long _loopbackLastDataTicks;
 
     public bool IsRecording => _isWriting;
     public RecordingSession? CurrentSession => _currentSession;
@@ -93,7 +107,23 @@ public class AudioCaptureService : IDisposable
     }
 
     public float MicPeakLevel => _micPeakLevel;
-    public float LoopbackPeakLevel => _loopbackPeakLevel;
+
+    /// <summary>
+    /// スピーカー（ループバック）のピークレベル。無音でコールバックが途絶えた場合は 0 を返す
+    /// （REQ-LVL-05）。
+    /// </summary>
+    public float LoopbackPeakLevel => ApplySilenceTimeout(
+        _loopbackPeakLevel,
+        Interlocked.Read(ref _loopbackLastDataTicks),
+        Environment.TickCount64,
+        LoopbackSilenceTimeoutMs);
+
+    /// <summary>
+    /// 最後にデータを受け取ってから <paramref name="timeoutMs"/> を超えて経過していれば 0 を、
+    /// そうでなければ <paramref name="peak"/> をそのまま返す。
+    /// </summary>
+    internal static float ApplySilenceTimeout(float peak, long lastDataTicks, long nowTicks, int timeoutMs)
+        => nowTicks - lastDataTicks > timeoutMs ? 0f : peak;
 
     public event Action<string>? RecordingError;
 
@@ -181,9 +211,9 @@ public class AudioCaptureService : IDisposable
                 if (_isMicMuted)
                 {
                     // ミュート時はバッファに無音を書き込む
-                    if (_silenceBuffer == null || _silenceBuffer.Length < e.BytesRecorded)
-                        _silenceBuffer = new byte[e.BytesRecorded];
-                    _micBuffer.AddSamples(_silenceBuffer, 0, e.BytesRecorded);
+                    if (_micSilenceBuffer == null || _micSilenceBuffer.Length < e.BytesRecorded)
+                        _micSilenceBuffer = new byte[e.BytesRecorded];
+                    _micBuffer.AddSamples(_micSilenceBuffer, 0, e.BytesRecorded);
                     _micPeakLevel = 0f;
                 }
                 else
@@ -227,7 +257,7 @@ public class AudioCaptureService : IDisposable
             _micCapture = null;
         }
         _micBuffer = null;
-        _silenceBuffer = null;
+        _micSilenceBuffer = null;
         _micDevice?.Dispose();
         _micDevice = null;
         _micPeakLevel = 0f;
@@ -258,13 +288,11 @@ public class AudioCaptureService : IDisposable
 
         try
         {
-            // マイクは既に常時キャプチャ中。ループバックのみ新規作成。
-            SetupLoopbackCapture(loopbackDevice);
+            // マイク・ループバックとも既に常時キャプチャ中。ここではミキサーだけを組む。
             SetupMixer();
         }
         catch (Exception ex)
         {
-            CleanupLoopback();
             throw new InvalidOperationException(
                 $"録音の開始に失敗しました: {ex.Message}", ex);
         }
@@ -288,7 +316,6 @@ public class AudioCaptureService : IDisposable
         }
         catch (Exception ex)
         {
-            CleanupLoopback();
             _currentSession = null;
             throw new InvalidOperationException($"MP3ファイルの作成に失敗しました: {ex.Message}", ex);
         }
@@ -307,10 +334,10 @@ public class AudioCaptureService : IDisposable
             _transcriptionService.StartSession(filePath, now);
         }
 
-        // マイクバッファをクリアして録音開始時点からの音声のみ使う
+        // REQ-REC-05: 常時モニタのバッファには録音開始前の音声が溜まっている。
+        //             両方クリアして録音開始時点以降の音声のみ使う。
         _micBuffer?.ClearBuffer();
-
-        _loopbackCapture?.StartRecording();
+        _loopbackBuffer?.ClearBuffer();
 
         _isWriting = true;
         _writerThread = new Thread(WriterLoop) { IsBackground = true, Name = "AudioMixerWriter" };
@@ -319,11 +346,20 @@ public class AudioCaptureService : IDisposable
         return now;
     }
 
-    private void SetupLoopbackCapture(AudioDevice? loopbackDevice)
+    // --- スピーカー（ループバック）常時モニター ---
+
+    /// <summary>
+    /// スピーカーの常時ループバックキャプチャを開始する（REQ-DEV-06）。
+    /// 失敗した場合は内部状態を後始末して <c>false</c> を返す（REQ-DEV-08）。
+    /// デバイス選択の途中で例外を投げるとアプリが落ちるため、ここで throw しない。
+    /// </summary>
+    public bool StartLoopbackMonitor(AudioDevice device)
     {
-        if (loopbackDevice != null)
+        StopLoopbackMonitor();
+
+        try
         {
-            _loopbackDevice = _enumerator.GetDevice(loopbackDevice.DeviceId);
+            _loopbackDevice = _enumerator.GetDevice(device.DeviceId);
             _loopbackCapture = new WasapiLoopbackCapture(_loopbackDevice);
             _loopbackBuffer = new BufferedWaveProvider(_loopbackCapture.WaveFormat)
             {
@@ -333,32 +369,68 @@ public class AudioCaptureService : IDisposable
             };
             _loopbackCapture.DataAvailable += (_, e) =>
             {
-                if (e.BytesRecorded > 0)
+                if (e.BytesRecorded <= 0)
                 {
-                    if (_isSpeakerMuted)
-                    {
-                        // ミュート時はバッファに無音を書き込む
-                        if (_silenceBuffer == null || _silenceBuffer.Length < e.BytesRecorded)
-                            _silenceBuffer = new byte[e.BytesRecorded];
-                        _loopbackBuffer.AddSamples(_silenceBuffer, 0, e.BytesRecorded);
-                        _loopbackPeakLevel = 0f;
-                    }
-                    else
-                    {
-                        _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-                        _loopbackPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+                    return;
+                }
 
-                        // 文字起こしサービスにスピーカー音声を渡す
-                        if (_isWriting && _transcriptionService != null)
-                        {
-                            var floats = BytesToFloats(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
-                            if (floats != null)
-                                _transcriptionService.AddSamples(AudioSourceType.Speaker, floats, floats.Length);
-                        }
+                // 無音タイムアウト判定の基準時刻（REQ-LVL-05）
+                Interlocked.Exchange(ref _loopbackLastDataTicks, Environment.TickCount64);
+
+                if (_isSpeakerMuted)
+                {
+                    // ミュート時はバッファに無音を書き込む
+                    if (_loopbackSilenceBuffer == null || _loopbackSilenceBuffer.Length < e.BytesRecorded)
+                        _loopbackSilenceBuffer = new byte[e.BytesRecorded];
+                    _loopbackBuffer.AddSamples(_loopbackSilenceBuffer, 0, e.BytesRecorded);
+                    _loopbackPeakLevel = 0f;
+                }
+                else
+                {
+                    _loopbackBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                    _loopbackPeakLevel = CalculatePeak(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+
+                    // 録音中のみ文字起こしサービスにスピーカー音声を渡す
+                    if (_isWriting && _transcriptionService != null)
+                    {
+                        var floats = BytesToFloats(e.Buffer, e.BytesRecorded, _loopbackCapture.WaveFormat);
+                        if (floats != null)
+                            _transcriptionService.AddSamples(AudioSourceType.Speaker, floats, floats.Length);
                     }
                 }
             };
+            _loopbackCapture.StartRecording();
+            return true;
         }
+        // CA1031: ループバック非対応デバイスやドライバー都合で COM 由来の例外（E_HANDLE 等）が
+        //         出るが型を列挙できない。デバイス選択操作を失敗させずに機能低下として扱う。
+#pragma warning disable CA1031
+        catch
+        {
+            StopLoopbackMonitor();
+            return false;
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>スピーカーの常時ループバックキャプチャを停止する（REQ-DEV-07）。</summary>
+    public void StopLoopbackMonitor()
+    {
+        if (_loopbackCapture != null)
+        {
+            // CA1031: 停止に失敗しても Dispose まで進める必要がある（NAudio 内部の例外型を列挙できない）
+#pragma warning disable CA1031
+            try { _loopbackCapture.StopRecording(); } catch { }
+#pragma warning restore CA1031
+            _loopbackCapture.Dispose();
+            _loopbackCapture = null;
+        }
+        _loopbackBuffer = null;
+        _loopbackSilenceBuffer = null;
+        _loopbackDevice?.Dispose();
+        _loopbackDevice = null;
+        _loopbackPeakLevel = 0f;
+        Interlocked.Exchange(ref _loopbackLastDataTicks, 0);
     }
 
     private void SetupMixer()
@@ -412,7 +484,10 @@ public class AudioCaptureService : IDisposable
         var sampleBuf = new float[chunkSamples];
         var byteBuf = new byte[chunkSamples * 4];
 
-        // ループバックの初回コールバックを待機
+        // ループバックの初回コールバックを待機。
+        // 常時モニタ化により通常は録音開始前からデータが流れているが、
+        // 「スピーカーを選択した直後に録音開始」した場合はまだ初回コールバックが
+        // 来ていないことがあるため、この待機は残す。
         if (_loopbackCapture != null)
             Thread.Sleep(200);
 
@@ -541,14 +616,12 @@ public class AudioCaptureService : IDisposable
         // 文字起こしセッション停止（残りバッファを処理してから終了）
         _transcriptionService?.StopSession();
 
-        CleanupLoopback();
-
         _mp3Writer?.Dispose();
         _mp3Writer = null;
         _mixerSource = null;
 
-        // マイクは常時キャプチャのため停止しない。ループバックのピークのみリセット。
-        _loopbackPeakLevel = 0f;
+        // REQ-LVL-04: マイク・ループバックとも常時キャプチャのため停止もリセットもしない。
+        //             メーターは録音停止後もそのまま動き続ける。
 
         if (_currentSession != null)
         {
@@ -560,22 +633,6 @@ public class AudioCaptureService : IDisposable
                 _currentSession = null;
             }
         }
-    }
-
-    private void CleanupLoopback()
-    {
-        if (_loopbackCapture != null)
-        {
-            // CA1031: 停止に失敗しても Dispose まで進める必要がある（NAudio 内部の例外型を列挙できない）
-#pragma warning disable CA1031
-            try { _loopbackCapture.StopRecording(); } catch { }
-#pragma warning restore CA1031
-            _loopbackCapture.Dispose();
-            _loopbackCapture = null;
-        }
-        _loopbackBuffer = null;
-        _loopbackDevice?.Dispose();
-        _loopbackDevice = null;
     }
 
     public void Dispose()
@@ -594,6 +651,7 @@ public class AudioCaptureService : IDisposable
         }
         StopRecording();
         StopMicMonitor();
+        StopLoopbackMonitor();
         _enumerator.Dispose();
     }
 }
