@@ -46,7 +46,7 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 ---
 
 ## 技術スタック
-- 言語: C# 12 / .NET 8（`net8.0-windows`）
+- 言語: C# 14 / .NET 10（`net10.0-windows`）
 - UI: WPF + CommunityToolkit.Mvvm（MVVM パターン）
 - 録音: NAudio + NAudio.Wasapi（WASAPI Shared Mode）
 - MP3: NAudio.Lame（`LameMP3FileWriter`）

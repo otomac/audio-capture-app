@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| 言語 | C# 12 / .NET 8 (`net8.0-windows`) |
+| 言語 | C# 14 / .NET 10 (`net10.0-windows`) |
 | UI | WPF + CommunityToolkit.Mvvm 8.3.2（`[ObservableProperty]` / `[RelayCommand]` ソースジェネレータ） |
 | 録音 | NAudio 2.2.1 + NAudio.Wasapi 2.2.1（WASAPI Shared Mode） |
 | MP3 エンコード | NAudio.Lame 2.1.0（`LameMP3FileWriter`） |

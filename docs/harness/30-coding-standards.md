@@ -1,6 +1,7 @@
-# 30 — コーディング標準（C# 12 / .NET 8）
+# 30 — コーディング標準（C# 14 / .NET 10）
 
-**ベースライン:** C# 12 / .NET 8（`net8.0-windows`）、WPF。
+**ベースライン:** C# 14 / .NET 10（`net10.0-windows`）、WPF。
+`LangVersion` は `latest` のため、言語バージョンは SDK に追従する。
 
 多くは機械強制される（[.editorconfig](../../.editorconfig) と
 [Directory.Build.props](../../Directory.Build.props)）。強制できないものは

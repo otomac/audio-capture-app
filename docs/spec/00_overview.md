@@ -6,7 +6,7 @@ Windows 向けのスタンドアロン音声キャプチャアプリケーショ
 マイク入力とスピーカー出力（ループバック）を WASAPI 経由でキャプチャし、1 つの MP3 ファイルにミキシングして保存する。
 録音と並行して、または録音済み／任意の音声ファイルに対して、Whisper（Whisper.net）によるローカル日本語文字起こしを行うことができる。
 
-- 実行環境: Windows 10 以降 / .NET 8 (net8.0-windows) / WPF
+- 実行環境: Windows 10 以降 / .NET 10 (net10.0-windows) / WPF
 - エントリーポイント: `AudioCaptureApp/App.xaml.cs` → `MainWindow`
 - 構成: `Models` / `ViewModels` / `Services` の 3 層構成（[CLAUDE.md](../../CLAUDE.md) のアーキテクチャ方針に準拠）
 

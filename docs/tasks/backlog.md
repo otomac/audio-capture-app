@@ -16,10 +16,11 @@
 
 ## 未着手
 
-（なし）
+- [ ] **T109** `README.md` の「ビルド」節が存在しない `AudioCaptureApp.sln` を参照している（正: `AudioCaptureApp.slnx`）。T108 の作業中に発見
 
 ## 完了
 
+- [x] **T108** 実行基盤を .NET 8 から .NET 10 へ引き上げる（アプリ／テスト／CI） (2026-08-15) → [詳細](./T108-net10-upgrade.md)
 - [x] **T107** `SettingsService` のフィールド初期化をコンストラクターに集約（宣言時とコンストラクターへの分散を解消） (2026-08-15)
 
 - [x] **T106** `.claude/settings.local.json` を git 管理から外す (2026-08-14) → [詳細](./T106-untrack-local-settings.md)

@@ -10,7 +10,7 @@
   -->
 
   <PropertyGroup>
-    <!-- 言語／ランタイムの基準。TargetFramework は各 .csproj が宣言する（net8.0-windows）。 -->
+    <!-- 言語／ランタイムの基準。TargetFramework は各 .csproj が宣言する（net10.0-windows）。 -->
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
