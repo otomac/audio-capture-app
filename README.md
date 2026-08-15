@@ -21,7 +21,7 @@ Windows向け音声キャプチャアプリ。WASAPI Shared Mode で入力デバ
 ## 動作要件
 
 - Windows 10 以降 (x64)
-- .NET 8.0 Runtime
+- .NET 10.0 Runtime（Release 版の zip は self-contained のため、別途インストールは不要）
 
 ## インストール
 
