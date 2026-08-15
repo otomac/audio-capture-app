@@ -10,11 +10,11 @@ public class AppSettingsTests
     {
         var settings = new AppSettings();
 
-        Assert.Contains("AudioCapture", settings.OutputFolder);
+        Assert.Contains("AudioCapture", settings.OutputFolder, StringComparison.Ordinal);
         Assert.Null(settings.LastSelectedDeviceId);
         Assert.Null(settings.LastSelectedLoopbackDeviceId);
         Assert.False(settings.TranscriptionEnabled);
-        Assert.Contains("ggml-small.bin", settings.WhisperModelPath);
+        Assert.Contains("ggml-small.bin", settings.WhisperModelPath, StringComparison.Ordinal);
         Assert.True(settings.UseGpuForTranscription);
     }
 

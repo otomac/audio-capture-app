@@ -6,30 +6,42 @@ namespace AudioCaptureApp.Services;
 
 public class SettingsService
 {
-    private static readonly string SettingsFolder =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AudioCaptureApp");
+    private readonly string _settingsFolder;
+    private readonly string _settingsFilePath;
 
-    private static readonly string SettingsFilePath =
-        Path.Combine(SettingsFolder, "settings.json");
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    // 他に依存しない自己完結の値のみ宣言時に初期化する。
+    // パスは互いに派生関係があるためコンストラクターにまとめる。
+    private readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true
     };
 
+    public SettingsService()
+    {
+        _settingsFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AudioCaptureApp");
+        _settingsFilePath = Path.Combine(_settingsFolder, "settings.json");
+    }
+
     public AppSettings Load()
     {
-        if (!File.Exists(SettingsFilePath))
+        if (!File.Exists(_settingsFilePath))
         {
             return new AppSettings();
         }
 
         try
         {
-            var json = File.ReadAllText(SettingsFilePath);
-            return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            var json = File.ReadAllText(_settingsFilePath);
+            return JsonSerializer.Deserialize<AppSettings>(json, _jsonOptions) ?? new AppSettings();
         }
-        catch (Exception)
+        // 読み込みに失敗した設定ファイルは既定値で置き換える（起動を妨げない）。
+        // 触れるのは File.ReadAllText と JsonSerializer だけなので、型を列挙できる。
+        catch (Exception ex) when (
+            ex is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or JsonException)
         {
             return new AppSettings();
         }
@@ -37,8 +49,8 @@ public class SettingsService
 
     public void Save(AppSettings settings)
     {
-        Directory.CreateDirectory(SettingsFolder);
-        var json = JsonSerializer.Serialize(settings, JsonOptions);
-        File.WriteAllText(SettingsFilePath, json);
+        Directory.CreateDirectory(_settingsFolder);
+        var json = JsonSerializer.Serialize(settings, _jsonOptions);
+        File.WriteAllText(_settingsFilePath, json);
     }
 }

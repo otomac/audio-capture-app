@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using AudioCaptureApp.Models;
 using NAudio.CoreAudioApi;
@@ -74,7 +75,11 @@ public class AudioCaptureService : IDisposable
             _suppressMuteNotification = true;
             vol.Mute = mute;
         }
-        catch { /* デバイス権限不足等は黙殺。ソフトミュートで動作継続 */ }
+        // CA1031: AudioEndpointVolume は COM 経由で、権限不足等に対して投げる型を列挙できない。
+        //         OS 側ミュートの反映に失敗してもソフトミュートで動作を継続する。
+#pragma warning disable CA1031
+        catch { }
+#pragma warning restore CA1031
         finally
         {
             _suppressMuteNotification = false;
@@ -112,7 +117,11 @@ public class AudioCaptureService : IDisposable
             using var defaultDevice = _enumerator.GetDefaultAudioEndpoint(dataFlow, role);
             defaultId = defaultDevice.ID;
         }
+        // CA1031: 既定デバイスが無い状態は正常系であり、COM 由来の例外型を列挙できない。
+        //         既定が取れなければ IsDefault が全て false になるだけで列挙は続行する。
+#pragma warning disable CA1031
         catch { }
+#pragma warning restore CA1031
 
         var devices = new List<AudioDevice>();
         foreach (var device in _enumerator.EnumerateAudioEndPoints(dataFlow, DeviceState.Active))
@@ -147,12 +156,16 @@ public class AudioCaptureService : IDisposable
             _micVolumeHandler = OnMicVolumeNotification;
             _micEndpointVolume.OnVolumeNotification += _micVolumeHandler;
         }
+        // CA1031: AudioEndpointVolume を取得できないデバイスがあり、COM 由来の例外型を
+        //         列挙できない。取得できなければソフトミュートのみで動作を継続する。
+#pragma warning disable CA1031
         catch
         {
             // AudioEndpointVolume が取れないデバイスはソフトミュートのみで動作
             _micEndpointVolume = null;
             _micVolumeHandler = null;
         }
+#pragma warning restore CA1031
 
         _micCapture = new WasapiCapture(_micDevice) { ShareMode = AudioClientShareMode.Shared };
         _micBuffer = new BufferedWaveProvider(_micCapture.WaveFormat)
@@ -196,14 +209,20 @@ public class AudioCaptureService : IDisposable
         // 先にイベント購読を外す（コールバック競合の最小化）
         if (_micEndpointVolume != null && _micVolumeHandler != null)
         {
+            // CA1031: 停止処理は何が起きても後続の破棄まで進める必要がある（COM 由来のため型を列挙できない）
+#pragma warning disable CA1031
             try { _micEndpointVolume.OnVolumeNotification -= _micVolumeHandler; } catch { }
+#pragma warning restore CA1031
         }
         _micVolumeHandler = null;
         _micEndpointVolume = null; // MMDevice の Dispose で解放される
 
         if (_micCapture != null)
         {
+            // CA1031: 停止に失敗しても Dispose まで進める必要がある（NAudio 内部の例外型を列挙できない）
+#pragma warning disable CA1031
             try { _micCapture.StopRecording(); } catch { }
+#pragma warning restore CA1031
             _micCapture.Dispose();
             _micCapture = null;
         }
@@ -251,7 +270,8 @@ public class AudioCaptureService : IDisposable
         }
 
         var now = DateTime.Now;
-        var fileName = now.ToString("yyyyMMdd_HHmmss") + ".mp3";
+        // ファイル名は機械可読な文字列のためカルチャー非依存にする
+        var fileName = now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture) + ".mp3";
         Directory.CreateDirectory(outputFolder);
         var filePath = Path.Combine(outputFolder, fileName);
 
@@ -445,10 +465,14 @@ public class AudioCaptureService : IDisposable
                 }
             } while (remaining > 0 && (_micBuffer?.BufferedBytes ?? 0) + (_loopbackBuffer?.BufferedBytes ?? 0) > 0);
         }
+        // CA1031: ワーカースレッド境界。例外を漏らすとプロセスごと落ちて録音データを失うため、
+        //         全例外を RecordingError イベントに変換して UI へ通知する。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             RecordingError?.Invoke($"録音エラー: {ex.Message}");
         }
+#pragma warning restore CA1031
     }
 
     internal static float[]? BytesToFloats(byte[] buffer, int bytesRecorded, WaveFormat format)
@@ -542,7 +566,10 @@ public class AudioCaptureService : IDisposable
     {
         if (_loopbackCapture != null)
         {
+            // CA1031: 停止に失敗しても Dispose まで進める必要がある（NAudio 内部の例外型を列挙できない）
+#pragma warning disable CA1031
             try { _loopbackCapture.StopRecording(); } catch { }
+#pragma warning restore CA1031
             _loopbackCapture.Dispose();
             _loopbackCapture = null;
         }
@@ -553,6 +580,18 @@ public class AudioCaptureService : IDisposable
 
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    // アンマネージドリソースを直接は保持しない（NAudio 側が保持する）ため
+    // ファイナライザーは持たず、disposing == false のときは何もしない。
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            return;
+        }
         StopRecording();
         StopMicMonitor();
         _enumerator.Dispose();

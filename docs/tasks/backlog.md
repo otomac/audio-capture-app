@@ -16,17 +16,16 @@
 
 ## 未着手
 
-- [ ] **T101** Dispose パターンの是正（CA1063 / CA1816 / CA1001 / CA2213 / CA2000）
-- [ ] **T102** カルチャー・文字列比較の明示（CA1305 / CA1307）
-- [ ] **T103** `catch (Exception)` の局所化と理由付与（CA1031）
-- [ ] **T104** 非同期の是正 — 同期呼び出しの解消と `CancellationToken` の伝播（CA1849 / CA2016）
-- [ ] **T105** 軽微な静的解析指摘の解消（CA1822 / CA1825）
-- [ ] **T106** `.claude/settings.local.json` が git 管理下にある問題の是正（本来は個人設定なので `.gitignore` へ）
-
-> T101〜T105 は、ハーネス導入時に一時緩和した既存コードの技術的負債である。
-> 詳細と対象ルールは [40-quality-gates.md §5](../harness/40-quality-gates.md#5-技術的負債期限付き緩和)。
-> 解消したら **`.editorconfig` の負債セクションから該当行を削除** すること。
+（なし）
 
 ## 完了
 
+- [x] **T107** `SettingsService` のフィールド初期化をコンストラクターに集約（宣言時とコンストラクターへの分散を解消） (2026-08-15)
+
+- [x] **T106** `.claude/settings.local.json` を git 管理から外す (2026-08-14) → [詳細](./T106-untrack-local-settings.md)
+- [x] **T105** 軽微な静的解析指摘の解消（CA1822 / CA1825） (2026-08-14) → [詳細](./T105-minor-analyzer-findings.md)
+- [x] **T104** 非同期の是正 — 同期呼び出しの解消と `CancellationToken` の伝播（CA1849 / CA2016） (2026-08-14) → [詳細](./T104-async-discipline.md)
+- [x] **T103** `catch (Exception)` の局所化と理由付与（CA1031） (2026-08-14) → [詳細](./T103-narrow-exception-handling.md)
+- [x] **T102** カルチャー・文字列比較の明示（CA1305 / CA1307） (2026-08-14) → [詳細](./T102-culture-and-string-comparison.md)
+- [x] **T101** Dispose パターンの是正（CA1063 / CA1816 / CA1001 / CA2213 / CA2000） (2026-08-14) → [詳細](./T101-dispose-pattern-cleanup.md)
 - [x] **T100** 開発ハーネスの整備（`docs/harness/` の規範・強制フック・ビルドゲート） (2026-08-14) → [詳細](./T100-dev-harness.md)

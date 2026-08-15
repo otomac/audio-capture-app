@@ -125,22 +125,23 @@ dotnet_diagnostic.CA1234.severity = suggestion
 
 ## 5. 技術的負債（期限付き緩和）
 
+**現在、期限付き緩和は 1 件も無い。** `.editorconfig` の技術的負債セクションは削除済みである。
+
 ハーネス導入時点（2026-08-14）で、既存コードに `AnalysisMode=All` 由来の警告が
-**実効約 85 件** あった。ハーネス構築とソース修正を混ぜないため、以下は
-**一時的に `suggestion` へ落とし、解消タスクを起票** している。
+**実効約 85 件** あった。ハーネス構築とソース修正を混ぜないため、これらは一時的に
+`suggestion` へ落とし、解消タスクを起票していた。**T101〜T105 ですべて解消済み**（2026-08-14）。
 
-> **新規コードでは最初から守ること。** 緩和は既存コードの猶予であって、免罪符ではない。
-
-| ルール | 内容 | 解消タスク |
+| 解消タスク | ルール | 対処の要点 |
 |---|---|---|
-| `CA1063` / `CA1816` / `CA1001` / `CA2213` / `CA2000` | `Dispose` パターンの実装漏れ、破棄されないフィールド／ローカル | `T101` |
-| `CA1305` / `CA1307` | カルチャー／`StringComparison` の未指定 | `T102` |
-| `CA1031` | `catch (Exception)` の広すぎる捕捉 | `T103` |
-| `CA1849` / `CA2016` | 非同期メソッド内での同期呼び出し、`CancellationToken` の非伝播 | `T104` |
-| `CA1822` / `CA1825` | `static` にできるメンバー、空配列の再確保 | `T105` |
+| [T101](../tasks/T101-dispose-pattern-cleanup.md) | `CA1063` / `CA1816` / `CA1001` / `CA2213` / `CA2000` | `Dispose(bool)` パターンの実装、`MainWindow` の `IDisposable` 化、`using` 宣言化 |
+| [T102](../tasks/T102-culture-and-string-comparison.md) | `CA1305` / `CA1307` | ファイル名は `InvariantCulture`、画面表示は `CurrentCulture`、比較は `Ordinal` |
+| [T103](../tasks/T103-narrow-exception-handling.md) | `CA1031` | 絞れる 2 箇所は捕捉型を限定、残り 11 箇所は理由付きの局所 `#pragma` |
+| [T104](../tasks/T104-async-discipline.md) | `CA1849` / `CA2016` | `await using` 化と `CancellationToken` の伝播 |
+| [T105](../tasks/T105-minor-analyzer-findings.md) | `CA1822` / `CA1825` | 型の状態をインスタンス化、`private static` 化、コレクション式 |
 
-進捗は [docs/tasks/backlog.md](../tasks/backlog.md) で管理する。
-解消したルールは **`.editorconfig` の負債セクションから行ごと削除** すること（緩和を残さない）。
+**今後、新たに期限付き緩和を入れるときは** §3-2 の書式で `.editorconfig` に理由と日付を書き、
+同時に [docs/tasks/backlog.md](../tasks/backlog.md) へ解消タスクを起票し、本節に表を復活させること。
+解消したルールは **`.editorconfig` から行ごと削除** する（緩和を残さない）。
 
 ### 恒久的な緩和（負債ではない）
 

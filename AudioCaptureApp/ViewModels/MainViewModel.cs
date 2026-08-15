@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AudioCaptureApp.Models;
@@ -33,7 +34,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _clockTimer.Tick += (_, _) =>
         {
             var elapsed = DateTime.Now - _recordingStartTime;
-            ElapsedTime = elapsed.ToString(@"hh\:mm\:ss");
+            ElapsedTime = elapsed.ToString(@"hh\:mm\:ss", CultureInfo.CurrentCulture);
         };
 
         _audioCaptureService.RecordingError += OnRecordingError;
@@ -484,11 +485,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _audioCaptureService.SetTranscriptionService(null);
             }
         }
+        // CA1031: async void（例外を漏らすとプロセスごと落ちる）かつ Whisper のネイティブ
+        //         読み込み境界のため、全例外を画面のステータスに変換する。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             TranscriptionStatus = $"モデル読み込みエラー: {ex.Message}";
             _audioCaptureService.SetTranscriptionService(null);
         }
+#pragma warning restore CA1031
         finally
         {
             _isLoadingModel = false;
@@ -574,11 +579,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             FileTranscriptionStatus = "中止しました";
             StatusMessage = "文字起こしを中止しました";
         }
+        // CA1031: UI コマンド境界。ファイル文字起こしの任意の失敗を画面のステータスに変換し、
+        //         アプリを落とさずに次の操作へ戻す。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             FileTranscriptionStatus = $"エラー: {ex.Message}";
             StatusMessage = $"エラー: {ex.Message}";
         }
+#pragma warning restore CA1031
         finally
         {
             _fileTranscriptionCts?.Dispose();
@@ -611,8 +620,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    // アンマネージドリソースを直接は保持しないため、ファイナライザーは持たず
+    // disposing == false のときは何もしない。
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            return;
+        }
         _meterTimer.Stop();
         _clockTimer.Stop();
+        _fileTranscriptionCts?.Dispose();
+        _fileTranscriptionCts = null;
         _audioCaptureService.Dispose();
         _transcriptionService.Dispose();
     }

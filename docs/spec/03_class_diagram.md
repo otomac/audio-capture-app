@@ -8,12 +8,14 @@ classDiagram
 
     %% ==================== View層 ====================
     class MainWindow {
+        <<IDisposable>>
         -MainViewModel _viewModel
         +MainWindow()
         -TryGetSingleDroppedFile(DragEventArgs, out string) bool
         -TranscriptionGroup_DragOver(object, DragEventArgs)
         -TranscriptionGroup_DragLeave(object, DragEventArgs)
         -TranscriptionGroup_Drop(object, DragEventArgs)
+        +Dispose()
     }
 
     class InverseBoolConverter {
