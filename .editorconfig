@@ -322,36 +322,6 @@ dotnet_diagnostic.CA1024.severity = suggestion
 dotnet_diagnostic.CA1062.severity = none
 
 ##############################################################################
-# アナライザー severity — 技術的負債（期限付き緩和）
-#
-# ハーネス導入 (2026-08-14) 時点で既存コードに残っていた違反。
-# 新規コードでは守ること。解消タスクは docs/tasks/backlog.md の T101〜T105。
-# 解消したら該当行を「削除」すること（緩和を残さない）。
-##############################################################################
-
-# T101 — Dispose パターンの是正 — 2026-08-14
-dotnet_diagnostic.CA1063.severity = suggestion
-dotnet_diagnostic.CA1816.severity = suggestion
-dotnet_diagnostic.CA1001.severity = suggestion
-dotnet_diagnostic.CA2213.severity = suggestion
-dotnet_diagnostic.CA2000.severity = suggestion
-
-# T102 — カルチャー・文字列比較の明示 — 2026-08-14
-dotnet_diagnostic.CA1305.severity = suggestion
-dotnet_diagnostic.CA1307.severity = suggestion
-
-# T103 — catch (Exception) の局所化と理由付与 — 2026-08-14
-dotnet_diagnostic.CA1031.severity = suggestion
-
-# T104 — 非同期の是正（同期呼び出しの解消 / CancellationToken の伝播） — 2026-08-14
-dotnet_diagnostic.CA1849.severity = suggestion
-dotnet_diagnostic.CA2016.severity = suggestion
-
-# T105 — 軽微な静的解析指摘の解消 — 2026-08-14
-dotnet_diagnostic.CA1822.severity = suggestion
-dotnet_diagnostic.CA1825.severity = suggestion
-
-##############################################################################
 # テストプロジェクトの緩和
 #
 # [*.cs] より後ろに置くため、テストファイルではこちらが勝つ。

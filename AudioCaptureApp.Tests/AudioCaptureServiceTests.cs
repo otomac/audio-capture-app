@@ -57,7 +57,7 @@ public class AudioCaptureServiceTests
     public void BytesToFloats_EmptyBuffer_ReturnsEmptyArray()
     {
         var format = WaveFormat.CreateIeeeFloatWaveFormat(44100, 1);
-        var buffer = new byte[0];
+        byte[] buffer = [];
 
         var result = AudioCaptureService.BytesToFloats(buffer, 0, format);
 

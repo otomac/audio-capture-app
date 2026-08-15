@@ -1,2 +1,6 @@
 publish/*
 models/*
+
+# 開発者ごとの個人設定（ツール許可リスト）。共有しない。
+# .claude/settings.json と .claude/hooks/ は共有対象なので除外しない。
+.claude/settings.local.json

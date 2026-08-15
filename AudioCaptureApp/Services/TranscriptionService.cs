@@ -89,12 +89,16 @@ public class TranscriptionService : IDisposable
             }
             return (true, gpuAvailable);
         }
+        // CA1031: Whisper のネイティブランタイム読み込みは DllNotFoundException 等、
+        //         環境依存の任意の例外を投げる。失敗は Error イベントに変換して継続する。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             Error?.Invoke($"Whisperモデル読み込み失敗: {ex.Message}");
             DisposeProcessor();
             return (false, true);
         }
+#pragma warning restore CA1031
     }
 
     public void RegisterSource(AudioSourceType type, string label, int sourceRate, int sourceChannels)
@@ -210,96 +214,99 @@ public class TranscriptionService : IDisposable
             return false;
         }
 
-        WhisperProcessor? processor = null;
-        StreamWriter? writer = null;
-        AudioFileReader? reader = null;
         string outputPath = BuildTranscriptPath(audioFilePath);
         try
         {
-            reader = new AudioFileReader(audioFilePath);
-            int sourceRate = reader.WaveFormat.SampleRate;
-            int channels = reader.WaveFormat.Channels;
-            TimeSpan totalTime = reader.TotalTime;
-            float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
-
-            writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
-
-            processor = _factory.CreateBuilder().WithLanguage("ja").Build();
-
-            // ファイル読み込みバッファ（約1秒分）
-            var readBuffer = new float[sourceRate * channels];
-            var pcm16kBuffer = new List<float>(BufferThresholdSamples + TargetRate);
-            double resamplePos = 0;
-            float lpfPrev = 0f;
-            TimeSpan chunkOffset = TimeSpan.Zero;
-            const string label = "ファイル";
-
-            progress?.Report((TimeSpan.Zero, totalTime));
-
-            int samplesRead;
-            while ((samplesRead = reader.Read(readBuffer, 0, readBuffer.Length)) > 0)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                DownmixResampleAppend(
-                    readBuffer, samplesRead, channels, sourceRate,
-                    alpha, ref resamplePos, ref lpfPrev, pcm16kBuffer);
-
-                while (pcm16kBuffer.Count >= BufferThresholdSamples)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var chunk = new float[BufferThresholdSamples];
-                    pcm16kBuffer.CopyTo(0, chunk, 0, BufferThresholdSamples);
-                    pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
-
-                    await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
-                        .ConfigureAwait(false);
-                    chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
-                    progress?.Report((chunkOffset, totalTime));
-                }
-            }
-
-            // 残りバッファ（1秒以上あれば処理）
-            if (pcm16kBuffer.Count > TargetRate)
-            {
-                ct.ThrowIfCancellationRequested();
-                var chunk = pcm16kBuffer.ToArray();
-                await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
-                    .ConfigureAwait(false);
-                chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
-            }
-
-            progress?.Report((totalTime, totalTime));
-            return true;
+            return await TranscribeFileCoreAsync(audioFilePath, outputPath, progress, ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            // 部分出力ファイルは削除する（ユーザーが完結したと誤認しないように）
-            writer?.Dispose();
-            writer = null;
+            // 部分出力ファイルは削除する（ユーザーが完結したと誤認しないように）。
+            // Core を抜ける時点で using が StreamWriter を破棄済みのため、ここで削除できる。
             TryDeleteFile(outputPath);
             throw;
         }
+        // CA1031: キャンセル判定のため全例外をいったん見る必要がある（次行のコメント参照）。
+        //         キャンセル以外は Error イベントに変換して false を返す。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             // Whisper のネイティブ処理はキャンセル時に OperationCanceledException 以外を
             // 投げることがあるため、トークンがキャンセル済みなら中止として扱う
             if (ct.IsCancellationRequested)
             {
-                writer?.Dispose();
-                writer = null;
                 TryDeleteFile(outputPath);
                 throw new OperationCanceledException(ct);
             }
             Error?.Invoke($"ファイル文字起こしエラー: {ex.Message}");
             return false;
         }
-        finally
+#pragma warning restore CA1031
+    }
+
+    // 破棄対象（reader / writer / processor）を using で束ねるために本体を切り出している。
+    // 例外は using による破棄が完了してから呼び出し元へ伝播する。
+    private async Task<bool> TranscribeFileCoreAsync(
+        string audioFilePath,
+        string outputPath,
+        IProgress<(TimeSpan processed, TimeSpan total)>? progress,
+        CancellationToken ct)
+    {
+        await using var reader = new AudioFileReader(audioFilePath);
+        int sourceRate = reader.WaveFormat.SampleRate;
+        int channels = reader.WaveFormat.Channels;
+        TimeSpan totalTime = reader.TotalTime;
+        float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
+
+        await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
+        await using var processor = _factory!.CreateBuilder().WithLanguage("ja").Build();
+
+        // ファイル読み込みバッファ（約1秒分）
+        var readBuffer = new float[sourceRate * channels];
+        var pcm16kBuffer = new List<float>(BufferThresholdSamples + TargetRate);
+        double resamplePos = 0;
+        float lpfPrev = 0f;
+        TimeSpan chunkOffset = TimeSpan.Zero;
+        const string label = "ファイル";
+
+        progress?.Report((TimeSpan.Zero, totalTime));
+
+        int samplesRead;
+        while ((samplesRead = reader.Read(readBuffer, 0, readBuffer.Length)) > 0)
         {
-            processor?.Dispose();
-            writer?.Dispose();
-            reader?.Dispose();
+            ct.ThrowIfCancellationRequested();
+
+            DownmixResampleAppend(
+                readBuffer, samplesRead, channels, sourceRate,
+                alpha, ref resamplePos, ref lpfPrev, pcm16kBuffer);
+
+            while (pcm16kBuffer.Count >= BufferThresholdSamples)
+            {
+                ct.ThrowIfCancellationRequested();
+                var chunk = new float[BufferThresholdSamples];
+                pcm16kBuffer.CopyTo(0, chunk, 0, BufferThresholdSamples);
+                pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
+
+                await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                    .ConfigureAwait(false);
+                chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
+                progress?.Report((chunkOffset, totalTime));
+            }
         }
+
+        // 残りバッファ（1秒以上あれば処理）
+        if (pcm16kBuffer.Count > TargetRate)
+        {
+            ct.ThrowIfCancellationRequested();
+            var chunk = pcm16kBuffer.ToArray();
+            await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                .ConfigureAwait(false);
+            chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
+        }
+
+        progress?.Report((totalTime, totalTime));
+        return true;
     }
 
     // {入力ファイル名}.transcript.txt を同じフォルダに配置
@@ -319,7 +326,7 @@ public class TranscriptionService : IDisposable
                 File.Delete(path);
             }
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 削除失敗は無視（ロック中など）
         }
@@ -348,7 +355,7 @@ public class TranscriptionService : IDisposable
             await writer.WriteLineAsync(line).ConfigureAwait(false);
             SegmentTranscribed?.Invoke(line);
         }
-        await writer.FlushAsync().ConfigureAwait(false);
+        await writer.FlushAsync(ct).ConfigureAwait(false);
     }
 
     private void TranscriptionLoop()
@@ -480,10 +487,14 @@ public class TranscriptionService : IDisposable
         {
             // キャンセルによる中断は正常終了扱い
         }
+        // CA1031: ワーカースレッド境界＋Whisper のネイティブ処理。例外を漏らすとプロセスごと
+        //         落ちて録音中のセッションを失うため、全例外を Error イベントに変換する。
+#pragma warning disable CA1031
         catch (Exception ex)
         {
             Error?.Invoke($"文字起こしエラー: {ex.Message}");
         }
+#pragma warning restore CA1031
     }
 
     public void StopSession()
@@ -522,6 +533,18 @@ public class TranscriptionService : IDisposable
 
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    // アンマネージドリソースを直接は保持しない（Whisper.net 側が保持する）ため
+    // ファイナライザーは持たず、disposing == false のときは何もしない。
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            return;
+        }
         StopSession();
         DisposeProcessor();
     }

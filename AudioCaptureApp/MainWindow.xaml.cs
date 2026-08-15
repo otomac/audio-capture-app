@@ -5,18 +5,19 @@ using AudioCaptureApp.ViewModels;
 
 namespace AudioCaptureApp;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IDisposable
 {
     private readonly MainViewModel _viewModel = new();
+    private bool _disposed;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _viewModel;
-        Closed += (_, _) => _viewModel.Dispose();
+        Closed += (_, _) => Dispose();
     }
 
-    private bool TryGetSingleDroppedFile(DragEventArgs e, out string filePath)
+    private static bool TryGetSingleDroppedFile(DragEventArgs e, out string filePath)
     {
         filePath = string.Empty;
         if (!e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -53,6 +54,24 @@ public partial class MainWindow : Window
         }
         e.Handled = true;
         await _viewModel.TranscribeDroppedFileAsync(filePath);
+    }
+
+    public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    // ウィンドウは Closed イベントから 1 度だけ破棄される。
+    // アンマネージドリソースは持たないため disposing == false のときは何もしない。
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing || _disposed)
+        {
+            return;
+        }
+        _disposed = true;
+        _viewModel.Dispose();
     }
 }
 
