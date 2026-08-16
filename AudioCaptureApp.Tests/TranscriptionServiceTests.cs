@@ -234,6 +234,75 @@ public class TranscriptionServiceTests
         Assert.Equal(chunkStart + TimeSpan.FromSeconds(20), remainderStart);
     }
 
+    // --- 滞留バッファの切り出し判定 (T120) ---
+    //
+    // 20 秒分たまらなくても、先頭サンプルが 20 秒以上書き出されずに残っていたら確定する。
+    // これが無いと、ミュートや再生停止で供給が止まったソースのバッファは
+    // 「次のパケットが来てギャップ分割が発火するまで」書き出されない。
+
+    private const int Threshold = 16000 * 20;   // BufferThresholdSamples
+
+    [Fact]
+    public void ChunkTakeCount_ReachedThreshold_TakesExactlyThreshold()
+    {
+        // 20 秒分に達していれば、それ以上溜まっていても 20 秒分だけ（T117）
+        Assert.Equal(Threshold, TranscriptionService.ChunkTakeCount(Threshold, TimeSpan.FromSeconds(20)));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_FarOverThresholdAndStale_StillTakesOnlyThreshold()
+    {
+        // バックログが積んでいても 1 回の Whisper 呼び出しは 20 秒分に制限する
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(Threshold * 6, TimeSpan.FromSeconds(600)));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BelowThresholdAndFresh_TakesNothing()
+    {
+        // まだ溜め続けるべき状態（通常の録音中）
+        Assert.Equal(0, TranscriptionService.ChunkTakeCount(16000 * 16, TimeSpan.FromSeconds(16)));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BelowThresholdButStale_TakesWholeBuffer()
+    {
+        // 報告事象の再現条件: 16 秒分たまった直後にミュートされ、
+        // 20 秒経っても次のパケットが来ない → バッファ全部を確定させる
+        const int buffered = 16000 * 16;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(buffered, TimeSpan.FromSeconds(57)));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_ExactlyAtStaleAge_TakesWholeBuffer()
+    {
+        const int buffered = 16000 * 16;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(buffered, TranscriptionService.StaleBufferAge));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_StaleButShorterThanTailMinimum_TakesNothing()
+    {
+        // 0.2 秒未満の断片は 1 回の推論に見合わないためセッション終了まで持ち越す
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(
+                TranscriptionService.MinTailSamples - 1, TimeSpan.FromSeconds(600)));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_EmptyBuffer_TakesNothing()
+    {
+        Assert.Equal(0, TranscriptionService.ChunkTakeCount(0, TimeSpan.FromSeconds(600)));
+    }
+
     // --- 短いチャンクのパディング (T116) ---
 
     [Fact]

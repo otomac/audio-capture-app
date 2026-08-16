@@ -86,6 +86,12 @@ public class TranscriptionService : IDisposable
     /// <summary>セッション終了時、残りバッファを処理する最小サンプル数（0.2 秒）。</summary>
     internal const int MinTailSamples = TargetRate / 5;
 
+    /// <summary>
+    /// バッファ先頭サンプルがこの時間以上書き出されずに残っていたら、
+    /// 20 秒分たまっていなくてもチャンクとして確定する（T120）。
+    /// </summary>
+    internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
+
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
     public event Action<string>? RuntimeInfo;
@@ -502,7 +508,8 @@ public class TranscriptionService : IDisposable
                 // ただし _isRunning を必ず見ること。これが無いと停止要求後も
                 // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
                 PendingChunk? chunk;
-                while (_isRunning && !token.IsCancellationRequested && (chunk = TakeNextChunk(state)) != null)
+                while (_isRunning && !token.IsCancellationRequested
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
                 {
                     ProcessChunk(chunk, state, token);
                 }
@@ -515,7 +522,8 @@ public class TranscriptionService : IDisposable
             foreach (var (_, state) in _sources)
             {
                 PendingChunk? chunk;
-                while (!token.IsCancellationRequested && (chunk = TakeNextChunk(state)) != null)
+                while (!token.IsCancellationRequested
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
                 {
                     ProcessChunk(chunk, state, token);
                 }
@@ -546,10 +554,10 @@ public class TranscriptionService : IDisposable
     }
 
     /// <summary>
-    /// 確定済みチャンクを 1 つ取り出す。無ければ、バッファが閾値に達していれば
-    /// そこから 1 チャンク切り出す。どちらも無ければ <c>null</c>。
+    /// 確定済みチャンクを 1 つ取り出す。無ければバッファから 1 チャンク切り出す。
+    /// どちらも無ければ <c>null</c>。
     /// </summary>
-    private static PendingChunk? TakeNextChunk(SourceState state)
+    private static PendingChunk? TakeNextChunk(SourceState state, TimeSpan nowElapsed)
     {
         lock (state.BufferLock)
         {
@@ -558,21 +566,60 @@ public class TranscriptionService : IDisposable
                 return state.Ready.Dequeue();
             }
 
-            if (state.Pcm16kBuffer.Count >= BufferThresholdSamples)
+            if (state.Pcm16kBuffer.Count == 0)
             {
-                // バッファ全体ではなく閾値ぶんだけ切り出す。
-                // 全部渡すと、文字起こしが追いつかず滞留したときに
-                // 1 回の Whisper 呼び出しが数分ぶんの音声になり、
-                // 停止要求から抜けられなくなる（T117）。
-                var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
-                var samples = new float[BufferThresholdSamples];
-                state.Pcm16kBuffer.CopyTo(0, samples, 0, BufferThresholdSamples);
-                state.Pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
-                return new PendingChunk(samples, start);
+                return null;
             }
 
-            return null;
+            var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
+            int take = ChunkTakeCount(state.Pcm16kBuffer.Count, nowElapsed - start);
+            if (take == 0)
+            {
+                return null;
+            }
+
+            var samples = new float[take];
+            state.Pcm16kBuffer.CopyTo(0, samples, 0, take);
+            state.Pcm16kBuffer.RemoveRange(0, take);
+            return new PendingChunk(samples, start);
         }
+    }
+
+    /// <summary>
+    /// バッファから今回切り出すサンプル数を決める。<c>0</c> ならまだ切り出さない。
+    /// </summary>
+    /// <param name="bufferedSampleCount">バッファに溜まっているサンプル数（16kHz）。</param>
+    /// <param name="bufferAge">バッファ先頭サンプルが書き出されずに待っている実時間。</param>
+    /// <remarks>
+    /// 契機は 2 つ。
+    /// <list type="number">
+    /// <item>20 秒分たまった → 20 秒分だけ切り出す（1 回の Whisper 呼び出しを
+    /// 際限なく長くしないため。T117）。</item>
+    /// <item>20 秒分に届かないが、先頭サンプルが 20 秒以上書き出されずに残っている
+    /// → バッファ全部を切り出す（T120）。</item>
+    /// </list>
+    /// 2 が無いと、ミュートや再生停止で供給が止まったソースのバッファは
+    /// 「次のパケットが来てギャップ分割が発火するまで」書き出されない。
+    /// 実測では 16 秒分の音声が 57 秒間放置され、その間に他ソースが書き進んだため
+    /// 出力行の時刻が前後して見えていた。
+    /// なお 1 回の Whisper 推論コストは入力長にほぼ依存しないため、
+    /// この契機で確定するチャンクは「ギャップ分割で作られるはずだったものが
+    /// 早く出る」だけであり、推論回数は増えない。
+    /// </remarks>
+    internal static int ChunkTakeCount(int bufferedSampleCount, TimeSpan bufferAge)
+    {
+        if (bufferedSampleCount >= BufferThresholdSamples)
+        {
+            return BufferThresholdSamples;
+        }
+
+        // 0.2 秒未満の断片は 1 回の推論に見合わないため、セッション終了まで持ち越す
+        if (bufferAge >= StaleBufferAge && bufferedSampleCount >= MinTailSamples)
+        {
+            return bufferedSampleCount;
+        }
+
+        return 0;
     }
 
     internal static bool IsSilent(float[] samples)
