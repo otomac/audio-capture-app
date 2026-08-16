@@ -63,4 +63,53 @@ public class MainViewModelTests
         // 20 * log10(0.1) = -20
         Assert.Equal(-20.0, db, precision: 1);
     }
+
+    // --- 成果物フォルダを開く (T111) ---
+
+    [Fact]
+    public void BuildExplorerArguments_ExistingFile_SelectsFile()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+        File.WriteAllText(file, "x");
+        try
+        {
+            var args = MainViewModel.BuildExplorerArguments(file);
+
+            Assert.Equal($"/select,\"{file}\"", args);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void BuildExplorerArguments_MissingFileButExistingFolder_OpensFolder()
+    {
+        // 成果物が削除されていても、置かれていたフォルダは開く（REQ-OPEN-03）
+        var folder = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+        var missing = Path.Combine(folder, $"acapp-missing-{Guid.NewGuid():N}.txt");
+
+        var args = MainViewModel.BuildExplorerArguments(missing);
+
+        Assert.Equal($"\"{folder}\"", args);
+    }
+
+    [Fact]
+    public void BuildExplorerArguments_MissingFileAndFolder_ReturnsNull()
+    {
+        var missing = Path.Combine(
+            Path.GetTempPath(), $"acapp-nodir-{Guid.NewGuid():N}", "result.txt");
+
+        Assert.Null(MainViewModel.BuildExplorerArguments(missing));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void BuildExplorerArguments_BlankPath_ReturnsNull(string path)
+    {
+        // 起動直後など成果物が未設定の状態（REQ-OPEN-04 と対になる防御）
+        Assert.Null(MainViewModel.BuildExplorerArguments(path));
+    }
 }

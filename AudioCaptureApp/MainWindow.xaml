@@ -290,8 +290,17 @@
 
         <!-- Row 6: ステータスバー -->
         <Border Grid.Row="6" Background="#FFF0F0F0" Padding="8,4" CornerRadius="2">
-            <TextBlock Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
-                       Foreground="#FF555555"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
+                           Foreground="#FF555555" VerticalAlignment="Center"/>
+                <Button Grid.Column="1" Content="保存先を開く"
+                        Command="{Binding OpenResultFolderCommand}"
+                        Height="22" Padding="10,0" Margin="8,0,0,0"/>
+            </Grid>
         </Border>
     </Grid>
 </Window>

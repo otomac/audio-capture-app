@@ -211,6 +211,68 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _statusMessage = "待機中";
 
+    /// <summary>
+    /// 直近の成果物のパス（REQ-OPEN-01）。録音とファイル文字起こしで保存先が異なるため、
+    /// 「設定上の保存先」ではなくここを開く対象にする。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    private string _lastResultPath = string.Empty;
+
+    private bool CanOpenResultFolder => !string.IsNullOrEmpty(LastResultPath);
+
+    [RelayCommand(CanExecute = nameof(CanOpenResultFolder))]
+    private void OpenResultFolder()
+    {
+        var arguments = BuildExplorerArguments(LastResultPath);
+        if (arguments == null)
+        {
+            StatusMessage = $"保存先が見つかりません: {LastResultPath}";
+            return;
+        }
+
+        try
+        {
+            using var _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = arguments,
+                UseShellExecute = true
+            });
+        }
+        // CA1031: シェル起動は環境依存で任意の例外を投げうる。フォルダを開けなくても
+        //         アプリの動作には影響しないため、画面のステータスに変換する。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            StatusMessage = $"保存先を開けませんでした: {ex.Message}";
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>
+    /// エクスプローラーへ渡す引数を組み立てる。成果物が存在すれば選択状態で開き
+    /// （REQ-OPEN-02）、無ければ親フォルダを開く（REQ-OPEN-03）。
+    /// どちらも存在しなければ <c>null</c>。
+    /// </summary>
+    internal static string? BuildExplorerArguments(string resultPath)
+    {
+        if (string.IsNullOrWhiteSpace(resultPath))
+        {
+            return null;
+        }
+
+        if (System.IO.File.Exists(resultPath))
+        {
+            return $"/select,\"{resultPath}\"";
+        }
+
+        var folder = System.IO.Path.GetDirectoryName(resultPath);
+        return !string.IsNullOrEmpty(folder) && System.IO.Directory.Exists(folder)
+            ? $"\"{folder}\""
+            : null;
+    }
+
     // --- 文字起こし設定 ---
     [ObservableProperty]
     private bool _transcriptionEnabled;
@@ -353,6 +415,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusMessage = hasTxt
                 ? $"保存完了: {session.FilePath} (文字起こし: {txtPath})"
                 : $"保存完了: {session.FilePath}";
+            // REQ-OPEN-01: 文字起こしがあれば .txt、無ければ録音した .mp3 を対象にする
+            LastResultPath = hasTxt ? txtPath : session.FilePath;
         }
         else
         {
@@ -605,6 +669,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
                 FileTranscriptionStatus = "完了";
                 StatusMessage = $"文字起こし完了: {txtPath}";
+                LastResultPath = txtPath;   // REQ-OPEN-01
             }
             else
             {

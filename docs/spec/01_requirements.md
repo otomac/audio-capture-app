@@ -132,6 +132,18 @@
 | REQ-GPU-04 | 録音中・録音停止処理中・ファイル文字起こし中は GPU 使用設定の切り替えを禁止する | `MainViewModel.CanToggleGpu` (`IsNotBusy && GpuAvailable`) |
 | REQ-GPU-05 | ロードされたランタイム種別（CPU/CUDA/Vulkan 等）をステータスメッセージとして通知する | `TranscriptionService.RuntimeInfo` イベント |
 
+## 11. 成果物フォルダを開く
+
+| ID | 要件 | 実装箇所 |
+|---|---|---|
+| REQ-OPEN-01 | 録音の停止完了時、および音声ファイルからの文字起こし完了時に、直近の成果物のパスを保持する。録音時はライブ文字起こしが有効なら `.txt`、無効なら `.mp3`。ファイル文字起こし時は `.transcript.txt` | `MainViewModel.LastResultPath` |
+| REQ-OPEN-02 | 直近の成果物が存在する場合、その**フォルダをエクスプローラーで開き、成果物ファイルを選択状態にする**（`explorer.exe /select,"<path>"`） | `MainViewModel.OpenResultFolder`, `BuildExplorerArguments` |
+| REQ-OPEN-03 | 成果物ファイルが既に削除されている場合は親フォルダを開く。親フォルダも存在しない場合は何もせずステータスメッセージで通知する | `MainViewModel.BuildExplorerArguments` |
+| REQ-OPEN-04 | 直近の成果物が未設定（起動直後・録音データなし）の場合、操作を無効化する | `MainViewModel.CanOpenResultFolder` |
+
+> 録音の保存先は `OutputFolder`、ファイル文字起こしの出力先は入力ファイルと同じフォルダであり
+> 両者は一致しない。そのため「設定上の保存先」ではなく **「直近の成果物の場所」** を開く。
+
 ## 非機能要件
 
 | ID | 要件 | 補足 |
