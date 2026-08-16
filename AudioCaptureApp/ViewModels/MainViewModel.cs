@@ -320,7 +320,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusMessage = "停止処理中...";
 
         var transcriptionEnabled = TranscriptionEnabled;
-        await Task.Run(() => _audioCaptureService.StopRecording());
+        try
+        {
+            await Task.Run(() => _audioCaptureService.StopRecording());
+        }
+        // CA1031: 停止処理は録音・文字起こし・ネイティブリソース解放をまたぐ。
+        //         ここで例外を漏らすと AsyncRelayCommand が Dispatcher に再スローし、
+        //         未処理例外としてプロセスごと終了する（T117）。画面表示に変換する。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            StatusMessage = $"停止処理でエラーが発生しました: {ex.Message}";
+        }
+#pragma warning restore CA1031
 
         IsRecording = false;
         IsStopping = false;

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using NAudio.Wave;
@@ -10,11 +11,27 @@ public enum AudioSourceType { Mic, Speaker }
 
 public class TranscriptionService : IDisposable
 {
+    /// <summary>
+    /// Whisper へ渡す 1 チャンク。<paramref name="StartElapsed"/> はセッション開始からの
+    /// 経過時間で、チャンク先頭サンプルが録音された時刻を指す。
+    /// </summary>
+    private sealed record PendingChunk(float[] Samples, TimeSpan StartElapsed);
+
     private class SourceState
     {
         public readonly List<float> Pcm16kBuffer = new(BufferThresholdSamples + TargetRate);
         public readonly object BufferLock = new();
-        public TimeSpan ChunkOffset = TimeSpan.Zero;
+
+        /// <summary>ギャップで確定済みだがまだ Whisper に渡していないチャンク。</summary>
+        public readonly Queue<PendingChunk> Ready = new();
+
+        /// <summary>
+        /// <see cref="Pcm16kBuffer"/> の最後のサンプルに対応する、セッション開始からの経過時間。
+        /// チャンク内に閾値を超えるギャップは存在しない（あれば分割される）ため、
+        /// チャンク先頭時刻はここからバッファ長を引いて求められる。
+        /// </summary>
+        public TimeSpan BufferEndElapsed;
+
         public int SourceRate;
         public int SourceChannels;
         public double ResamplePos;
@@ -33,8 +50,47 @@ public class TranscriptionService : IDisposable
     private string _outputPath = "";
     private DateTime _sessionStartTime;
 
+    /// <summary>
+    /// セッション開始からの経過時間を測る単調増加クロック。
+    /// 記録時刻は「投入されたサンプル数の累積」ではなくこの実時間から求める
+    /// （ミュート中や再生停止中はサンプルが供給されず、累積では時計が止まるため）。
+    /// システム時刻の変更に影響されないよう <see cref="DateTime"/> ではなく
+    /// <see cref="Stopwatch"/> を使う。
+    /// </summary>
+    private readonly Stopwatch _sessionClock = new();
+
     private const int TargetRate = 16000;
     private const int BufferThresholdSamples = TargetRate * 20; // 20秒分
+
+    /// <summary>
+    /// 音声の供給が途切れたと判定する閾値。これを超えるギャップを検出したら、
+    /// そこまでのバッファを 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。
+    /// </summary>
+    /// <remarks>
+    /// ギャップを「見逃す」と、その分だけチャンク先頭の時刻が後ろへずれる（誤差はギャップ長まで）。
+    /// 逆に誤検出しても時刻は壁時計基準のままなので不正確にはならず、チャンクが細かく分かれるだけ。
+    /// よって多少大きめに取り、キャプチャスレッドのスケジューリング遅延で
+    /// 無用に分割されないようにしている。
+    /// </remarks>
+    internal static readonly TimeSpan GapThreshold = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>無音判定の窓長（100ms）。チャンク全体の平均ではなく窓ごとに判定する。</summary>
+    internal const int SilenceWindowSamples = TargetRate / 10;
+
+    /// <summary>無音判定の RMS 閾値（-40dB 相当）。</summary>
+    internal const double SilenceRmsThreshold = 0.01;
+
+    /// <summary>Whisper へ渡す最小サンプル数（1 秒）。これ未満は無音で埋めて伸ばす。</summary>
+    internal const int MinWhisperSamples = TargetRate;
+
+    /// <summary>セッション終了時、残りバッファを処理する最小サンプル数（0.2 秒）。</summary>
+    internal const int MinTailSamples = TargetRate / 5;
+
+    /// <summary>
+    /// バッファ先頭サンプルがこの時間以上書き出されずに残っていたら、
+    /// 20 秒分たまっていなくてもチャンクとして確定する（T120）。
+    /// </summary>
+    internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
 
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
@@ -103,10 +159,10 @@ public class TranscriptionService : IDisposable
 
     public void RegisterSource(AudioSourceType type, string label, int sourceRate, int sourceChannels)
     {
-        // 既存のプロセッサがあれば破棄
+        // 既存のプロセッサがあれば破棄（登録はセッション開始前なのでワーカーは動いていない）
         if (_sources.TryGetValue(type, out var existing))
         {
-            existing.Processor?.Dispose();
+            DisposeProcessorSafely(existing, workerExited: true);
         }
 
         // α = 2π·fc / (2π·fc + sourceRate),  fc = TargetRate / 2
@@ -139,12 +195,16 @@ public class TranscriptionService : IDisposable
         foreach (var state in _sources.Values)
         {
             lock (state.BufferLock)
+            {
                 state.Pcm16kBuffer.Clear();
-            state.ChunkOffset = TimeSpan.Zero;
+                state.Ready.Clear();
+                state.BufferEndElapsed = TimeSpan.Zero;
+            }
             state.ResamplePos = 0;
             state.LpfPrev = 0f;
         }
 
+        _sessionClock.Restart();
         _cts = new CancellationTokenSource();
         _isRunning = true;
         _thread = new Thread(TranscriptionLoop) { IsBackground = true, Name = "WhisperTranscription" };
@@ -158,8 +218,28 @@ public class TranscriptionService : IDisposable
             return;
         }
 
+        // このパケットの音声が「いつ録音されたか」を実時間で押さえる。
+        // ミュート中や再生停止中はこのメソッド自体が呼ばれないため、
+        // 呼ばれた時刻の差分がそのまま供給の途切れ（ギャップ）になる。
+        var nowElapsed = _sessionClock.Elapsed;
+        int frames = sampleCount / state.SourceChannels;
+        var audioStart = nowElapsed - TimeSpan.FromSeconds((double)frames / state.SourceRate);
+
         lock (state.BufferLock)
         {
+            if (ShouldSplitOnGap(audioStart, state.BufferEndElapsed, state.Pcm16kBuffer.Count, GapThreshold))
+            {
+                // ここまでを 1 チャンクとして確定し、以降は新しい基準時刻で積み直す。
+                state.Ready.Enqueue(new PendingChunk(
+                    state.Pcm16kBuffer.ToArray(),
+                    ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count)));
+                state.Pcm16kBuffer.Clear();
+
+                // 不連続な音声を地続きとして扱わないよう、リサンプラと LPF の状態も切る
+                state.ResamplePos = 0;
+                state.LpfPrev = 0f;
+            }
+
             double resamplePos = state.ResamplePos;
             float lpfPrev = state.LpfPrev;
             DownmixResampleAppend(
@@ -167,7 +247,43 @@ public class TranscriptionService : IDisposable
                 state.LpfAlpha, ref resamplePos, ref lpfPrev, state.Pcm16kBuffer);
             state.ResamplePos = resamplePos;
             state.LpfPrev = lpfPrev;
+
+            state.BufferEndElapsed = nowElapsed;
         }
+    }
+
+    /// <summary>
+    /// 新しく届いた音声の開始時刻がバッファ末尾から <paramref name="threshold"/> 以上離れていれば、
+    /// 供給が途切れたとみなしてチャンクを分割する。バッファが空なら分割対象が無いので false。
+    /// </summary>
+    internal static bool ShouldSplitOnGap(
+        TimeSpan audioStart, TimeSpan bufferEndElapsed, int bufferedSampleCount, TimeSpan threshold)
+        => bufferedSampleCount > 0 && audioStart - bufferEndElapsed > threshold;
+
+    /// <summary>
+    /// バッファ先頭サンプルの経過時間を、末尾の経過時間とバッファ長から逆算する。
+    /// チャンク内にギャップが無いことが前提（<see cref="ShouldSplitOnGap"/> が保証する）。
+    /// 末尾を常に実時間へ再アンカーするため、リサンプル誤差が累積しない。
+    /// </summary>
+    internal static TimeSpan ChunkStartElapsed(TimeSpan bufferEndElapsed, int bufferedSampleCount)
+    {
+        var start = bufferEndElapsed - TimeSpan.FromSeconds((double)bufferedSampleCount / TargetRate);
+        return start < TimeSpan.Zero ? TimeSpan.Zero : start;
+    }
+
+    /// <summary>
+    /// Whisper が極端に短い入力を扱えないため、<paramref name="minSamples"/> 未満なら
+    /// 末尾を無音で埋めて伸ばす。先頭は動かさないのでセグメント時刻は影響を受けない。
+    /// </summary>
+    internal static float[] PadToMinimum(float[] samples, int minSamples)
+    {
+        if (samples.Length >= minSamples)
+        {
+            return samples;
+        }
+        var padded = new float[minSamples];
+        samples.CopyTo(padded, 0);
+        return padded;
     }
 
     // ステレオ→モノ変換 + 1次IIRローパス + 線形リサンプル (sourceRate → 16kHz)
@@ -295,8 +411,8 @@ public class TranscriptionService : IDisposable
             }
         }
 
-        // 残りバッファ（1秒以上あれば処理）
-        if (pcm16kBuffer.Count > TargetRate)
+        // 残りバッファ（末尾の短い発話を落とさないよう 0.2 秒以上あれば処理）
+        if (pcm16kBuffer.Count >= MinTailSamples)
         {
             ct.ThrowIfCancellationRequested();
             var chunk = pcm16kBuffer.ToArray();
@@ -340,6 +456,8 @@ public class TranscriptionService : IDisposable
         {
             return;
         }
+
+        samples = PadToMinimum(samples, MinWhisperSamples);
 
         await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
         {
@@ -385,17 +503,13 @@ public class TranscriptionService : IDisposable
                     break;
                 }
 
-                float[]? chunk = null;
-                lock (state.BufferLock)
-                {
-                    if (state.Pcm16kBuffer.Count >= BufferThresholdSamples)
-                    {
-                        chunk = state.Pcm16kBuffer.ToArray();
-                        state.Pcm16kBuffer.Clear();
-                    }
-                }
-
-                if (chunk != null)
+                // ギャップで確定したチャンクが複数溜まっていることがあるため、
+                // 1 tick で 1 つではなく取り出せるだけ処理する。
+                // ただし _isRunning を必ず見ること。これが無いと停止要求後も
+                // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
+                PendingChunk? chunk;
+                while (_isRunning && !token.IsCancellationRequested
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
                 {
                     ProcessChunk(chunk, state, token);
                 }
@@ -407,47 +521,161 @@ public class TranscriptionService : IDisposable
         {
             foreach (var (_, state) in _sources)
             {
-                float[]? remaining;
+                PendingChunk? chunk;
+                while (!token.IsCancellationRequested
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
+                {
+                    ProcessChunk(chunk, state, token);
+                }
+
+                if (token.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                PendingChunk? tail = null;
                 lock (state.BufferLock)
                 {
-                    remaining = state.Pcm16kBuffer.Count > TargetRate // 1秒以上あれば処理
-                        ? state.Pcm16kBuffer.ToArray()
-                        : null;
+                    if (state.Pcm16kBuffer.Count >= MinTailSamples)
+                    {
+                        tail = new PendingChunk(
+                            state.Pcm16kBuffer.ToArray(),
+                            ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count));
+                    }
                     state.Pcm16kBuffer.Clear();
                 }
 
-                if (remaining != null)
+                if (tail != null)
                 {
-                    ProcessChunk(remaining, state, token);
+                    ProcessChunk(tail, state, token);
                 }
             }
         }
     }
 
-    internal static bool IsSilent(float[] samples)
+    /// <summary>
+    /// 確定済みチャンクを 1 つ取り出す。無ければバッファから 1 チャンク切り出す。
+    /// どちらも無ければ <c>null</c>。
+    /// </summary>
+    private static PendingChunk? TakeNextChunk(SourceState state, TimeSpan nowElapsed)
     {
-        // RMS（二乗平均平方根）で音声エネルギーを測定
-        double sumSquares = 0;
-        for (int i = 0; i < samples.Length; i++)
+        lock (state.BufferLock)
         {
-            sumSquares += samples[i] * (double)samples[i];
+            if (state.Ready.Count > 0)
+            {
+                return state.Ready.Dequeue();
+            }
+
+            if (state.Pcm16kBuffer.Count == 0)
+            {
+                return null;
+            }
+
+            var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
+            int take = ChunkTakeCount(state.Pcm16kBuffer.Count, nowElapsed - start);
+            if (take == 0)
+            {
+                return null;
+            }
+
+            var samples = new float[take];
+            state.Pcm16kBuffer.CopyTo(0, samples, 0, take);
+            state.Pcm16kBuffer.RemoveRange(0, take);
+            return new PendingChunk(samples, start);
         }
-        double rms = Math.Sqrt(sumSquares / samples.Length);
-        // RMS が -40dB 未満なら無音とみなす
-        return rms < 0.01;
     }
 
-    private void ProcessChunk(float[] samples, SourceState state, CancellationToken token)
+    /// <summary>
+    /// バッファから今回切り出すサンプル数を決める。<c>0</c> ならまだ切り出さない。
+    /// </summary>
+    /// <param name="bufferedSampleCount">バッファに溜まっているサンプル数（16kHz）。</param>
+    /// <param name="bufferAge">バッファ先頭サンプルが書き出されずに待っている実時間。</param>
+    /// <remarks>
+    /// 契機は 2 つ。
+    /// <list type="number">
+    /// <item>20 秒分たまった → 20 秒分だけ切り出す（1 回の Whisper 呼び出しを
+    /// 際限なく長くしないため。T117）。</item>
+    /// <item>20 秒分に届かないが、先頭サンプルが 20 秒以上書き出されずに残っている
+    /// → バッファ全部を切り出す（T120）。</item>
+    /// </list>
+    /// 2 が無いと、ミュートや再生停止で供給が止まったソースのバッファは
+    /// 「次のパケットが来てギャップ分割が発火するまで」書き出されない。
+    /// 実測では 16 秒分の音声が 57 秒間放置され、その間に他ソースが書き進んだため
+    /// 出力行の時刻が前後して見えていた。
+    /// なお 1 回の Whisper 推論コストは入力長にほぼ依存しないため、
+    /// この契機で確定するチャンクは「ギャップ分割で作られるはずだったものが
+    /// 早く出る」だけであり、推論回数は増えない。
+    /// </remarks>
+    internal static int ChunkTakeCount(int bufferedSampleCount, TimeSpan bufferAge)
+    {
+        if (bufferedSampleCount >= BufferThresholdSamples)
+        {
+            return BufferThresholdSamples;
+        }
+
+        // 0.2 秒未満の断片は 1 回の推論に見合わないため、セッション終了まで持ち越す
+        if (bufferAge >= StaleBufferAge && bufferedSampleCount >= MinTailSamples)
+        {
+            return bufferedSampleCount;
+        }
+
+        return 0;
+    }
+
+    internal static bool IsSilent(float[] samples)
+        => IsSilent(samples, SilenceRmsThreshold, SilenceWindowSamples);
+
+    /// <summary>
+    /// チャンクを短い窓に区切り、**どの窓も** 閾値未満のときだけ無音と判定する。
+    /// </summary>
+    /// <remarks>
+    /// チャンク全体の平均 RMS で判定すると、長い無音に埋もれた短い発話がならされて
+    /// 無音扱いになり、チャンクごと Whisper に渡らなくなる。
+    /// 発話区間 d 秒（その区間の RMS が r）を 20 秒チャンクで平均すると
+    /// r * sqrt(d / 20) まで下がるため、通常会話（r ≒ 0.02〜0.05）では
+    /// 発話が 2〜3 秒以下だと丸ごと捨てられていた。
+    /// 窓ごとの判定なら希釈されないため、短い発話・小音量の発話を取りこぼさない。
+    /// </remarks>
+    internal static bool IsSilent(float[] samples, double threshold, int windowSamples)
+    {
+        if (samples.Length == 0)
+        {
+            return true;
+        }
+
+        int window = windowSamples > 0 ? windowSamples : samples.Length;
+
+        for (int start = 0; start < samples.Length; start += window)
+        {
+            int length = Math.Min(window, samples.Length - start);
+
+            double sumSquares = 0;
+            for (int i = start; i < start + length; i++)
+            {
+                sumSquares += samples[i] * (double)samples[i];
+            }
+
+            if (Math.Sqrt(sumSquares / length) >= threshold)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void ProcessChunk(PendingChunk chunk, SourceState state, CancellationToken token)
     {
         try
         {
-            // 無音チャンクはWhisperに渡さない（ハルシネーション防止）
-            if (IsSilent(samples))
+            // 無音チャンクはWhisperに渡さない（ハルシネーション防止）。
+            // 時刻はチャンク自身が持つため、破棄しても後続の時刻はずれない。
+            if (IsSilent(chunk.Samples))
             {
-                state.ChunkOffset += TimeSpan.FromSeconds((double)samples.Length / TargetRate);
                 return;
             }
 
+            var samples = PadToMinimum(chunk.Samples, MinWhisperSamples);
             var results = new List<string>();
 
             // ProcessAsync を同期的に消費
@@ -464,8 +692,8 @@ public class TranscriptionService : IDisposable
                         continue;
                     }
 
-                    var startTime = _sessionStartTime + state.ChunkOffset + segment.Start;
-                    var endTime = _sessionStartTime + state.ChunkOffset + segment.End;
+                    var startTime = _sessionStartTime + chunk.StartElapsed + segment.Start;
+                    var endTime = _sessionStartTime + chunk.StartElapsed + segment.End;
                     var line = $"[{startTime:HH:mm:ss} - {endTime:HH:mm:ss}] [{state.Label}] {text}";
                     results.Add(line);
                     SegmentTranscribed?.Invoke(line);
@@ -480,8 +708,6 @@ public class TranscriptionService : IDisposable
             {
                 File.AppendAllLines(_outputPath, results, Encoding.UTF8);
             }
-
-            state.ChunkOffset += TimeSpan.FromSeconds((double)samples.Length / TargetRate);
         }
         catch (OperationCanceledException)
         {
@@ -497,16 +723,27 @@ public class TranscriptionService : IDisposable
 #pragma warning restore CA1031
     }
 
+    /// <summary>停止要求後、ワーカーが残りを処理して自然に抜けるのを待つ時間。</summary>
+    internal static readonly TimeSpan StopGraceTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>キャンセル後、Whisper のネイティブ処理が抜けるのを待つ時間。</summary>
+    internal static readonly TimeSpan StopCancelTimeout = TimeSpan.FromSeconds(10);
+
     public void StopSession()
     {
         _isRunning = false;
 
-        // まず残りバッファ処理の完了を待つ（最大30秒）
-        if (_thread != null && !_thread.Join(TimeSpan.FromSeconds(30)))
+        // まず残りバッファ処理の完了を待つ
+        bool workerExited = true;
+        if (_thread != null)
         {
-            // タイムアウト時はキャンセルして強制終了
-            _cts?.Cancel();
-            _thread.Join(TimeSpan.FromSeconds(5));
+            workerExited = _thread.Join(StopGraceTimeout);
+            if (!workerExited)
+            {
+                // タイムアウト時はキャンセルして終了を待ち直す
+                _cts?.Cancel();
+                workerExited = _thread.Join(StopCancelTimeout);
+            }
         }
         _thread = null;
 
@@ -515,16 +752,58 @@ public class TranscriptionService : IDisposable
 
         foreach (var state in _sources.Values)
         {
-            state.Processor?.Dispose();
+            DisposeProcessorSafely(state, workerExited);
         }
         _sources.Clear();
+    }
+
+    /// <summary>
+    /// <see cref="WhisperProcessor"/> を、プロセスを落とさずに破棄する。
+    /// </summary>
+    /// <remarks>
+    /// ネイティブ処理の実行中に <c>Dispose()</c> を呼ぶと Whisper.net が
+    /// <c>"Cannot dispose while processing, please use DisposeAsync instead."</c> を投げる。
+    /// これは <c>Task.Run</c> 上で発生すると <c>AsyncRelayCommand</c> 経由で
+    /// Dispatcher に再スローされ、未処理例外としてプロセスごと終了させる（T117 で実際に発生）。
+    /// ワーカーが抜けていない場合は破棄を見送る。ネイティブリソースはプロセス終了時に
+    /// 解放されるため、アプリを落とすよりリークを選ぶ。
+    /// </remarks>
+    private void DisposeProcessorSafely(SourceState state, bool workerExited)
+    {
+        var processor = state.Processor;
+        if (processor == null)
+        {
+            return;
+        }
+        state.Processor = null;
+
+        if (!workerExited)
+        {
+            Error?.Invoke(
+                "文字起こしスレッドの停止がタイムアウトしました。Whisper リソースの解放を見送ります。");
+            return;
+        }
+
+        try
+        {
+            processor.Dispose();
+        }
+        // CA1031: Whisper.net は状態不正を型付けされていない Exception で通知する。
+        //         破棄の失敗でアプリを落とさない（ここが T117 のクラッシュ地点だった）。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            Error?.Invoke($"Whisper プロセッサの解放に失敗しました: {ex.Message}");
+        }
+#pragma warning restore CA1031
     }
 
     private void DisposeProcessor()
     {
         foreach (var state in _sources.Values)
         {
-            state.Processor?.Dispose();
+            // ここに来る時点でセッションは停止済み（ワーカーは動いていない）
+            DisposeProcessorSafely(state, workerExited: true);
         }
         _sources.Clear();
         _factory?.Dispose();

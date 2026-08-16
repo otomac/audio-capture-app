@@ -86,8 +86,9 @@
 | REQ-TRX-03 | GPU が利用可能でもユーザー設定が CPU 使用の場合は、CPU 限定順で読み込み直す | `TranscriptionService.LoadModel` |
 | REQ-TRX-04 | モデルパスが設定されていれば、ライブ文字起こしの ON/OFF に関わらず常にモデルをロードする（ファイル文字起こしはライブ設定と独立して動作するため） | `MainViewModel` コンストラクタ, `TryLoadWhisperModel` |
 | REQ-TRX-05 | 入力音声はダウンミックス（ステレオ→モノラル）・1 次 IIR ローパスフィルタ・線形リサンプリングにより 16kHz モノラルへ変換してから Whisper に渡す | `TranscriptionService.DownmixResampleAppend` |
-| REQ-TRX-06 | RMS が -40dB 相当（0.01）未満のチャンクは無音とみなし Whisper に渡さない（ハルシネーション防止） | `TranscriptionService.IsSilent` |
+| REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行い、**すべての窓**の RMS が -40dB 相当（0.01）未満のときだけ無音とみなして Whisper に渡さない（ハルシネーション防止）。チャンク全体の平均で判定すると、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.IsSilent` |
 | REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する | `TranscriptionService.ProcessChunk`, `ProcessFileChunkAsync` |
+| REQ-TRX-08 | Whisper へ渡すチャンクが 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
 
 ## 8. ライブ文字起こし（録音中）
 
@@ -96,8 +97,15 @@
 | REQ-TRX-LIVE-01 | 「録音中にライブ文字起こしする」が ON かつモデルロード済みの場合のみ、録音サービスに文字起こしサービスを接続する | `MainViewModel.OnTranscriptionEnabledChanged` |
 | REQ-TRX-LIVE-02 | 録音開始時、マイク・スピーカーそれぞれを音声ソースとして登録し（`マイク`/`スピーカー` ラベル）、出力パスは録音 MP3 と同名の `.txt` とする | `AudioCaptureService.StartRecording`, `TranscriptionService.RegisterSource/StartSession` |
 | REQ-TRX-LIVE-03 | 録音中、マイク／スピーカーの音声チャンクをそれぞれ非同期にバッファへ蓄積する | `AudioCaptureService` DataAvailable ハンドラ, `TranscriptionService.AddSamples` |
-| REQ-TRX-LIVE-04 | バックグラウンドスレッドが 1 秒周期でポーリングし、各ソースにつき 20 秒分（16kHz 換算）バッファが溜まったらまとめて Whisper に投入する | `TranscriptionService.TranscriptionLoop` |
-| REQ-TRX-LIVE-05 | 録音停止時、残りバッファ（1 秒以上ある場合）を処理してからセッションを終了する | `TranscriptionService.StopSession`, `TranscriptionLoop` 終端処理 |
+| REQ-TRX-LIVE-04 | バックグラウンドスレッドが 1 秒周期でポーリングし、各ソースにつき 20 秒分（16kHz 換算）バッファが溜まったら Whisper に投入する。1 回のポーリングで取り出せるチャンクをすべて処理するが、**停止要求（`_isRunning == false`）を検知したら直ちに打ち切る** | `TranscriptionService.TranscriptionLoop`, `TakeNextChunk` |
+| REQ-TRX-LIVE-05 | 録音停止時、残りバッファ（**0.2 秒**以上ある場合）を処理してからセッションを終了する | `TranscriptionService.StopSession`, `TranscriptionLoop` 終端処理 |
+| REQ-TRX-LIVE-10 | 1 回の Whisper 呼び出しに渡すのは**最大 20 秒分**とする。バッファ全体を渡すと、文字起こしが追いつかず滞留した際に 1 回の呼び出しが数分分になり、キャンセル不能になって停止処理がタイムアウトするため | `TranscriptionService.TakeNextChunk` |
+| REQ-TRX-LIVE-12 | 20 秒分に達していなくても、バッファ先頭サンプルが **20 秒以上**書き出されずに残っている場合はチャンクとして確定する（0.2 秒未満の断片は除く）。この契機が無いと、ミュートや再生停止で供給が止まったソースのバッファは「次のパケットが到着してギャップ分割が発火するまで」書き出されず、書き出し遅延が無制限になる | `TranscriptionService.ChunkTakeCount`, `StaleBufferAge` |
+| REQ-TRX-LIVE-11 | セッション停止時、ワーカースレッドの終了を最大 30 秒待ち、タイムアウトしたらキャンセルしてさらに 10 秒待つ。**ワーカーが終了していない場合は `WhisperProcessor` の破棄を見送る**（処理中の破棄は Whisper.net が例外を投げ、未処理例外としてプロセスを終了させるため）。破棄時の例外も画面表示に変換し、いかなる場合もプロセスを落とさない | `TranscriptionService.StopSession`, `DisposeProcessorSafely` |
+| REQ-TRX-LIVE-06 | 記録する時刻は、投入されたサンプル数の累積ではなく**セッション開始からの実経過時間**（単調増加クロック）から求める。ミュート中や再生停止中は音声が供給されず、累積では時計が止まって実時刻と乖離するため | `TranscriptionService._sessionClock`, `PendingChunk.StartElapsed` |
+| REQ-TRX-LIVE-07 | 音声の供給が 500ms を超えて途切れた場合、そこまでのバッファを 20 秒未満でも 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。これによりミュート／再生停止をまたいでも時刻が実時刻に追従する | `TranscriptionService.AddSamples`, `ShouldSplitOnGap` |
+| REQ-TRX-LIVE-08 | チャンク先頭の時刻は、バッファ末尾の経過時間からバッファ長を差し引いて求める。末尾を毎パケット実時間へ再アンカーするため、リサンプル誤差が累積しない | `TranscriptionService.ChunkStartElapsed` |
+| REQ-TRX-LIVE-09 | ギャップでチャンクを分割する際、リサンプラとローパスフィルタの状態もリセットする（不連続な音声を地続きとして扱わないため） | `TranscriptionService.AddSamples` |
 | REQ-TRX-LIVE-06 | セッション終了処理は最大 30 秒待機し、タイムアウトした場合はキャンセルして強制終了する | `TranscriptionService.StopSession` |
 
 ## 9. ファイルからの文字起こし
