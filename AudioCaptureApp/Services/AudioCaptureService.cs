@@ -169,10 +169,39 @@ public class AudioCaptureService : IDisposable
 
     // --- マイク常時モニター ---
 
-    public void StartMicMonitor(AudioDevice device)
+    /// <summary>
+    /// マイクの常時キャプチャを開始する（REQ-DEV-03）。
+    /// 失敗した場合は内部状態を後始末して <c>false</c> を返す（REQ-DEV-08）。
+    /// </summary>
+    /// <remarks>
+    /// ここで例外を投げてはならない。本メソッドは
+    /// <c>MainViewModel.SelectedCaptureDevice</c> の setter から呼ばれ、その setter は
+    /// コンストラクターからも実行されるため、例外が漏れると
+    /// <c>MainWindow</c> の生成が失敗して**アプリが起動できずクラッシュする**
+    /// （実際に `WasapiCapture.StartRecording()` の `E_HANDLE` で発生した）。
+    /// </remarks>
+    public bool StartMicMonitor(AudioDevice device)
     {
         StopMicMonitor();
 
+        try
+        {
+            SetupMicCapture(device);
+            return true;
+        }
+        // CA1031: ドライバー都合で COM 由来の例外（E_HANDLE 等）が出るが型を列挙できない。
+        //         デバイス選択・アプリ起動を失敗させずに機能低下として扱う。
+#pragma warning disable CA1031
+        catch
+        {
+            StopMicMonitor();
+            return false;
+        }
+#pragma warning restore CA1031
+    }
+
+    private void SetupMicCapture(AudioDevice device)
+    {
         _micDevice = _enumerator.GetDevice(device.DeviceId);
 
         // ハードウェアミュート同期セットアップ

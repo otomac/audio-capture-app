@@ -14,7 +14,8 @@
 | REQ-DEV-05 | 前回選択したマイク／スピーカーデバイス ID を設定に保存し、次回起動時に一覧内に存在すれば自動選択する。見つからない場合、マイクは既定デバイスまたは先頭デバイスにフォールバックする | `MainViewModel` コンストラクタ, `AppSettings.LastSelectedDeviceId`, `LastSelectedLoopbackDeviceId` |
 | REQ-DEV-06 | スピーカーデバイスを選択すると、録音の有無に関わらず常時モニタリング（ループバックキャプチャ）を開始する | `AudioCaptureService.StartLoopbackMonitor`, `MainViewModel.OnSelectedRenderDeviceChanged` |
 | REQ-DEV-07 | スピーカーデバイスの選択を解除すると常時モニタリングを停止する | `AudioCaptureService.StopLoopbackMonitor` |
-| REQ-DEV-08 | スピーカーの常時モニタリング開始に失敗した場合（デバイスがループバックキャプチャに対応しない等）、例外を送出せずステータスメッセージで通知し、アプリの動作を継続する | `AudioCaptureService.StartLoopbackMonitor` (戻り値 `false`), `MainViewModel.OnSelectedRenderDeviceChanged` |
+| REQ-DEV-08 | **マイク／スピーカーいずれも**、常時モニタリングの開始に失敗した場合（デバイスがキャプチャに対応しない、ドライバーが `E_HANDLE` を返す等）、例外を送出せずステータスメッセージで通知し、アプリの動作を継続する。モニタリング開始はデバイス選択プロパティの setter から呼ばれるため、ここで例外を投げると**起動時であればアプリが起動できずクラッシュする** | `AudioCaptureService.StartMicMonitor` / `StartLoopbackMonitor` (いずれも戻り値 `false`), `MainViewModel.OnSelectedCaptureDeviceChanged` / `OnSelectedRenderDeviceChanged` |
+| REQ-DEV-09 | マイクの常時モニタリング開始に失敗した場合、OS 側のミュート状態は取得できないため ViewModel への反映を行わない（直前の値を保持する） | `MainViewModel.OnSelectedCaptureDeviceChanged` |
 
 ## 2. 録音制御
 

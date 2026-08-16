@@ -88,11 +88,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (value != null)
         {
-            _audioCaptureService.StartMicMonitor(value);
-            // 起動時／デバイス切替時に OS の現在ミュート値を ViewModel に反映
-            _suppressMicMuteWriteBack = true;
-            try { IsMicMuted = _audioCaptureService.IsMicMuted; }
-            finally { _suppressMicMuteWriteBack = false; }
+            if (_audioCaptureService.StartMicMonitor(value))
+            {
+                // 起動時／デバイス切替時に OS の現在ミュート値を ViewModel に反映
+                _suppressMicMuteWriteBack = true;
+                try { IsMicMuted = _audioCaptureService.IsMicMuted; }
+                finally { _suppressMicMuteWriteBack = false; }
+            }
+            else
+            {
+                // REQ-DEV-08: 失敗しても選択操作自体は成功させ、機能低下として通知する。
+                // REQ-DEV-09: OS 側のミュート状態は取得できないため反映しない。
+                StatusMessage = $"マイクの音声を取得できません: {value.FriendlyName}";
+            }
         }
         else
         {
