@@ -88,7 +88,7 @@ classDiagram
         +RefreshDevices()
         +GetCaptureDevices() IReadOnlyList~AudioDevice~
         +GetRenderDevices() IReadOnlyList~AudioDevice~
-        +StartMicMonitor(AudioDevice)
+        +StartMicMonitor(AudioDevice) bool
         +StopMicMonitor()
         +StartLoopbackMonitor(AudioDevice) bool
         +StopLoopbackMonitor()
