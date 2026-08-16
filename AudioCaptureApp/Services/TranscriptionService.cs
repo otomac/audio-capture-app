@@ -153,10 +153,10 @@ public class TranscriptionService : IDisposable
 
     public void RegisterSource(AudioSourceType type, string label, int sourceRate, int sourceChannels)
     {
-        // 既存のプロセッサがあれば破棄
+        // 既存のプロセッサがあれば破棄（登録はセッション開始前なのでワーカーは動いていない）
         if (_sources.TryGetValue(type, out var existing))
         {
-            existing.Processor?.Dispose();
+            DisposeProcessorSafely(existing, workerExited: true);
         }
 
         // α = 2π·fc / (2π·fc + sourceRate),  fc = TargetRate / 2
@@ -498,9 +498,11 @@ public class TranscriptionService : IDisposable
                 }
 
                 // ギャップで確定したチャンクが複数溜まっていることがあるため、
-                // 1 tick で 1 つではなく取り出せるだけ処理する
+                // 1 tick で 1 つではなく取り出せるだけ処理する。
+                // ただし _isRunning を必ず見ること。これが無いと停止要求後も
+                // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
                 PendingChunk? chunk;
-                while (!token.IsCancellationRequested && (chunk = TakeNextChunk(state)) != null)
+                while (_isRunning && !token.IsCancellationRequested && (chunk = TakeNextChunk(state)) != null)
                 {
                     ProcessChunk(chunk, state, token);
                 }
@@ -558,11 +560,15 @@ public class TranscriptionService : IDisposable
 
             if (state.Pcm16kBuffer.Count >= BufferThresholdSamples)
             {
-                var chunk = new PendingChunk(
-                    state.Pcm16kBuffer.ToArray(),
-                    ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count));
-                state.Pcm16kBuffer.Clear();
-                return chunk;
+                // バッファ全体ではなく閾値ぶんだけ切り出す。
+                // 全部渡すと、文字起こしが追いつかず滞留したときに
+                // 1 回の Whisper 呼び出しが数分ぶんの音声になり、
+                // 停止要求から抜けられなくなる（T117）。
+                var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
+                var samples = new float[BufferThresholdSamples];
+                state.Pcm16kBuffer.CopyTo(0, samples, 0, BufferThresholdSamples);
+                state.Pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
+                return new PendingChunk(samples, start);
             }
 
             return null;
@@ -670,16 +676,27 @@ public class TranscriptionService : IDisposable
 #pragma warning restore CA1031
     }
 
+    /// <summary>停止要求後、ワーカーが残りを処理して自然に抜けるのを待つ時間。</summary>
+    internal static readonly TimeSpan StopGraceTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>キャンセル後、Whisper のネイティブ処理が抜けるのを待つ時間。</summary>
+    internal static readonly TimeSpan StopCancelTimeout = TimeSpan.FromSeconds(10);
+
     public void StopSession()
     {
         _isRunning = false;
 
-        // まず残りバッファ処理の完了を待つ（最大30秒）
-        if (_thread != null && !_thread.Join(TimeSpan.FromSeconds(30)))
+        // まず残りバッファ処理の完了を待つ
+        bool workerExited = true;
+        if (_thread != null)
         {
-            // タイムアウト時はキャンセルして強制終了
-            _cts?.Cancel();
-            _thread.Join(TimeSpan.FromSeconds(5));
+            workerExited = _thread.Join(StopGraceTimeout);
+            if (!workerExited)
+            {
+                // タイムアウト時はキャンセルして終了を待ち直す
+                _cts?.Cancel();
+                workerExited = _thread.Join(StopCancelTimeout);
+            }
         }
         _thread = null;
 
@@ -688,16 +705,58 @@ public class TranscriptionService : IDisposable
 
         foreach (var state in _sources.Values)
         {
-            state.Processor?.Dispose();
+            DisposeProcessorSafely(state, workerExited);
         }
         _sources.Clear();
+    }
+
+    /// <summary>
+    /// <see cref="WhisperProcessor"/> を、プロセスを落とさずに破棄する。
+    /// </summary>
+    /// <remarks>
+    /// ネイティブ処理の実行中に <c>Dispose()</c> を呼ぶと Whisper.net が
+    /// <c>"Cannot dispose while processing, please use DisposeAsync instead."</c> を投げる。
+    /// これは <c>Task.Run</c> 上で発生すると <c>AsyncRelayCommand</c> 経由で
+    /// Dispatcher に再スローされ、未処理例外としてプロセスごと終了させる（T117 で実際に発生）。
+    /// ワーカーが抜けていない場合は破棄を見送る。ネイティブリソースはプロセス終了時に
+    /// 解放されるため、アプリを落とすよりリークを選ぶ。
+    /// </remarks>
+    private void DisposeProcessorSafely(SourceState state, bool workerExited)
+    {
+        var processor = state.Processor;
+        if (processor == null)
+        {
+            return;
+        }
+        state.Processor = null;
+
+        if (!workerExited)
+        {
+            Error?.Invoke(
+                "文字起こしスレッドの停止がタイムアウトしました。Whisper リソースの解放を見送ります。");
+            return;
+        }
+
+        try
+        {
+            processor.Dispose();
+        }
+        // CA1031: Whisper.net は状態不正を型付けされていない Exception で通知する。
+        //         破棄の失敗でアプリを落とさない（ここが T117 のクラッシュ地点だった）。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            Error?.Invoke($"Whisper プロセッサの解放に失敗しました: {ex.Message}");
+        }
+#pragma warning restore CA1031
     }
 
     private void DisposeProcessor()
     {
         foreach (var state in _sources.Values)
         {
-            state.Processor?.Dispose();
+            // ここに来る時点でセッションは停止済み（ワーカーは動いていない）
+            DisposeProcessorSafely(state, workerExited: true);
         }
         _sources.Clear();
         _factory?.Dispose();

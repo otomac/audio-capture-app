@@ -217,6 +217,23 @@ public class TranscriptionServiceTests
         Assert.Equal(TimeSpan.Zero, start);
     }
 
+    [Fact]
+    public void ChunkStartElapsed_AfterTakingOneChunk_RemainderStartsWhereChunkEnded()
+    {
+        // T117: TakeNextChunk はバッファ全体ではなく 20 秒 (320000) ぶんだけ切り出す。
+        // 切り出し後も残りの先頭時刻が連続していることを保証する。
+        var bufferEnd = TimeSpan.FromSeconds(60);
+        const int fullCount = 16000 * 60;      // 60 秒ぶん
+        const int chunkCount = 16000 * 20;     // 20 秒ぶん切り出す
+
+        var chunkStart = TranscriptionService.ChunkStartElapsed(bufferEnd, fullCount);
+        var remainderStart = TranscriptionService.ChunkStartElapsed(bufferEnd, fullCount - chunkCount);
+
+        Assert.Equal(TimeSpan.Zero, chunkStart);
+        // 残りは切り出したチャンクの直後から始まる（時刻の連続性）
+        Assert.Equal(chunkStart + TimeSpan.FromSeconds(20), remainderStart);
+    }
+
     // --- 短いチャンクのパディング (T116) ---
 
     [Fact]
