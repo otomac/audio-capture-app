@@ -58,6 +58,7 @@ classDiagram
         +double MicLevelDb
         +double LoopbackLevelDb
         +string FileTranscriptionStatus
+        +string LastResultPath
         +StartRecording()
         +StopRecordingAsync() Task
         +SelectOutputFolder()
@@ -66,7 +67,9 @@ classDiagram
         +TranscribeFromFileAsync() Task
         +TranscribeDroppedFileAsync(string) Task
         +CancelFileTranscription()
+        +OpenResultFolder()
         +PeakToDb(float) double
+        +BuildExplorerArguments(string) string
         +Dispose()
     }
 
