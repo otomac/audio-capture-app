@@ -82,9 +82,9 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-TRX-01 | Whisper GGML モデルファイルを指定して読み込める。存在しないパスの場合は失敗を返す | `TranscriptionService.LoadModel` |
-| REQ-TRX-02 | モデル読み込み時、GPU 優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）で一度読み込みを試み、実際に GPU が利用可能かを判定する | `TranscriptionService.LoadModel`, `GpuPreferredOrder` |
-| REQ-TRX-03 | GPU が利用可能でもユーザー設定が CPU 使用の場合は、CPU 限定順で読み込み直す | `TranscriptionService.LoadModel` |
+| REQ-TRX-01 | Whisper GGML モデルファイルを指定して読み込める。存在しないパス、および Whisper モデルとして読み込めないファイル（破損・非対応形式）の場合は失敗を返す。`WhisperFactory.FromPath` はネイティブ側の読み込み失敗を例外にせずファクトリを返すため、読み込み後に `CreateBuilder()` を 1 度呼んで失敗を確定させる | `TranscriptionService.LoadModel` |
+| REQ-TRX-02 | ネイティブランタイムは GPU 優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）で読み込み、GPU が利用可能かは「読み込まれた種別が GPU 版であること」**かつ**「ネイティブ側で GPU バックエンドが実際に登録されたこと（`whisper_init_with_params_no_state: backends` が 2 以上）」の両方で判定する。GPU 版ランタイム DLL はデバイスが無くても読み込めるため、種別だけでは判定できない。**この読み込みはプロセス内で 1 度しか行われない**（Whisper.net が `WhisperFactory.LibraryLoaded` を `static Lazy` で保持し、`RuntimeOptions.RuntimeLibraryOrder` を初回のロード時にしか参照しないため）。したがって 2 回目以降の `LoadModel` で順序を変えても読み込み直されない | `TranscriptionService.LoadModel`, `GpuPreferredOrder` |
+| REQ-TRX-03 | GPU 実行と CPU 実行の切り替えは、ランタイムの読み込み直しではなく `WhisperFactoryOptions.UseGpu`（whisper.cpp の `whisper_context_params.use_gpu` に対応）で行う。GPU 版ランタイムを読み込んだままでも `UseGpu = false` なら計算は CPU で行われる | `TranscriptionService.LoadModel` |
 | REQ-TRX-04 | モデルパスが設定されていれば、ライブ文字起こしの ON/OFF に関わらず常にモデルをロードする（ファイル文字起こしはライブ設定と独立して動作するため） | `MainViewModel` コンストラクタ, `TryLoadWhisperModel` |
 | REQ-TRX-05 | 入力音声はダウンミックス（ステレオ→モノラル）・1 次 IIR ローパスフィルタ・線形リサンプリングにより 16kHz モノラルへ変換してから Whisper に渡す | `TranscriptionService.DownmixResampleAppend` |
 | REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行い、**すべての窓**の RMS が -40dB 相当（0.01）未満のときだけ無音とみなして Whisper に渡さない（ハルシネーション防止）。チャンク全体の平均で判定すると、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.IsSilent` |
@@ -127,10 +127,10 @@
 | ID | 要件 | 実装箇所 |
 |---|---|---|
 | REQ-GPU-01 | 「文字起こしに GPU を使用する」設定を保持し、既定値は ON（true）とする | `AppSettings.UseGpuForTranscription` |
-| REQ-GPU-02 | モデル読み込みの結果、実際に GPU が利用不可と判明した場合は設定を強制的に OFF にし、UI 上でも操作不可（無効化）にする | `MainViewModel.TryLoadWhisperModel`, `GpuAvailable`, `CanToggleGpu` |
-| REQ-GPU-03 | GPU 使用設定を切り替えると、現在のモデルを破棄して新しい設定で再読み込みする | `MainViewModel.OnUseGpuForTranscriptionChanged` → `TryLoadWhisperModel` |
+| REQ-GPU-02 | モデル読み込みの結果、GPU が利用不可（REQ-TRX-02 の判定）と判明した場合は設定を強制的に OFF にし、UI 上でも操作不可（無効化）にする。判定はユーザー設定の ON/OFF に依存しないため、GPU 使用 OFF の状態で起動しても正しく再判定される | `MainViewModel.TryLoadWhisperModel`, `GpuAvailable`, `CanToggleGpu` |
+| REQ-GPU-03 | GPU 使用設定を切り替えると、現在のモデルを破棄し、新しい `UseGpu` 値（REQ-TRX-03）でファクトリを作り直す | `MainViewModel.OnUseGpuForTranscriptionChanged` → `TryLoadWhisperModel` |
 | REQ-GPU-04 | 録音中・録音停止処理中・ファイル文字起こし中は GPU 使用設定の切り替えを禁止する | `MainViewModel.CanToggleGpu` (`IsNotBusy && GpuAvailable`) |
-| REQ-GPU-05 | ロードされたランタイム種別（CPU/CUDA/Vulkan 等）をステータスメッセージとして通知する | `TranscriptionService.RuntimeInfo` イベント |
+| REQ-GPU-05 | 実際の実行先をステータスメッセージとして通知する。GPU 実行時はランタイム種別を併記して `GPU (Vulkan)` のように、CPU 実行時は `CPU` とする。実行先は**モデルの重みが実際に載ったバックエンド**（ネイティブログの `whisper_model_load: <X> total size` の `<X>`）から決める。`RuntimeOptions.LoadedLibrary` は読み込んだランタイム DLL の種別、`UseGpu` は要求にすぎず、どちらも実行先を表さないため単独で使ってはならない | `TranscriptionService.RuntimeInfo` イベント |
 
 ## 11. 成果物フォルダを開く
 
