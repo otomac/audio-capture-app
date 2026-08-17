@@ -112,4 +112,27 @@ public class MainViewModelTests
         // 起動直後など成果物が未設定の状態（REQ-OPEN-04 と対になる防御）
         Assert.Null(MainViewModel.BuildExplorerArguments(path));
     }
+
+    // --- 作業中は保存先を開けない (T121) ---
+
+    [Fact]
+    public void CanOpenResultFolder_IdleWithResult_IsTrue()
+    {
+        Assert.True(MainViewModel.CanOpenResultFolderFor(@"C:\out\20260818_120000.txt", isNotBusy: true));
+    }
+
+    [Fact]
+    public void CanOpenResultFolder_Busy_IsFalse()
+    {
+        // 録音中・停止処理中・ファイル文字起こし中は、保持しているのが直前の成果物のため無効
+        // （REQ-OPEN-05）
+        Assert.False(MainViewModel.CanOpenResultFolderFor(@"C:\out\20260818_120000.txt", isNotBusy: false));
+    }
+
+    [Fact]
+    public void CanOpenResultFolder_IdleWithoutResult_IsFalse()
+    {
+        // 起動直後（REQ-OPEN-04）
+        Assert.False(MainViewModel.CanOpenResultFolderFor("", isNotBusy: true));
+    }
 }

@@ -140,6 +140,7 @@
 | REQ-OPEN-02 | 直近の成果物が存在する場合、その**フォルダをエクスプローラーで開き、成果物ファイルを選択状態にする**（`explorer.exe /select,"<path>"`） | `MainViewModel.OpenResultFolder`, `BuildExplorerArguments` |
 | REQ-OPEN-03 | 成果物ファイルが既に削除されている場合は親フォルダを開く。親フォルダも存在しない場合は何もせずステータスメッセージで通知する | `MainViewModel.BuildExplorerArguments` |
 | REQ-OPEN-04 | 直近の成果物が未設定（起動直後・録音データなし）の場合、操作を無効化する | `MainViewModel.CanOpenResultFolder` |
+| REQ-OPEN-05 | 録音中・録音停止処理中・ファイル文字起こし中は操作を無効化する。保持しているのは**それ以前の**成果物であり、進行中の作業の成果物ではないため | `MainViewModel.CanOpenResultFolder` (`IsNotBusy`) |
 
 > 録音の保存先は `OutputFolder`、ファイル文字起こしの出力先は入力ファイルと同じフォルダであり
 > 両者は一致しない。そのため「設定上の保存先」ではなく **「直近の成果物の場所」** を開く。

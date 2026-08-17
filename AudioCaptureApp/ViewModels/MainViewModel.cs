@@ -141,6 +141,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private bool _isRecording;
 
     [ObservableProperty]
@@ -150,6 +151,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private bool _isStopping;
 
     [ObservableProperty]
@@ -160,6 +162,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private bool _isTranscribingFile;
 
     [ObservableProperty]
@@ -219,7 +222,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private string _lastResultPath = string.Empty;
 
-    private bool CanOpenResultFolder => !string.IsNullOrEmpty(LastResultPath);
+    /// <summary>
+    /// 「保存先を開く」の可否。成果物が未設定なら無効（REQ-OPEN-04）。加えて録音中・停止処理中・
+    /// ファイル文字起こし中も無効にする（REQ-OPEN-05）。保持しているのは進行中の作業ではなく
+    /// それ以前の成果物であり、開けてしまうと誤解を招くため。
+    /// </summary>
+    internal static bool CanOpenResultFolderFor(string lastResultPath, bool isNotBusy)
+        => isNotBusy && !string.IsNullOrEmpty(lastResultPath);
+
+    private bool CanOpenResultFolder => CanOpenResultFolderFor(LastResultPath, IsNotBusy);
 
     [RelayCommand(CanExecute = nameof(CanOpenResultFolder))]
     private void OpenResultFolder()
