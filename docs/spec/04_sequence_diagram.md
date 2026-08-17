@@ -234,10 +234,13 @@ sequenceDiagram
 
     VM->>TS: LoadModel(modelPath, requestGpu)
     TS->>TS: DisposeProcessor() (既存モデル破棄)
-    TS->>TS: GPU優先順で読み込み試行 → 実利用ライブラリ判定
-    alt requestGpu == false かつ GPU利用可能と判定
-        TS->>TS: 破棄してCPU限定順で再読み込み
-    end
+    TS->>TS: RuntimeLibraryOrder = GPU優先順<br/>※実際に効くのはプロセス内で最初の読み込みのみ
+    TS->>TS: LogProvider.AddLogger(...) で読み込み中だけネイティブログを購読
+    TS->>TS: FromPath(modelPath, WhisperFactoryOptions{UseGpu = requestGpu})
+    TS->>TS: CreateBuilder() を 1 度呼ぶ<br/>※FromPath は読み込み失敗を例外にしないため
+    TS->>TS: 購読解除。ログから backends 数と重みの配置先を取得
+    TS->>TS: GpuAvailable = GPU版ランタイム かつ backends >= 2<br/>実行先 = 重みの配置先が CPU 以外か
+    TS-->>VM: RuntimeInfo("GPU (Vulkan)" / "CPU")
     TS-->>VM: (Success, GpuAvailable)
 
     alt Success

@@ -1,4 +1,5 @@
 using AudioCaptureApp.Services;
+using Whisper.net.LibraryLoader;
 
 namespace AudioCaptureApp.Tests;
 
@@ -345,5 +346,146 @@ public class TranscriptionServiceTests
         // 判定不可の場合はGPU利用可能とみなす（チェックボックスをON扱いのままにするため）
         Assert.True(gpuAvailable);
         Assert.False(service.IsModelLoaded);
+    }
+
+    [Fact]
+    public void LoadModel_CorruptModelFile_ReturnsFailureAndRaisesError()
+    {
+        // T122 / REQ-TRX-01。WhisperFactory.FromPath は読み込みに失敗しても例外を投げず
+        // ファクトリを返すため、LoadModel は壊れたモデルでも成功を返していた。
+        //
+        // 注: このテストは Whisper のネイティブランタイム（Whisper.net.Runtime* が出力へ
+        //     配置する DLL）のロードを伴う。実 GGML モデルは要求しない。
+        var path = Path.Combine(Path.GetTempPath(), $"t122-corrupt-{Guid.NewGuid():N}.bin");
+        // GGML のマジック (0x67676d6c) と一致しない固定パターンで埋める
+        var garbage = new byte[64 * 1024];
+        Array.Fill(garbage, (byte)0xAB);
+        File.WriteAllBytes(path, garbage);
+
+        try
+        {
+            using var service = new TranscriptionService();
+            var errors = new List<string>();
+            service.Error += errors.Add;
+
+            var (success, _) = service.LoadModel(path, useGpu: false);
+
+            Assert.False(success);
+            Assert.False(service.IsModelLoaded);
+            Assert.NotEmpty(errors);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // --- 実行先の表記 (T119 / T123 / REQ-GPU-05) ---
+    //
+    // RuntimeOptions.LoadedLibrary は「どのランタイム DLL を読み込んだか」であって
+    // 「GPU で計算しているか」ではない。GPU 版ランタイムを読み込んだまま CPU 実行する
+    // ケースが 2 つある（UseGpu = false のとき / 使える GPU デバイスが無いとき）ため、
+    // 通知には LoadedLibrary の値をそのまま使えない。
+
+    [Fact]
+    public void DescribeRuntime_GpuInUseAndGpuLibraryLoaded_ReportsGpuWithLibraryName()
+    {
+        Assert.Equal("GPU (Vulkan)", TranscriptionService.DescribeRuntime(RuntimeLibrary.Vulkan, gpuInUse: true));
+        Assert.Equal("GPU (Cuda)", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cuda, gpuInUse: true));
+    }
+
+    [Fact]
+    public void DescribeRuntime_GpuLibraryLoadedButRunningOnCpu_ReportsCpu()
+    {
+        // T119 / T123 の本体。Vulkan ランタイムを読み込んだままでも計算が CPU なら CPU と通知する。
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Vulkan, gpuInUse: false));
+    }
+
+    [Fact]
+    public void DescribeRuntime_CpuLibraryLoaded_ReportsCpuAlways()
+    {
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cpu, gpuInUse: true));
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.CpuNoAvx, gpuInUse: true));
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cpu, gpuInUse: false));
+    }
+
+    [Fact]
+    public void DescribeRuntime_NoLibraryLoaded_ReportsCpu()
+    {
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(null, gpuInUse: true));
+    }
+
+    // --- ネイティブログからの GPU 実態判定 (T123 / REQ-TRX-02, REQ-GPU-05) ---
+    //
+    // 入力はすべて実機で採取した whisper.cpp / ggml のログ行そのもの。
+    // GPU 版ランタイム DLL はデバイスが無くても読み込めるため、LoadedLibrary だけでは
+    // GPU 利用可否を判定できない（Vulkan ICD を無効化して誤検知を実証済み）。
+
+    [Fact]
+    public void ParseBackendCount_WhisperInitLine_ReturnsCount()
+    {
+        Assert.Equal(2, TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: backends   = 2"));
+        Assert.Equal(1, TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: backends   = 1"));
+    }
+
+    [Fact]
+    public void ParseBackendCount_DeviceCountLine_ReturnsNull()
+    {
+        // devices は backends とは別の値。取り違えない
+        Assert.Null(TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: devices    = 5"));
+    }
+
+    [Fact]
+    public void ParseBackendCount_UnrelatedLine_ReturnsNull()
+    {
+        Assert.Null(TranscriptionService.ParseBackendCount(
+            "whisper_model_load: loading model"));
+        Assert.Null(TranscriptionService.ParseBackendCount(""));
+    }
+
+    [Fact]
+    public void ParseModelBackend_GpuPlacement_ReturnsBackendName()
+    {
+        Assert.Equal("Vulkan0", TranscriptionService.ParseModelBackend(
+            "whisper_model_load:      Vulkan0 total size =   487.01 MB"));
+    }
+
+    [Fact]
+    public void ParseModelBackend_CpuPlacement_ReturnsCpu()
+    {
+        Assert.Equal("CPU", TranscriptionService.ParseModelBackend(
+            "whisper_model_load:          CPU total size =   487.01 MB"));
+    }
+
+    [Fact]
+    public void ParseModelBackend_ModelSizeLine_ReturnsNull()
+    {
+        // "total size" ではなく "model size" の行。バックエンド名は載っていない
+        Assert.Null(TranscriptionService.ParseModelBackend(
+            "whisper_model_load: model size    =  487.01 MB"));
+        Assert.Null(TranscriptionService.ParseModelBackend(
+            "ggml_vulkan: Found 4 Vulkan devices:"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_CpuPlacement_ReturnsFalse()
+    {
+        Assert.False(TranscriptionService.IsGpuInUse("CPU"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_GpuPlacement_ReturnsTrue()
+    {
+        Assert.True(TranscriptionService.IsGpuInUse("Vulkan0"));
+        Assert.True(TranscriptionService.IsGpuInUse("CUDA0"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_Unknown_ReturnsFalse()
+    {
+        Assert.False(TranscriptionService.IsGpuInUse(null));
     }
 }

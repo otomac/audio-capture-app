@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using NAudio.Wave;
 using Whisper.net;
 using Whisper.net.LibraryLoader;
+using Whisper.net.Logger;
 
 namespace AudioCaptureApp.Services;
 
@@ -98,23 +100,133 @@ public class TranscriptionService : IDisposable
 
     public bool IsModelLoaded => _factory != null;
 
-    // GPU優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）と、CPU限定の順序
+    // GPU優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）
     private static readonly List<RuntimeLibrary> GpuPreferredOrder = new()
     {
         RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.CoreML,
         RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx
     };
-    private static readonly List<RuntimeLibrary> CpuOnlyOrder = new()
-    {
-        RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx
-    };
 
     private static bool IsGpuLibrary(RuntimeLibrary? library) =>
         library is RuntimeLibrary.Cuda or RuntimeLibrary.Vulkan or RuntimeLibrary.CoreML or RuntimeLibrary.OpenVino;
 
-    // GPU利用可否は実際にランタイムを読み込んでみないと判定できないため、
-    // useGpu の指定に関わらず一度 GPU 優先順で読み込みを試して可否を判定する。
-    // ユーザー設定が CPU 使用の場合、GPU が利用可能でも CPU 限定で読み込み直す。
+    /// <summary>
+    /// ステータス通知用の実行先表記を作る（REQ-GPU-05）。
+    /// GPU 実行のときだけランタイム種別を併記する。
+    /// </summary>
+    internal static string DescribeRuntime(RuntimeLibrary? loaded, bool gpuInUse)
+        => gpuInUse && IsGpuLibrary(loaded) ? $"GPU ({loaded})" : "CPU";
+
+    // --- モデル読み込み中のネイティブログから GPU の実態を読み取る (T123) ---
+    //
+    // GPU 版のランタイム DLL は使える GPU デバイスが無くても読み込めるため、
+    // RuntimeOptions.LoadedLibrary だけでは GPU 利用可否を判定できない
+    // （Vulkan ローダーの ICD を無効化した実測で、CPU 速度なのに "GPU (Vulkan)" と
+    //  表示されることを確認済み）。Whisper.net には他に GPU の情報源が無いため、
+    // whisper.cpp / ggml がモデル読み込み時に出すログから 2 つの事実を拾う。
+    //
+    //   whisper_init_with_params_no_state: backends   = 2   → GPU バックエンドが登録されたか
+    //   whisper_model_load:      Vulkan0 total size = ...    → 重みが実際にどこへ載ったか
+    //
+    // ログ書式は公開 API ではないため、解析できなければ従来の判定へフォールバックする。
+
+    /// <summary>
+    /// <c>whisper_init_with_params_no_state: backends   = 2</c> の形の行から数値を取り出す。
+    /// 該当しない行なら <c>null</c>。
+    /// </summary>
+    internal static int? ParseBackendCount(string logLine)
+    {
+        const string key = "backends";
+        int keyIndex = logLine.IndexOf(key, StringComparison.Ordinal);
+        if (keyIndex < 0)
+        {
+            return null;
+        }
+
+        int equalsIndex = logLine.IndexOf('=', keyIndex + key.Length);
+        if (equalsIndex < 0)
+        {
+            return null;
+        }
+
+        return int.TryParse(
+            logLine.AsSpan(equalsIndex + 1).Trim(),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var count) ? count : null;
+    }
+
+    /// <summary>
+    /// <c>whisper_model_load:      Vulkan0 total size =   487.01 MB</c> の形の行から
+    /// 重みが載ったバックエンド名（<c>Vulkan0</c> / <c>CPU</c> 等）を取り出す。
+    /// 該当しない行なら <c>null</c>。
+    /// </summary>
+    internal static string? ParseModelBackend(string logLine)
+    {
+        const string marker = "total size";
+        if (!logLine.Contains("whisper_model_load:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        int markerIndex = logLine.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return null;
+        }
+
+        // "total size" の直前のトークンがバックエンド名
+        var head = logLine.AsSpan(0, markerIndex).TrimEnd();
+        int separator = head.LastIndexOf(' ');
+        if (separator < 0)
+        {
+            return null;
+        }
+
+        var name = head[(separator + 1)..].ToString();
+        // バックエンド名が無い行（"whisper_model_load: total size ..."）を拾わない
+        return name.Length == 0 || name.EndsWith(':') ? null : name;
+    }
+
+    /// <summary>重みの載ったバックエンド名から GPU 実行かどうかを決める。</summary>
+    internal static bool IsGpuInUse(string? modelBackend)
+        => modelBackend != null && !modelBackend.Equals("CPU", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// モデル読み込み中のネイティブログを覗いて、GPU の実態を拾う。
+    /// 購読は <see cref="LoadModel"/> の読み込み区間だけに限る。
+    /// </summary>
+    private sealed class NativeLoadObserver
+    {
+        private int? _backendCount;
+        private string? _modelBackend;
+
+        public void OnLog(WhisperLogLevel level, string? message)
+        {
+            _ = level;
+            if (string.IsNullOrEmpty(message))
+            {
+                return;
+            }
+
+            _backendCount ??= ParseBackendCount(message);
+            _modelBackend ??= ParseModelBackend(message);
+        }
+
+        /// <summary>GPU バックエンドが登録されたか。解析できなければ <c>null</c>（不明）。</summary>
+        public bool? HasGpuBackend => _backendCount is int count ? count >= 2 : null;
+
+        /// <summary>いま GPU で動いているか。解析できなければ <c>null</c>（不明）。</summary>
+        public bool? GpuInUse => _modelBackend != null ? IsGpuInUse(_modelBackend) : null;
+    }
+
+    // GPU利用可否は実際にランタイムを読み込んでみないと判定できないため、GPU 優先順で読み込む。
+    //
+    // ここで RuntimeLibraryOrder が効くのは「プロセス内で最初の読み込み」だけである（REQ-TRX-02）。
+    // Whisper.net は WhisperFactory.LibraryLoaded を static な Lazy<LoadResult> で持ち、
+    // ネイティブランタイムをプロセスで 1 度しか読み込まない。Factory を破棄しても
+    // アンロードされないため、順序を CPU 限定に差し替えて読み込み直しても空振りする（T119）。
+    // したがって CPU 実行への切り替えは WhisperFactoryOptions.UseGpu で行う（REQ-TRX-03）。
     public (bool Success, bool GpuAvailable) LoadModel(string modelPath, bool useGpu)
     {
         DisposeProcessor();
@@ -127,22 +239,28 @@ public class TranscriptionService : IDisposable
         try
         {
             RuntimeOptions.RuntimeLibraryOrder = GpuPreferredOrder;
-            _factory = WhisperFactory.FromPath(modelPath);
+
+            var observer = new NativeLoadObserver();
+            using (LogProvider.AddLogger(observer.OnLog))
+            {
+                _factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = useGpu });
+
+                // FromPath はモデルの読み込みをその場で行うが、失敗しても例外を投げずに
+                // ファクトリを返す。失敗が表面化するのは最初の CreateBuilder() なので、
+                // ここで 1 度呼んで確定させる（読み込み済みのため追加コストは無い。実測 0ms）。
+                // これが無いと壊れたモデルでも「読み込み完了」と表示され、録音開始や
+                // ファイル文字起こしまで失敗が判明しない（T122）。
+                _ = _factory.CreateBuilder();
+            }
+
             var loaded = RuntimeOptions.LoadedLibrary;
-            var gpuAvailable = IsGpuLibrary(loaded);
 
-            if (!useGpu && gpuAvailable)
-            {
-                _factory.Dispose();
-                RuntimeOptions.RuntimeLibraryOrder = CpuOnlyOrder;
-                _factory = WhisperFactory.FromPath(modelPath);
-                loaded = RuntimeOptions.LoadedLibrary;
-            }
+            // GPU 版ランタイムを読み込めただけでは GPU が使えるとは限らない（T123）。
+            // ログを解析できなかった場合は従来どおりランタイム種別だけで判定する。
+            var gpuAvailable = IsGpuLibrary(loaded) && observer.HasGpuBackend != false;
+            var gpuInUse = observer.GpuInUse ?? (useGpu && gpuAvailable);
 
-            if (loaded != null)
-            {
-                RuntimeInfo?.Invoke(loaded.Value.ToString());
-            }
+            RuntimeInfo?.Invoke(DescribeRuntime(loaded, gpuInUse));
             return (true, gpuAvailable);
         }
         // CA1031: Whisper のネイティブランタイム読み込みは DllNotFoundException 等、
