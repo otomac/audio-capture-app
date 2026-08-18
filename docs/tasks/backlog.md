@@ -23,6 +23,7 @@
 
 ## 完了
 
+- [x] **T124** ブランチ運用（develop 最新化 → feature ブランチ作成 → ゲート全緑後に commit/push/PR）を規範化し、保護ブランチ上のソース編集をフックで deny する (2026-08-18) → [詳細](./T124-branch-workflow-enforcement.md)
 - [x] **T123** GPU が使えない環境でも `GpuAvailable` が真になり「GPU 実行」と表示される（GPU 版ランタイム DLL はデバイスが無くても読み込めるため。ネイティブログの `backends` 数と重みの配置先で判定するよう変更） (2026-08-18) → [詳細](./T123-gpu-availability-false-positive.md)
 - [x] **T122** `TranscriptionService.LoadModel` がモデル読み込みの失敗を返せない（`WhisperFactory.FromPath` はネイティブ側の読み込み失敗を例外にせずファクトリを返すため、壊れたモデルでも「読み込み完了」と表示されていた。`CreateBuilder()` で失敗を確定させる） (2026-08-18) → [詳細](./T122-loadmodel-failure-not-reported.md)
 - [x] **T119** 「文字起こしにGPUを使用する」を OFF にしても GPU で動き続ける（`RuntimeLibraryOrder` による CPU 限定の再読み込みは、Whisper.net がネイティブランタイムをプロセス単位で 1 度しかロードしないため空振りしていた。`WhisperFactoryOptions.UseGpu` へ変更） (2026-08-18) → [詳細](./T119-gpu-toggle-ineffective.md)

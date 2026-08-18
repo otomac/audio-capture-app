@@ -1,16 +1,19 @@
 <#
 .SYNOPSIS
-    SessionStart フック — セッション開始時にハーネスの法と進行中タスクを注入する。
+    SessionStart フック — セッション開始時にハーネスの法・現在ブランチ・進行中タスクを注入する。
 
 .DESCRIPTION
     毎回 docs/harness/ を読みに行かなくても 4 つの法が効くように、
-    要約と「いま進行中のタスク」をセッション冒頭のコンテキストへ入れる。
+    要約と「現在のブランチ」「いま進行中のタスク」をセッション冒頭のコンテキストへ入れる。
 
 .NOTES
     フェイルオープン。例外時は何も注入せず exit 0。
+    出力は UTF-8 に固定する (既定のコンソール コードページだと日本語が壊れる)。
 #>
 
 $ErrorActionPreference = 'Stop'
+
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function Emit([string]$Context) {
     $payload = @{
@@ -43,6 +46,24 @@ try {
     $lines.Add('')
     $lines.Add('git の commit / push / add は都度の明示的な依頼があるときだけ実行する。')
     $lines.Add('')
+
+    # --- 横断ルール: ブランチ運用 ------------------------------------------
+    $branch = & git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null
+    if (-not [string]::IsNullOrWhiteSpace($branch)) {
+        $branch = $branch.Trim()
+        $lines.Add('### ブランチ運用')
+        $lines.Add("現在のブランチ: **$branch**")
+        if (@('develop', 'main', 'master') -contains $branch) {
+            $lines.Add('**保護ブランチ上にいる。** 新しいタスクに着手する前に develop を最新化し、作業ブランチを切ること。')
+            $lines.Add('  1. `git switch develop` → `git pull --ff-only origin develop`')
+            $lines.Add('  2. `git switch -c <feature|fix|maintenance>-<slug>` (1 タスク = 1 ブランチ。起票もこのブランチで)')
+            $lines.Add('このブランチのままでは .cs / .xaml の編集を guard-source-edit.ps1 が deny で止める。')
+        }
+        else {
+            $lines.Add('commit / push / PR 作成は品質ゲート G1/G2/G3 が全て緑になってから。PR の宛先は develop。')
+        }
+        $lines.Add('')
+    }
 
     # --- 進行中タスク ------------------------------------------------------
     $backlog = Join-Path $repoRoot 'docs/tasks/backlog.md'

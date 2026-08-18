@@ -103,6 +103,34 @@ BCL または最小限の自前実装を優先する。ライブラリが必要�
   文書は「確認すべき手がかり」であって権威ではない。食い違ったらコードが勝ち、ズレを記録する。
 - 検証していないことは「未検証」と明示する。「たぶん動く」は書かない。
 
+### ブランチ運用
+
+**新しいタスクに着手するときは、最新の `develop` から作業ブランチを切る。**
+`develop` / `main` の上で直接ソースを編集してはならない。
+
+1. **最新化** — `git switch develop` → `git pull --ff-only origin develop`
+2. **ブランチ作成** — `git switch -c <接頭辞>-<slug>`（下の接頭辞表に従う）
+3. **統合** — 品質ゲート G1/G2/G3 が **すべて緑になってから** `commit` → `push` → PR 作成（宛先は `develop`）
+
+| 接頭辞 | 使う場面 | 例 |
+|---|---|---|
+| `feature-` | 新機能・機能変更 | `feature-speaker-diarization` |
+| `fix-` | バグ修正 | `fix-gpu-toggle-and-model-load` |
+| `maintenance-` | ビルド設定・依存更新・ハーネス変更 | `maintenance-fix-warnings` |
+
+- **1 タスク = 1 ブランチ。** 複数タスクの変更を 1 ブランチに混ぜない。
+- 台帳（`docs/tasks/backlog.md`）への起票も、そのタスクのブランチ上で行う。PR の差分に含める。
+- **ゲートが緑になる前に commit しない。** 「途中まで push」もしない。
+- `main` へは `develop` からのみ入る。作業ブランチから `main` へ PR を出さない。
+
+**なぜ。** `develop` 以外を起点にすると、まだ統合されていない別タスクの変更を巻き込み、PR の差分が
+「そのタスクの変更」ではなくなってレビューできない。ゲート未通過のコミットを積むと、
+どの時点が緑だったのかが履歴から失われる。
+
+**強制。** `develop` / `main` / `master` 上で `.cs` / `.xaml` を編集しようとすると
+`guard-source-edit.ps1` が **deny** で止める。`git switch` / `commit` / `push` / `gh pr create` は
+`protect-commands.ps1` が都度確認する。
+
 ### 不可逆な操作は都度確認
 
 - `git commit` / `push` / `amend` / ブランチ切替 / PR 作成は、**その都度** 明示的な依頼があるときだけ行う。
