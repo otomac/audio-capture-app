@@ -1,6 +1,6 @@
 # 10 — 作業手順（Workflow）
 
-[00-ways-of-working.md](./00-ways-of-working.md) の 4 つの法を、実際の作業順序に落としたもの。
+[00-ways-of-working.md](./00-ways-of-working.md) の 4 つの法と横断ルールを、実際の作業順序に落としたもの。
 どんな変更もこの順序を通る。
 
 ---
@@ -9,7 +9,8 @@
 
 ```mermaid
 flowchart TD
-    A["依頼を受ける"] --> B["S1: タスク起票<br/>docs/tasks/backlog.md"]
+    A["依頼を受ける"] --> A0["S0: ブランチ準備<br/>develop を最新化 → 作業ブランチ作成"]
+    A0 --> B["S1: タスク起票<br/>docs/tasks/backlog.md"]
     B --> C{"アーキテクチャに<br/>影響するか?"}
     C -->|Yes| D["S2: ADR 起票<br/>docs/adr/"]
     C -->|No| E
@@ -22,9 +23,31 @@ flowchart TD
     I -->|不合格| J["原因を直す<br/>（無効化しない）"]
     J --> I
     I -->|合格| K["S7: 完了処理<br/>台帳を [x] に、実測値を記録"]
+    K --> L["S8: 統合<br/>commit → push → PR（宛先 develop）"]
 ```
 
 ---
+
+## S0 — ブランチ準備（横断ルール「ブランチ運用」）
+
+**ソースにも台帳にも触る前に、作業ブランチを用意する。**
+
+```powershell
+git switch develop
+git pull --ff-only origin develop
+git switch -c feature-<slug>      # 修正は fix- / ハーネス・ビルド設定は maintenance-
+```
+
+- 接頭辞は `feature-` / `fix-` / `maintenance-` の 3 種
+  （[00-ways-of-working.md #ブランチ運用](./00-ways-of-working.md#ブランチ運用)）。
+- `<slug>` は英小文字とハイフン。タスク ID ではなく **何をするか** を書く
+  （`fix-gpu-toggle-and-model-load`）。
+- **1 タスク = 1 ブランチ。** S1 の起票（台帳・タスク票）もこのブランチ上で行い、PR の差分に含める。
+- 途中で別の問題を見つけても、このブランチでは直さない（台帳に起票して次のブランチへ）。
+
+> **`develop` / `main` / `master` 上で `.cs` / `.xaml` を編集しようとすると
+> `guard-source-edit.ps1` が deny で止める。** これが「ブランチ運用」の強制点。
+> `git switch` は不可逆な操作なので、実行前に依頼者の承認を取る。
 
 ## S1 — タスク起票（法 1）
 
@@ -101,7 +124,23 @@ dotnet test   AudioCaptureApp.slnx -c Debug
    ```
 
 3. 仕様書を更新した場合、実装が計画とズレていないか読み直す。ズレていたら仕様書を実装に合わせる。
-4. コミット／プッシュは **明示的に依頼されたときだけ**。
+
+## S8 — 統合（commit / push / PR）
+
+**S6 のゲートが 3 つとも緑になってから** 行う。緑でないうちはコミットしない（「途中まで push」もしない）。
+
+```powershell
+git add <変更したファイル>
+git commit -m "T<NNN> <一言サマリ>"
+git push -u origin <ブランチ名>
+gh pr create --base develop --title "T<NNN> <一言サマリ>" --body "<目的・変更点・実測値>"
+```
+
+- **PR の宛先は `develop`。** `main` へは `develop` からのみ入る。
+- コミットメッセージの先頭はタスク ID（`T123 GPU が使えない環境での判定を修正`）。
+- PR 本文にはゲートの **実測値** を書く（「通った」ではなく「42 件成功 / 0 件失敗」）。
+- `git add` / `commit` / `push` / `gh pr create` は **その都度** 明示的に依頼されたときだけ実行する。
+  1 つの承認は別の操作の承認ではない（`protect-commands.ps1` が都度確認する）。
 
 ---
 
@@ -114,3 +153,6 @@ dotnet test   AudioCaptureApp.slnx -c Debug
 | 静的解析が既存コードの警告で落ちる | そのタスクの変更に起因する警告なら直す。既存の技術的負債なら [40-quality-gates.md](./40-quality-gates.md) の負債セクションを参照し、別タスクとして起票する。 |
 | テストが落ちるが、自分の変更とは無関係に見える | 「無関係に見える」で片付けない。原因を特定し、無関係だと確認できたら別タスクで起票して、その旨を報告する。 |
 | 作業中に別の問題を見つけた | 直さない。台帳に起票して、今のタスクを終える。 |
+| `develop` 上で作業を始めてしまった | 気づいた時点で止める。`git switch -c <接頭辞>-<slug>` で未コミットの変更ごと作業ブランチへ移す（承認を取ってから）。 |
+| 小さい変更なのでブランチを切るまでもない気がする | 切る。1 行の変更でも PR の差分が「そのタスクだけ」になることに価値がある。 |
+| ゲートが赤いが、区切りが良いので一度コミットしたい | しない。緑にしてからコミットする。どの時点が緑だったか分からなくなる。 |

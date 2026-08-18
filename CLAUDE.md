@@ -34,6 +34,18 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 - 定義と既知の穴: [docs/harness/40-quality-gates.md](docs/harness/40-quality-gates.md)
 - **実行結果を示さずに「通りました」と言わない。** 件数を書く（「42 件成功 / 0 件失敗」）。
 
+### ブランチ運用
+
+新しいタスクは **最新の `develop` から作業ブランチを切って** 始める。`develop` / `main` の上で直接
+ソースを編集しない（`guard-source-edit.ps1` が `.cs` / `.xaml` の編集を **deny** で止める）。
+
+1. `git switch develop` → `git pull --ff-only origin develop`
+2. `git switch -c <feature|fix|maintenance>-<slug>`（1 タスク = 1 ブランチ。起票もこのブランチで）
+3. **品質ゲート 3 つが全部緑になってから** `commit` → `push` → PR 作成（**宛先は `develop`**）
+
+詳細は [ブランチ運用](docs/harness/00-ways-of-working.md#ブランチ運用) と
+[10-workflow.md](docs/harness/10-workflow.md) の S0 / S8。
+
 ### 不可逆な操作
 
 `git commit` / `push` / `add` / ブランチ切替 / PR 作成は、**その都度**明示的に依頼されたときだけ行う。

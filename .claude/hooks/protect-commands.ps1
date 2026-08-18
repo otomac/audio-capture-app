@@ -13,9 +13,12 @@
 
 .NOTES
     フェイルオープン。例外時は exit 0 で素通しする。
+    入出力は UTF-8 に固定する (既定のコンソール コードページだと日本語が壊れる)。
 #>
 
 $ErrorActionPreference = 'Stop'
+
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 function Approve { exit 0 }
 
@@ -32,7 +35,9 @@ function Respond([string]$Decision, [string]$Reason) {
 }
 
 try {
-    $raw = [Console]::In.ReadToEnd()
+    $reader = [System.IO.StreamReader]::new(
+        [Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false))
+    $raw = $reader.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { Approve }
 
     # 注意: $input は PowerShell の予約自動変数のため使わないこと
@@ -88,11 +93,19 @@ try {
     }
     foreach ($p in $gitWrite.Keys) {
         if ($cmd -match $p) {
+            # 統合 (S8) に当たる操作には、品質ゲートの確認を添える
+            $gateNote = ''
+            if ($cmd -match '\bgit\s+(commit|push)\b' -or $cmd -match '\bgh\s+pr\s+create') {
+                $gateNote =
+                    "`n品質ゲート G1/G2/G3 が全て緑になっていることを確認してから統合すること" +
+                    " (緑でないうちはコミットしない)。PR の宛先は develop " +
+                    "(docs/harness/10-workflow.md S8)。"
+            }
             Respond 'ask' (
                 "git の書き込み操作は都度の明示的な承認が必要です: $($gitWrite[$p])`n" +
                 "コマンド: $cmd`n" +
                 "1 つの操作の承認は、別の操作 (commit → push 等) の承認を意味しません " +
-                "(docs/harness/00-ways-of-working.md)。")
+                "(docs/harness/00-ways-of-working.md)。" + $gateNote)
         }
     }
 
