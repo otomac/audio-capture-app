@@ -81,7 +81,7 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 画面に出す値・状態 | `MainViewModel` のプロパティ | `[ObservableProperty]` を使う |
 | ボタン等の操作 | `MainViewModel` のコマンド | `[RelayCommand]` を使う |
 | 外部リソースを触る処理 | 既存 Service のメソッド | 3 つのどれにも属さないなら新規 Service を検討（ADR 対象） |
-| 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `IsSilent` が既存の例） |
+| 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` が既存の例） |
 | データの入れ物 | `Models/` の POCO | ロジックを入れない |
 | 再利用する UI 部品 | `Controls/` のユーザーコントロール | 依存プロパティで ViewModel とバインドする |
 

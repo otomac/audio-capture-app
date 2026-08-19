@@ -16,6 +16,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly SettingsService _settingsService = new();
     private readonly DispatcherTimer _meterTimer;
     private readonly DispatcherTimer _clockTimer;
+
+    /// <summary>
+    /// 読み込んだ設定そのもの。SaveSettings はこのインスタンスを更新して保存する。
+    /// 毎回 new すると、UI を持たない設定項目（無音カットの調整値など）が
+    /// 保存のたびに既定値へ戻ってしまうため。
+    /// </summary>
+    private readonly AppSettings _settings;
+
     private DateTime _recordingStartTime;
     private bool _initializing;
     private bool _suppressMicMuteWriteBack;
@@ -46,11 +54,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"Whisperランタイム: {runtime}");
 
-        var settings = _settingsService.Load();
-        OutputFolder = settings.OutputFolder;
-        TranscriptionEnabled = settings.TranscriptionEnabled;
-        WhisperModelPath = settings.WhisperModelPath;
-        UseGpuForTranscription = settings.UseGpuForTranscription;
+        _settings = _settingsService.Load();
+        OutputFolder = _settings.OutputFolder;
+        TranscriptionEnabled = _settings.TranscriptionEnabled;
+        WhisperModelPath = _settings.WhisperModelPath;
+        UseGpuForTranscription = _settings.UseGpuForTranscription;
+        _transcriptionService.SilenceCut = new SilenceCutOptions(
+            _settings.SilenceRmsThreshold,
+            _settings.SilenceMergeGapSeconds,
+            _settings.VoicedPaddingSeconds);
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
         // ライブ用チェックボックスと独立して動作する）
@@ -62,16 +74,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RefreshDevicesInternal();
 
         // 前回のマイク選択を復元
-        if (settings.LastSelectedDeviceId != null)
+        if (_settings.LastSelectedDeviceId != null)
         {
-            SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedDeviceId);
+            SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == _settings.LastSelectedDeviceId);
         }
         SelectedCaptureDevice ??= CaptureDevices.FirstOrDefault(d => d.IsDefault) ?? CaptureDevices.FirstOrDefault();
 
         // 前回のスピーカー選択を復元
-        if (settings.LastSelectedLoopbackDeviceId != null)
+        if (_settings.LastSelectedLoopbackDeviceId != null)
         {
-            SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedLoopbackDeviceId);
+            SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == _settings.LastSelectedLoopbackDeviceId);
         }
 
         _initializing = false;
@@ -721,15 +733,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void SaveSettings()
     {
-        _settingsService.Save(new AppSettings
-        {
-            OutputFolder = OutputFolder,
-            LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId,
-            LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId,
-            TranscriptionEnabled = TranscriptionEnabled,
-            WhisperModelPath = WhisperModelPath,
-            UseGpuForTranscription = UseGpuForTranscription
-        });
+        // UI を持たない設定項目（無音カットの調整値など）を消さないため、
+        // 読み込んだインスタンスの UI 対応プロパティだけを更新して保存する。
+        _settings.OutputFolder = OutputFolder;
+        _settings.LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId;
+        _settings.LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId;
+        _settings.TranscriptionEnabled = TranscriptionEnabled;
+        _settings.WhisperModelPath = WhisperModelPath;
+        _settings.UseGpuForTranscription = UseGpuForTranscription;
+        _settingsService.Save(_settings);
     }
 
     public void Dispose()

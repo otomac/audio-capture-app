@@ -72,11 +72,12 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-CFG-01 | 保存先フォルダ・前回選択デバイス・文字起こし設定（有効化／モデルパス／GPU 使用有無）を JSON ファイルとして `%APPDATA%\AudioCaptureApp\settings.json` に永続化する | `SettingsService`, `AppSettings` |
+| REQ-CFG-01 | 保存先フォルダ・前回選択デバイス・文字起こし設定（有効化／モデルパス／GPU 使用有無）・無音区間分割の調整値（REQ-CFG-06）を JSON ファイルとして `%APPDATA%\AudioCaptureApp\settings.json` に永続化する | `SettingsService`, `AppSettings` |
 | REQ-CFG-02 | 設定ファイルが存在しない、または読み込みに失敗した場合は既定値の `AppSettings` にフォールバックする | `SettingsService.Load` |
 | REQ-CFG-03 | 保存先フォルダの既定値は `%USERPROFILE%\Documents\AudioCapture` とする | `AppSettings.OutputFolder` |
 | REQ-CFG-04 | Whisper モデルパスの既定値は `%APPDATA%\AudioCaptureApp\models\ggml-small.bin` とする | `AppSettings.WhisperModelPath` |
 | REQ-CFG-05 | 保存先フォルダ変更・録音開始・文字起こし設定変更などの操作直後に設定を都度保存する | `MainViewModel.SaveSettings` の各呼び出し箇所 |
+| REQ-CFG-06 | 無音区間分割（REQ-TRX-09）に関する 3 つの設定値 `SilenceRmsThreshold`（既定 0.01）・`SilenceMergeGapSeconds`（既定 2.0）・`VoicedPaddingSeconds`（既定 0.2）を保持する。UI は設けず、`settings.json` を直接手編集して変更する。`MainViewModel.SaveSettings` は保存のたびに `AppSettings` を新規生成するのではなく、読み込み済みのインスタンスを更新して保存する。これにより、UI を持たないこれら 3 つの値も、録音開始などの契機（REQ-CFG-05）で保存し直された際に消えずに残る。`settings.json` は手編集され得るため、読み込み時に各値をクランプする。非有限値（NaN・±∞）は既定値にフォールバックし、それ以外の値は許容範囲（`SilenceRmsThreshold` 0.0〜1.0・`SilenceMergeGapSeconds` 0.0〜20.0・`VoicedPaddingSeconds` 0.0〜5.0）にクランプする。設定キー名とオプション型のプロパティ名の対応は `SilenceRmsThreshold` → `SilenceCutOptions.RmsThreshold`、`SilenceMergeGapSeconds` → `MergeGapSeconds`、`VoicedPaddingSeconds` → `PaddingSeconds` である | `AppSettings`, `SilenceCutOptions`, `MainViewModel.SaveSettings` |
 
 ## 7. 文字起こし（共通基盤）
 
@@ -87,9 +88,10 @@
 | REQ-TRX-03 | GPU 実行と CPU 実行の切り替えは、ランタイムの読み込み直しではなく `WhisperFactoryOptions.UseGpu`（whisper.cpp の `whisper_context_params.use_gpu` に対応）で行う。GPU 版ランタイムを読み込んだままでも `UseGpu = false` なら計算は CPU で行われる | `TranscriptionService.LoadModel` |
 | REQ-TRX-04 | モデルパスが設定されていれば、ライブ文字起こしの ON/OFF に関わらず常にモデルをロードする（ファイル文字起こしはライブ設定と独立して動作するため） | `MainViewModel` コンストラクタ, `TryLoadWhisperModel` |
 | REQ-TRX-05 | 入力音声はダウンミックス（ステレオ→モノラル）・1 次 IIR ローパスフィルタ・線形リサンプリングにより 16kHz モノラルへ変換してから Whisper に渡す | `TranscriptionService.DownmixResampleAppend` |
-| REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行い、**すべての窓**の RMS が -40dB 相当（0.01）未満のときだけ無音とみなして Whisper に渡さない（ハルシネーション防止）。チャンク全体の平均で判定すると、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.IsSilent` |
+| REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行う。各窓の RMS が設定値（既定 -40dB 相当 = 0.01）**以上**であればその窓を「有声」と判定する。チャンク全体の平均で判定しないのは、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.SplitVoicedRegions` |
 | REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する | `TranscriptionService.ProcessChunk`, `ProcessFileChunkAsync` |
-| REQ-TRX-08 | Whisper へ渡すチャンクが 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
+| REQ-TRX-08 | Whisper へ渡す区間（チャンク全体を 1 区間とする場合を含む）が 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
+| REQ-TRX-09 | チャンクを Whisper に渡す前に有声区間へ分割し、無音区間そのものは渡さない（ハルシネーション防止）。<br>①100ms 窓ごとに RMS が閾値以上かで有声／無音を判定する（REQ-TRX-06）<br>②連続する有声窓をひとつの区間にまとめる<br>③区間同士の間にある無音（パディング前の生の隙間）が `MergeGapSeconds`（既定 2.0 秒）未満であれば区間を結合する<br>④パディング前の区間長（③で結合した場合は結合後の区間全体の長さ。内部に取り込んだ無音を含む）が 0.2 秒未満の区間は捨てる<br>⑤各区間の前後を `PaddingSeconds`（既定 0.2 秒）だけ広げ、チャンク範囲でクランプしたうえで、接触した区間はさらに結合する<br>⑥パディング後の区間の合計がチャンク全体の 90% 以上を占める場合は、分割してもほとんど無音を削減できず Whisper 呼び出し回数だけが増えるため、チャンク全体を単一区間として返す。<br>**④（最小長判定）は⑤（パディング）より必ず先に行う**。順序を逆にすると、0.1 秒（＝窓 1 つ分。窓量子化により、これが存在しうる最短の区間）のクリックノイズが前後 0.2 秒ずつ広がって 0.5 秒になり、0.2 秒のカットオフを生き残ってしまうため。<br>有声区間が 1 件も無い場合は Whisper を呼ばず、ファイルへの書き込みも行わない。<br>分割された各区間は個別に Whisper へ渡し、区間ごとに自身のチャンク内開始オフセットを保持することでタイムスタンプの整合性を保つ。渡す前に各区間へ REQ-TRX-08 の最小長パディングを適用する。<br>ライブ文字起こし・ファイル文字起こしの両方に適用する | `TranscriptionService.SplitVoicedRegions`, `ProcessChunk`, `ProcessFileChunkAsync` |
 
 ## 8. ライブ文字起こし（録音中）
 

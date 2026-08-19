@@ -112,6 +112,7 @@ classDiagram
         -Dictionary~AudioSourceType, SourceState~ _sources
         -Thread _thread
         +bool IsModelLoaded
+        +SilenceCutOptions SilenceCut
         +LoadModel(string, bool) ValueTuple~bool,bool~
         +RegisterSource(AudioSourceType, string, int, int)
         +StartSession(string, DateTime)
@@ -119,7 +120,7 @@ classDiagram
         +TranscribeFileAsync(string, IProgress, CancellationToken) Task~bool~
         +StopSession()
         +Dispose()
-        +IsSilent(float[]) bool
+        +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
         +BuildTranscriptPath(string) string
         event Error
         event SegmentTranscribed
@@ -130,6 +131,20 @@ classDiagram
         <<enumeration>>
         Mic
         Speaker
+    }
+
+    class VoicedRegion {
+        <<readonly record struct>>
+        +int Start
+        +int Length
+    }
+
+    class SilenceCutOptions {
+        <<sealed record>>
+        +double RmsThreshold
+        +double MergeGapSeconds
+        +double PaddingSeconds
+        +SilenceCutOptions Default$
     }
 
     class SettingsService {
@@ -159,6 +174,9 @@ classDiagram
         +bool TranscriptionEnabled
         +string WhisperModelPath
         +bool UseGpuForTranscription
+        +double SilenceRmsThreshold
+        +double SilenceMergeGapSeconds
+        +double VoicedPaddingSeconds
     }
 
     %% ==================== 関係 ====================
@@ -178,7 +196,9 @@ classDiagram
     AudioCaptureService "1" ..> "0..1" TranscriptionService : AddSamples / RegisterSource
 
     TranscriptionService "1" --> "*" AudioSourceType : キー
+    TranscriptionService "1" --> "1" SilenceCutOptions : SilenceCut
+    TranscriptionService ..> VoicedRegion : SplitVoicedRegions が返す
     SettingsService ..> AppSettings : 生成 / 読み書き
 ```
 
-> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`IsSilent` / `BuildTranscriptPath`（`TranscriptionService`）、`PeakToDb`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
+> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `BuildTranscriptPath`（`TranscriptionService`）、`PeakToDb`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。

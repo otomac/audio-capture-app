@@ -16,6 +16,9 @@ public class AppSettingsTests
         Assert.False(settings.TranscriptionEnabled);
         Assert.Contains("ggml-small.bin", settings.WhisperModelPath, StringComparison.Ordinal);
         Assert.True(settings.UseGpuForTranscription);
+        Assert.Equal(0.01, settings.SilenceRmsThreshold);
+        Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
+        Assert.Equal(0.2, settings.VoicedPaddingSeconds);
     }
 
     [Fact]
@@ -28,7 +31,10 @@ public class AppSettingsTests
             LastSelectedLoopbackDeviceId = "loopback-456",
             TranscriptionEnabled = true,
             WhisperModelPath = @"C:\models\test.bin",
-            UseGpuForTranscription = false
+            UseGpuForTranscription = false,
+            SilenceRmsThreshold = 0.02,
+            SilenceMergeGapSeconds = 1.5,
+            VoicedPaddingSeconds = 0.3
         };
 
         var json = JsonSerializer.Serialize(original);
@@ -41,6 +47,9 @@ public class AppSettingsTests
         Assert.Equal(original.TranscriptionEnabled, deserialized.TranscriptionEnabled);
         Assert.Equal(original.WhisperModelPath, deserialized.WhisperModelPath);
         Assert.Equal(original.UseGpuForTranscription, deserialized.UseGpuForTranscription);
+        Assert.Equal(original.SilenceRmsThreshold, deserialized.SilenceRmsThreshold);
+        Assert.Equal(original.SilenceMergeGapSeconds, deserialized.SilenceMergeGapSeconds);
+        Assert.Equal(original.VoicedPaddingSeconds, deserialized.VoicedPaddingSeconds);
     }
 
     [Fact]
@@ -54,5 +63,10 @@ public class AppSettingsTests
         Assert.Null(settings.LastSelectedDeviceId);
         Assert.False(settings.TranscriptionEnabled);
         Assert.True(settings.UseGpuForTranscription);
+        // 既存の settings.json には無音カットの 3 キーが無い。0.0 に束縛されると
+        // 無音カットが全ユーザーで無効化されるため、既定値が残ることを固定する。
+        Assert.Equal(0.01, settings.SilenceRmsThreshold);
+        Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
+        Assert.Equal(0.2, settings.VoicedPaddingSeconds);
     }
 }
