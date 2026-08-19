@@ -11,6 +11,51 @@ namespace AudioCaptureApp.Services;
 
 public enum AudioSourceType { Mic, Speaker }
 
+/// <summary>
+/// 無音カットの調整値。settings.json から与えられるため、
+/// 手書きされた不正値（負値・NaN・無限大・過大値）でも壊れないよう
+/// コンストラクターで必ずクランプする。
+/// </summary>
+public sealed record SilenceCutOptions
+{
+    private const double DefaultRmsThreshold = 0.01;
+    private const double DefaultMergeGapSeconds = 2.0;
+    private const double DefaultPaddingSeconds = 0.2;
+
+    /// <summary>余白の上限。1 チャンク（20 秒）に対して現実的な範囲に収める。</summary>
+    private const double MaxPaddingSeconds = 5.0;
+
+    /// <summary>結合幅の上限。チャンク長（20 秒）を超えても意味が無い。</summary>
+    private const double MaxMergeGapSeconds = 20.0;
+
+    public SilenceCutOptions(double rmsThreshold, double mergeGapSeconds, double paddingSeconds)
+    {
+        RmsThreshold = Sanitize(rmsThreshold, 0.0, 1.0, DefaultRmsThreshold);
+        MergeGapSeconds = Sanitize(mergeGapSeconds, 0.0, MaxMergeGapSeconds, DefaultMergeGapSeconds);
+        PaddingSeconds = Sanitize(paddingSeconds, 0.0, MaxPaddingSeconds, DefaultPaddingSeconds);
+    }
+
+    /// <summary>有声とみなす窓の RMS 下限。</summary>
+    public double RmsThreshold { get; }
+
+    /// <summary>これ未満の無音を挟む有声区間どうしは 1 区間に結合する。</summary>
+    public double MergeGapSeconds { get; }
+
+    /// <summary>各有声区間の前後に付ける余白。</summary>
+    public double PaddingSeconds { get; }
+
+    public static SilenceCutOptions Default { get; } =
+        new(DefaultRmsThreshold, DefaultMergeGapSeconds, DefaultPaddingSeconds);
+
+    // 非有限値は「設定が壊れている」とみなして既定値へ戻す。
+    // Math.Clamp は NaN をそのまま返すため、先に弾く必要がある。
+    private static double Sanitize(double value, double min, double max, double fallback)
+        => double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
+}
+
+/// <summary>チャンク内の有声区間。Start はチャンク先頭からのサンプル位置。</summary>
+public readonly record struct VoicedRegion(int Start, int Length);
+
 public class TranscriptionService : IDisposable
 {
     /// <summary>
@@ -76,11 +121,8 @@ public class TranscriptionService : IDisposable
     /// </remarks>
     internal static readonly TimeSpan GapThreshold = TimeSpan.FromMilliseconds(500);
 
-    /// <summary>無音判定の窓長（100ms）。チャンク全体の平均ではなく窓ごとに判定する。</summary>
+    /// <summary>有声・無音判定の窓長（100ms）。チャンク全体の平均ではなく窓ごとに判定する。</summary>
     internal const int SilenceWindowSamples = TargetRate / 10;
-
-    /// <summary>無音判定の RMS 閾値（-40dB 相当）。</summary>
-    internal const double SilenceRmsThreshold = 0.01;
 
     /// <summary>Whisper へ渡す最小サンプル数（1 秒）。これ未満は無音で埋めて伸ばす。</summary>
     internal const int MinWhisperSamples = TargetRate;
@@ -94,11 +136,40 @@ public class TranscriptionService : IDisposable
     /// </summary>
     internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// これ未満の区間は切り出さない（0.2 秒）。パディング**前**の区間長で判定する。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 比べる相手は「有声サンプルの合計」ではなく区間の**幅（span）**である。
+    /// 結合（<see cref="SplitVoicedRegions"/> の手順 3）を通った区間は、
+    /// 内部に吸収した無音も幅に含む。したがって、短い過渡音が複数まとまった区間は
+    /// 中身がほとんど無音でもこの足切りを生き残る（既知の限界）。
+    /// </para>
+    /// <para>
+    /// 値は <see cref="MinTailSamples"/> と同じだが根拠が別（あちらはセッション終端の
+    /// 残バッファをどこまで処理するかの閾値）なので、定数は共有せず別に持つ。
+    /// </para>
+    /// </remarks>
+    internal const int MinVoicedSamples = TargetRate / 5;
+
+    /// <summary>
+    /// 有声区間の合計がチャンクのこの割合以上なら分割しない。
+    /// 落とせる無音がわずかなのに Whisper の呼び出し回数だけ増えるのを防ぐ。
+    /// </summary>
+    internal const double NoSplitVoicedRatio = 0.9;
+
+    /// <summary>パディング後に接触・交差した区間を畳むための閾値（隙間 0 以下）。</summary>
+    private const int TouchingGap = 1;
+
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
     public event Action<string>? RuntimeInfo;
 
     public bool IsModelLoaded => _factory != null;
+
+    /// <summary>無音カットの調整値。MainViewModel が設定から反映する。</summary>
+    public SilenceCutOptions SilenceCut { get; set; } = SilenceCutOptions.Default;
 
     // GPU優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）
     private static readonly List<RuntimeLibrary> GpuPreferredOrder = new()
@@ -390,6 +461,20 @@ public class TranscriptionService : IDisposable
     }
 
     /// <summary>
+    /// 有声区間の開始時刻を、チャンク先頭の時刻と区間のチャンク内オフセットから求める。
+    /// </summary>
+    /// <param name="chunkStart">チャンク先頭の時刻（ライブは経過時間、ファイルはファイル先頭からの位置）。</param>
+    /// <param name="regionStartSamples">チャンク先頭から区間先頭までのサンプル数（16kHz）。</param>
+    /// <remarks>
+    /// ライブとファイルの両方から呼ぶ。ここを間違えると
+    /// 「無音を切ったぶんだけ時刻がずれる」という T112 で最も起こしやすい壊れ方をするため、
+    /// 式を 2 箇所に散らさず 1 つにまとめてテストで固定している。
+    /// <see cref="PadToMinimum"/> は末尾にしか無音を足さないので、この時刻には影響しない。
+    /// </remarks>
+    internal static TimeSpan RegionStart(TimeSpan chunkStart, int regionStartSamples)
+        => chunkStart + TimeSpan.FromSeconds((double)regionStartSamples / TargetRate);
+
+    /// <summary>
     /// Whisper が極端に短い入力を扱えないため、<paramref name="minSamples"/> 未満なら
     /// 末尾を無音で埋めて伸ばす。先頭は動かさないのでセグメント時刻は影響を受けない。
     /// </summary>
@@ -570,27 +655,29 @@ public class TranscriptionService : IDisposable
         WhisperProcessor processor, float[] samples, TimeSpan chunkOffset,
         string label, StreamWriter writer, CancellationToken ct)
     {
-        if (IsSilent(samples))
+        foreach (var region in SplitVoicedRegions(samples, SilenceCut))
         {
-            return;
-        }
+            ct.ThrowIfCancellationRequested();
 
-        samples = PadToMinimum(samples, MinWhisperSamples);
+            var regionOffset = RegionStart(chunkOffset, region.Start);
+            var regionSamples = PadToMinimum(SliceRegion(samples, region), MinWhisperSamples);
 
-        await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
-        {
-            var text = segment.Text?.Trim();
-            if (string.IsNullOrEmpty(text))
+            await foreach (var segment in processor.ProcessAsync(regionSamples, ct).ConfigureAwait(false))
             {
-                continue;
-            }
+                var text = segment.Text?.Trim();
+                if (string.IsNullOrEmpty(text))
+                {
+                    continue;
+                }
 
-            var startTime = chunkOffset + segment.Start;
-            var endTime = chunkOffset + segment.End;
-            var line = $"[{startTime:hh\\:mm\\:ss} - {endTime:hh\\:mm\\:ss}] [{label}] {text}";
-            await writer.WriteLineAsync(line).ConfigureAwait(false);
-            SegmentTranscribed?.Invoke(line);
+                var startTime = regionOffset + segment.Start;
+                var endTime = regionOffset + segment.End;
+                var line = $"[{startTime:hh\\:mm\\:ss} - {endTime:hh\\:mm\\:ss}] [{label}] {text}";
+                await writer.WriteLineAsync(line).ConfigureAwait(false);
+                SegmentTranscribed?.Invoke(line);
+            }
         }
+
         await writer.FlushAsync(ct).ConfigureAwait(false);
     }
 
@@ -629,7 +716,8 @@ public class TranscriptionService : IDisposable
                 while (_isRunning && !token.IsCancellationRequested
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
                 {
-                    ProcessChunk(chunk, state, token);
+                    // 通常運転中。停止要求が来たらチャンクの途中（区間の切れ目）で抜ける。
+                    ProcessChunk(chunk, state, interruptible: true, token);
                 }
             }
         }
@@ -643,7 +731,9 @@ public class TranscriptionService : IDisposable
                 while (!token.IsCancellationRequested
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
                 {
-                    ProcessChunk(chunk, state, token);
+                    // 排出処理。ここは _isRunning が false の状態で走るため打ち切ってはならない。
+                    // 打ち切りたいときは token をキャンセルする（StopSession の 2 段目）。
+                    ProcessChunk(chunk, state, interruptible: false, token);
                 }
 
                 if (token.IsCancellationRequested)
@@ -665,7 +755,7 @@ public class TranscriptionService : IDisposable
 
                 if (tail != null)
                 {
-                    ProcessChunk(tail, state, token);
+                    ProcessChunk(tail, state, interruptible: false, token);
                 }
             }
         }
@@ -740,32 +830,99 @@ public class TranscriptionService : IDisposable
         return 0;
     }
 
-    internal static bool IsSilent(float[] samples)
-        => IsSilent(samples, SilenceRmsThreshold, SilenceWindowSamples);
-
     /// <summary>
-    /// チャンクを短い窓に区切り、**どの窓も** 閾値未満のときだけ無音と判定する。
+    /// チャンクを有声区間へ分割する。無音だけのチャンクなら空を返す。
     /// </summary>
+    /// <param name="samples">16kHz モノラルのチャンク。</param>
+    /// <param name="options">閾値・結合幅・余白の調整値。</param>
+    /// <returns>
+    /// チャンク先頭からのサンプル位置で表した有声区間。時刻順に並び、互いに重ならない。
+    /// </returns>
     /// <remarks>
-    /// チャンク全体の平均 RMS で判定すると、長い無音に埋もれた短い発話がならされて
-    /// 無音扱いになり、チャンクごと Whisper に渡らなくなる。
-    /// 発話区間 d 秒（その区間の RMS が r）を 20 秒チャンクで平均すると
-    /// r * sqrt(d / 20) まで下がるため、通常会話（r ≒ 0.02〜0.05）では
-    /// 発話が 2〜3 秒以下だと丸ごと捨てられていた。
-    /// 窓ごとの判定なら希釈されないため、短い発話・小音量の発話を取りこぼさない。
+    /// <para>
+    /// 空チャンクは手順に入る前に弾き、そのまま空を返す。
+    /// 以降の手順は REQ-TRX-09 の ①〜⑥ と 1 対 1 で対応し、順序に意味がある。
+    /// </para>
+    /// <list type="number">
+    /// <item>100ms 窓ごとに RMS を判定し、閾値以上の窓を有声とみなす（REQ-TRX-06）。</item>
+    /// <item>連続する有声窓をひとつの区間にまとめる。</item>
+    /// <item>区間どうしの隙間（パディング前の生の間隔）が
+    /// <see cref="SilenceCutOptions.MergeGapSeconds"/> 未満なら結合する
+    /// （息継ぎ程度の間で発話を切らないため）。</item>
+    /// <item>パディング前の区間幅が <see cref="MinVoicedSamples"/> 未満の区間を捨てる（足切り）。</item>
+    /// <item>残った区間の前後に <see cref="SilenceCutOptions.PaddingSeconds"/> の余白を付けて
+    /// チャンクの範囲内へクランプし（語頭・語尾を削らないため）、
+    /// 余白で接触・交差した区間をさらに結合する。</item>
+    /// <item>パディング後の区間の合計がチャンクの <see cref="NoSplitVoicedRatio"/> 以上なら、
+    /// 分割しても削れる無音がわずかなので、チャンク全体を 1 区間として返す。</item>
+    /// </list>
+    /// <para>
+    /// 足切り（④）はパディング（⑤）より<b>先</b>に行う。順序を逆にすると、0.1 秒
+    /// （＝窓 1 つ分。窓量子化により、これが存在しうる最短の区間）のクリック音が
+    /// 前後 0.2 秒ずつ広がって 0.5 秒になり、0.2 秒の足切りを素通りしてしまう。
+    /// 落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。
+    /// </para>
+    /// <para>
+    /// 有声判定をチャンク全体の平均ではなく窓ごとに行うのは、長い無音に埋もれた
+    /// 短い発話が平均でならされて無音扱いになるため（T116）。20 秒チャンク中 d 秒の
+    /// 発話は全体平均で sqrt(d / 20) 倍まで薄まり、通常会話の音量でも
+    /// 2〜3 秒以下だと丸ごと捨てられていた。
+    /// </para>
     /// </remarks>
-    internal static bool IsSilent(float[] samples, double threshold, int windowSamples)
+    internal static IReadOnlyList<VoicedRegion> SplitVoicedRegions(
+        float[] samples, SilenceCutOptions options)
     {
         if (samples.Length == 0)
         {
-            return true;
+            return [];
         }
 
-        int window = windowSamples > 0 ? windowSamples : samples.Length;
-
-        for (int start = 0; start < samples.Length; start += window)
+        var regions = CollectVoicedWindows(samples, options.RmsThreshold);
+        if (regions.Count == 0)
         {
-            int length = Math.Min(window, samples.Length - start);
+            return [];
+        }
+
+        MergeCloseRegions(regions, SecondsToSamples(options.MergeGapSeconds));
+        regions.RemoveAll(r => r.Length < MinVoicedSamples);
+        if (regions.Count == 0)
+        {
+            return [];
+        }
+
+        ApplyPadding(regions, SecondsToSamples(options.PaddingSeconds), samples.Length);
+
+        // パディングで区間が接触・交差しうるので、隙間ゼロのものを畳む。
+        MergeCloseRegions(regions, TouchingGap);
+
+        long voicedTotal = 0;
+        foreach (var region in regions)
+        {
+            voicedTotal += region.Length;
+        }
+
+        return voicedTotal >= samples.Length * NoSplitVoicedRatio
+            ? [new VoicedRegion(0, samples.Length)]
+            : regions;
+    }
+
+    /// <summary>区間を切り出す。チャンク全体と一致するならコピーせず元配列を返す。</summary>
+    private static float[] SliceRegion(float[] samples, VoicedRegion region)
+        => region.Start == 0 && region.Length == samples.Length
+            ? samples
+            : samples[region.Start..(region.Start + region.Length)];
+
+    private static int SecondsToSamples(double seconds) => (int)(seconds * TargetRate);
+
+    /// <summary>100ms 窓ごとに RMS を判定し、連続する有声窓を 1 区間にまとめる。</summary>
+    private static List<VoicedRegion> CollectVoicedWindows(float[] samples, double threshold)
+    {
+        var regions = new List<VoicedRegion>();
+        int runStart = -1;
+
+        for (int start = 0; start < samples.Length; start += SilenceWindowSamples)
+        {
+            int length = Math.Min(SilenceWindowSamples, samples.Length - start);
 
             double sumSquares = 0;
             for (int i = start; i < start + length; i++)
@@ -775,51 +932,114 @@ public class TranscriptionService : IDisposable
 
             if (Math.Sqrt(sumSquares / length) >= threshold)
             {
-                return false;
+                if (runStart < 0)
+                {
+                    runStart = start;
+                }
+            }
+            else if (runStart >= 0)
+            {
+                regions.Add(new VoicedRegion(runStart, start - runStart));
+                runStart = -1;
             }
         }
 
-        return true;
+        if (runStart >= 0)
+        {
+            regions.Add(new VoicedRegion(runStart, samples.Length - runStart));
+        }
+
+        return regions;
     }
 
-    private void ProcessChunk(PendingChunk chunk, SourceState state, CancellationToken token)
+    /// <summary>
+    /// 隙間が <paramref name="gapThreshold"/> <b>未満</b>の隣接区間を結合する（境界は結合しない）。
+    /// </summary>
+    /// <remarks>
+    /// 結合後の終端は両区間の終端の大きい方を採る。呼び出し時点で区間が整列・非交差で
+    /// あれば後ろの区間の終端と一致するが、その前提を暗黙に置かない。
+    /// </remarks>
+    private static void MergeCloseRegions(List<VoicedRegion> regions, int gapThreshold)
+    {
+        for (int i = regions.Count - 1; i > 0; i--)
+        {
+            var previous = regions[i - 1];
+            int gap = regions[i].Start - (previous.Start + previous.Length);
+            if (gap < gapThreshold)
+            {
+                int end = Math.Max(
+                    previous.Start + previous.Length,
+                    regions[i].Start + regions[i].Length);
+                regions[i - 1] = new VoicedRegion(previous.Start, end - previous.Start);
+                regions.RemoveAt(i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 区間ループを次の区間へ進めてよいかを判定する。
+    /// キャンセル済みなら常に打ち切り、停止要求は <paramref name="interruptible"/> のときだけ見る。
+    /// </summary>
+    internal static bool ShouldStopRegionLoop(bool cancelled, bool isRunning, bool interruptible)
+        => cancelled || (interruptible && !isRunning);
+
+    private bool ShouldStopRegionLoop(bool interruptible, CancellationToken token)
+        => ShouldStopRegionLoop(token.IsCancellationRequested, _isRunning, interruptible);
+
+    /// <summary>各区間の前後に余白を付け、チャンクの範囲内へクランプする。</summary>
+    private static void ApplyPadding(List<VoicedRegion> regions, int padding, int totalSamples)
+    {
+        for (int i = 0; i < regions.Count; i++)
+        {
+            int start = Math.Max(0, regions[i].Start - padding);
+            int end = Math.Min(totalSamples, regions[i].Start + regions[i].Length + padding);
+            regions[i] = new VoicedRegion(start, end - start);
+        }
+    }
+
+    /// <summary>
+    /// チャンクを有声区間に分けて Whisper に掛ける。
+    /// </summary>
+    /// <param name="interruptible">
+    /// <c>true</c> なら停止要求（<see cref="_isRunning"/> が false）で区間ループを打ち切る。
+    /// 通常のポーリングループからは <c>true</c>、停止時の残バッファ排出からは <c>false</c> を渡す。
+    /// </param>
+    /// <remarks>
+    /// T112 で 1 チャンクが複数区間に分かれるようになり、1 チャンクあたりの Whisper 呼び出しが
+    /// 最大 10 回になった（区間は 2.0 秒以上離れ、各区間は 0.2 秒以上あるため 20 秒に 10 個が上限）。
+    /// 停止要求が来たあとも全区間を回し切ると <see cref="StopSession"/> の猶予 30 秒を超え、
+    /// T117 が直した「停止がタイムアウトして WhisperProcessor の破棄を見送る」経路に戻ってしまう。
+    /// <para>
+    /// ここで <see cref="_isRunning"/> を無条件に見てはいけない。停止時の排出処理は
+    /// <see cref="_isRunning"/> が false の状態で走るため、無条件に見ると
+    /// 排出すべき最後のチャンクを 1 区間も処理せずに捨ててしまう（T120 の書き出し遅延対策が無効になる）。
+    /// だから呼び出し元ごとに <paramref name="interruptible"/> で切り替える。
+    /// </para>
+    /// </remarks>
+    private void ProcessChunk(
+        PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
     {
         try
         {
-            // 無音チャンクはWhisperに渡さない（ハルシネーション防止）。
-            // 時刻はチャンク自身が持つため、破棄しても後続の時刻はずれない。
-            if (IsSilent(chunk.Samples))
+            // 無音は Whisper に渡さない（ハルシネーション防止）。
+            // 時刻は区間自身が持つため、無音を捨てても後続の時刻はずれない。
+            var regions = SplitVoicedRegions(chunk.Samples, SilenceCut);
+            if (regions.Count == 0)
             {
                 return;
             }
 
-            var samples = PadToMinimum(chunk.Samples, MinWhisperSamples);
             var results = new List<string>();
-
-            // ProcessAsync を同期的に消費
-            var asyncEnum = state.Processor!.ProcessAsync(samples, token);
-            var enumerator = asyncEnum.GetAsyncEnumerator(token);
-            try
+            foreach (var region in regions)
             {
-                while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())
+                if (ShouldStopRegionLoop(interruptible, token))
                 {
-                    var segment = enumerator.Current;
-                    var text = segment.Text?.Trim();
-                    if (string.IsNullOrEmpty(text))
-                    {
-                        continue;
-                    }
-
-                    var startTime = _sessionStartTime + chunk.StartElapsed + segment.Start;
-                    var endTime = _sessionStartTime + chunk.StartElapsed + segment.End;
-                    var line = $"[{startTime:HH:mm:ss} - {endTime:HH:mm:ss}] [{state.Label}] {text}";
-                    results.Add(line);
-                    SegmentTranscribed?.Invoke(line);
+                    break;
                 }
-            }
-            finally
-            {
-                enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+                var regionStart = RegionStart(chunk.StartElapsed, region.Start);
+                var samples = PadToMinimum(SliceRegion(chunk.Samples, region), MinWhisperSamples);
+                TranscribeRegion(state, samples, regionStart, results, token);
             }
 
             if (results.Count > 0)
@@ -839,6 +1059,41 @@ public class TranscriptionService : IDisposable
             Error?.Invoke($"文字起こしエラー: {ex.Message}");
         }
 #pragma warning restore CA1031
+    }
+
+    /// <summary>
+    /// 有声区間 1 つを Whisper に掛け、整形した行を results へ積む。
+    /// regionStart は区間先頭の、セッション開始からの経過時間。
+    /// </summary>
+    private void TranscribeRegion(
+        SourceState state, float[] samples, TimeSpan regionStart,
+        List<string> results, CancellationToken token)
+    {
+        // ProcessAsync を同期的に消費
+        var asyncEnum = state.Processor!.ProcessAsync(samples, token);
+        var enumerator = asyncEnum.GetAsyncEnumerator(token);
+        try
+        {
+            while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())
+            {
+                var segment = enumerator.Current;
+                var text = segment.Text?.Trim();
+                if (string.IsNullOrEmpty(text))
+                {
+                    continue;
+                }
+
+                var startTime = _sessionStartTime + regionStart + segment.Start;
+                var endTime = _sessionStartTime + regionStart + segment.End;
+                var line = $"[{startTime:HH:mm:ss} - {endTime:HH:mm:ss}] [{state.Label}] {text}";
+                results.Add(line);
+                SegmentTranscribed?.Invoke(line);
+            }
+        }
+        finally
+        {
+            enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
     }
 
     /// <summary>停止要求後、ワーカーが残りを処理して自然に抜けるのを待つ時間。</summary>

@@ -99,13 +99,13 @@ sequenceDiagram
 
     Note over TS: 別スレッド (WhisperTranscription) が1秒毎にポーリング
     TS->>TS: Pcm16kBuffer が20秒分(閾値)に到達したソースを検出
-    TS->>TS: IsSilent() 判定
-    alt 無音でない
-        TS->>TS: WhisperProcessor.ProcessAsync(chunk)
-        TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形
-        TS->>TS: File.AppendAllLines(outputPath, results)
-        TS-->>VM: SegmentTranscribed イベント（必要に応じ購読側でUI通知）
+    TS->>TS: SplitVoicedRegions() で有声区間に分割
+    loop 有声区間ごと
+        TS->>TS: WhisperProcessor.ProcessAsync(region)
+        TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
+        TS-->>VM: SegmentTranscribed イベント（セグメント毎、必要に応じ購読側でUI通知）
     end
+    TS->>TS: File.AppendAllLines(outputPath, results)（results が空でなければ）
 ```
 
 ## 4. 録音停止
@@ -198,8 +198,13 @@ sequenceDiagram
 
     TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
     loop 閾値(20秒)到達毎
-        TS->>TS: IsSilent() 判定 → WhisperProcessor.ProcessAsync()
-        TS->>TS: {入力ファイル名}.transcript.txt に追記
+        TS->>TS: SplitVoicedRegions() で有声区間に分割
+        loop 有声区間ごと
+            TS->>TS: WhisperProcessor.ProcessAsync(region)
+            TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（chunkOffset + 区間先頭のオフセット を基準に加算）
+            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
+        end
+        TS->>TS: FlushAsync()
         TS-->>VM: progress.Report(processed, total)
         VM->>VM: FileTranscriptionStatus 更新
     end

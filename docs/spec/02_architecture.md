@@ -75,7 +75,7 @@ graph TB
 - **ViewModel層**（`ViewModels/MainViewModel`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
 - **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SettingsService`）
-  NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `IsSilent` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
+  NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
 - **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`）
   可変・不変データを保持する POCO。ロジックを持たない。
 

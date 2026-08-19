@@ -5,142 +5,6 @@ namespace AudioCaptureApp.Tests;
 
 public class TranscriptionServiceTests
 {
-    [Fact]
-    public void IsSilent_AllZeros_ReturnsTrue()
-    {
-        var samples = new float[1000];
-
-        Assert.True(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_VerySmallSignal_ReturnsTrue()
-    {
-        // RMS < 0.01 threshold
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.005f; // constant 0.005 → RMS = 0.005 < 0.01
-
-        Assert.True(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_LoudSignal_ReturnsFalse()
-    {
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.5f; // RMS = 0.5 >> 0.01
-
-        Assert.False(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_SingleLargeSampleAmongSilence_DependsOnRms()
-    {
-        // 1000 samples, only 1 is loud (0.5)
-        // RMS = sqrt(0.25 / 1000) = sqrt(0.00025) ≈ 0.0158 > 0.01 → not silent
-        var samples = new float[1000];
-        samples[500] = 0.5f;
-
-        Assert.False(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_BelowThresholdRms_ReturnsTrue()
-    {
-        // Choose amplitude so RMS is just below 0.01
-        // For constant signal: RMS = amplitude, so amplitude < 0.01
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.009f;
-
-        Assert.True(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_AboveThreshold_ReturnsFalse()
-    {
-        // RMS clearly above 0.01
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.02f;
-
-        Assert.False(TranscriptionService.IsSilent(samples));
-    }
-
-    // --- 窓ごとの無音判定 (T116) ---
-    //
-    // チャンク全体の平均 RMS で判定すると、長い無音に埋もれた短い発話がならされて
-    // 無音扱いになり、チャンクごと Whisper に渡らなくなっていた。
-
-    /// <summary>16kHz で <paramref name="seconds"/> 秒ぶんのサンプル数。</summary>
-    private static int Samples(double seconds) => (int)(16000 * seconds);
-
-    /// <summary>全体 <paramref name="totalSec"/> 秒の無音の中に、振幅 <paramref name="amplitude"/> の
-    /// 発話が <paramref name="speechSec"/> 秒だけ入っている信号を作る。</summary>
-    private static float[] SpeechInSilence(double totalSec, double speechSec, float amplitude)
-    {
-        var samples = new float[Samples(totalSec)];
-        int speechStart = (samples.Length - Samples(speechSec)) / 2;
-        for (int i = speechStart; i < speechStart + Samples(speechSec); i++)
-        {
-            samples[i] = amplitude;
-        }
-        return samples;
-    }
-
-    [Fact]
-    public void IsSilent_ShortSpeechInLongSilence_ReturnsFalse()
-    {
-        // 20秒中1.5秒だけ RMS 0.03 の発話。報告された「短い発話が出力されない」の再現条件。
-        var samples = SpeechInSilence(totalSec: 20, speechSec: 1.5, amplitude: 0.03f);
-
-        Assert.False(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_ShortSpeechInLongSilence_WholeChunkAveragingWouldDropIt()
-    {
-        // 修正前の挙動（窓＝チャンク全体）では無音と判定され捨てられていたことを固定する。
-        // 全体 RMS = 0.03 * sqrt(1.5 / 20) ≒ 0.0082 < 0.01
-        var samples = SpeechInSilence(totalSec: 20, speechSec: 1.5, amplitude: 0.03f);
-
-        Assert.True(TranscriptionService.IsSilent(
-            samples,
-            TranscriptionService.SilenceRmsThreshold,
-            windowSamples: samples.Length));
-    }
-
-    [Fact]
-    public void IsSilent_VeryShortSpeechInLongSilence_ReturnsFalse()
-    {
-        // 窓長 (100ms) より短い 50ms の発話でも、窓の半分を占めれば
-        // RMS = 0.05 * sqrt(0.5) ≒ 0.035 で閾値を超える
-        var samples = SpeechInSilence(totalSec: 20, speechSec: 0.05, amplitude: 0.05f);
-
-        Assert.False(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_LongQuietRoomNoise_StillReturnsTrue()
-    {
-        // 窓ごと判定にしてもハルシネーション抑止は維持されること。
-        // 暗騒音相当（RMS 0.003）はどの窓でも閾値を下回る。
-        var samples = new float[Samples(20)];
-        for (int i = 0; i < samples.Length; i++)
-        {
-            samples[i] = (i % 2 == 0) ? 0.003f : -0.003f;
-        }
-
-        Assert.True(TranscriptionService.IsSilent(samples));
-    }
-
-    [Fact]
-    public void IsSilent_EmptyChunk_ReturnsTrue()
-    {
-        Assert.True(TranscriptionService.IsSilent([]));
-    }
-
     // --- ギャップ検出 (T116) ---
 
     [Fact]
@@ -487,5 +351,382 @@ public class TranscriptionServiceTests
     public void IsGpuInUse_Unknown_ReturnsFalse()
     {
         Assert.False(TranscriptionService.IsGpuInUse(null));
+    }
+
+    // --- 無音カットの調整値 (T112) ---
+    //
+    // settings.json から手書きで与えられうるため、不正値でも既定値へ倒れることを保証する。
+
+    [Fact]
+    public void SilenceCutOptions_Defaults_MatchSpec()
+    {
+        var options = SilenceCutOptions.Default;
+
+        Assert.Equal(0.01, options.RmsThreshold);
+        Assert.Equal(2.0, options.MergeGapSeconds);
+        Assert.Equal(0.2, options.PaddingSeconds);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SilenceCutOptions_NonFiniteValues_FallBackToDefaults(double bad)
+    {
+        var options = new SilenceCutOptions(bad, bad, bad);
+
+        Assert.Equal(SilenceCutOptions.Default.RmsThreshold, options.RmsThreshold);
+        Assert.Equal(SilenceCutOptions.Default.MergeGapSeconds, options.MergeGapSeconds);
+        Assert.Equal(SilenceCutOptions.Default.PaddingSeconds, options.PaddingSeconds);
+    }
+
+    [Fact]
+    public void SilenceCutOptions_OutOfRangeValues_AreClamped()
+    {
+        var options = new SilenceCutOptions(-1.0, -5.0, 999.0);
+
+        Assert.Equal(0.0, options.RmsThreshold);
+        Assert.Equal(0.0, options.MergeGapSeconds);
+        Assert.Equal(5.0, options.PaddingSeconds);
+    }
+
+    // --- チャンクの有声区間分割 (T112) ---
+    //
+    // 20 秒チャンクのうち発話が 0.5 秒だけでも、従来は 20 秒まるごと Whisper に渡っていた。
+    // 無音部分に「ご視聴ありがとうございました」等のハルシネーションが載るため、
+    // 有声区間だけを切り出してそれぞれ個別に渡す。
+
+    [Fact]
+    public void SplitVoicedRegions_AllSilent_ReturnsEmpty()
+    {
+        var samples = new float[16000 * 20];
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_EmptyChunk_ReturnsEmpty()
+    {
+        var regions = TranscriptionService.SplitVoicedRegions([], SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    /// <summary>16kHz の無音バッファを作り、指定範囲だけ有声（振幅 0.5）にする。</summary>
+    private static float[] MakeSamples(int totalSamples, params (int Start, int Length)[] voiced)
+    {
+        var samples = new float[totalSamples];
+        foreach (var (start, length) in voiced)
+        {
+            for (int i = start; i < start + length; i++)
+            {
+                samples[i] = 0.5f;
+            }
+        }
+        return samples;
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_SilenceWithShortNoise_ReturnsOnlyNoiseRegion()
+    {
+        var samples = MakeSamples(16000 * 20, (160000, 8000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        var region = Assert.Single(regions);
+        Assert.Equal(160000 - 3200, region.Start);
+        Assert.Equal(8000 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_TwoUtterancesWithLongGap_ReturnsTwoRegions()
+    {
+        var samples = MakeSamples(16000 * 10, (0, 16000), (80000, 16000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+        Assert.Equal(0, regions[0].Start);
+        Assert.Equal(16000 + 3200, regions[0].Length);
+        Assert.Equal(80000 - 3200, regions[1].Start);
+        Assert.Equal(16000 + 6400, regions[1].Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ShortGap_MergesIntoOneRegion()
+    {
+        var samples = MakeSamples(16000 * 10, (0, 16000), (32000, 16000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(48000 + 3200, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_AddsPaddingAroundVoiced()
+    {
+        var samples = MakeSamples(16000 * 10, (80000, 16000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(80000 - 3200, region.Start);
+        Assert.Equal(16000 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_PaddingClampedToChunkBounds()
+    {
+        var samples = MakeSamples(16000, (0, 8000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.True(region.Start + region.Length <= samples.Length);
+        Assert.Equal(8000 + 3200, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_MostlyVoiced_ReturnsSingleFullRegion()
+    {
+        // 0〜9 秒と 11〜20 秒に発話（間隔ちょうど 2 秒なので結合されない）。
+        // 余白込みの有声合計は 92% ≧ 90% → 分割せずチャンク全体を 1 区間で返す
+        var samples = MakeSamples(16000 * 20, (0, 144000), (176000, 144000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ContinuousSpeech_ReturnsSingleFullRegion()
+    {
+        var samples = MakeSamples(16000 * 20, (0, 16000 * 20));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ClickShorterThanMinimum_IsDropped()
+    {
+        // 100ms の単発クリック音（< 0.2 秒）→ 捨てる。
+        // 足切りをパディングより後に行うと 0.1 + 0.4 = 0.5 秒になり素通りするため、
+        // このテストが「足切りが先」という順序を守る。
+        var samples = MakeSamples(16000 * 10, (48000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_VoicedAtMinimumLength_IsKept()
+    {
+        var samples = MakeSamples(16000 * 10, (48000, 3200));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(3200 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_QuietRoomNoise_ReturnsEmpty()
+    {
+        var samples = new float[16000 * 20];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            samples[i] = 0.005f;
+        }
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ZeroThreshold_TreatsEverythingAsVoiced()
+    {
+        var samples = new float[16000 * 10];
+        var options = new SilenceCutOptions(0.0, 2.0, 0.2);
+
+        var region = Assert.Single(TranscriptionService.SplitVoicedRegions(samples, options));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    // --- 停止時に区間ループを打ち切る条件 (T127) ---
+    // 通常運転中は停止要求で打ち切る。停止時の排出処理では打ち切ってはならない
+    // （_isRunning は既に false なので、打ち切ると最後のチャンクを 1 区間も処理せず捨てる）。
+
+    [Fact]
+    public void ShouldStopRegionLoop_Cancelled_AlwaysStops()
+    {
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: true, isRunning: true, interruptible: true));
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: true, isRunning: false, interruptible: false));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_Running_Continues()
+    {
+        Assert.False(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: true, interruptible: true));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_StopRequestedWhileInterruptible_Stops()
+    {
+        // 通常運転中に停止要求 → 残りの区間は処理しない（T117 の 30 秒猶予を超えないため）
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: false, interruptible: true));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_DrainingAfterStop_DoesNotStop()
+    {
+        // 排出処理は _isRunning == false で走る。ここで打ち切ると
+        // 最後のチャンクが 1 区間も書き出されずに失われる（T120 の対策が無効になる）。
+        Assert.False(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: false, interruptible: false));
+    }
+
+    // --- 区間の開始時刻の合成 (T112) ---
+    // ライブ・ファイルの両経路が RegionStart を通る。ここが壊れると
+    // 「無音を切ったぶんだけ記録時刻がずれる」という最も気付きにくい壊れ方をする。
+
+    [Fact]
+    public void RegionStart_AtChunkHead_EqualsChunkStart()
+    {
+        var chunkStart = TimeSpan.FromSeconds(30);
+
+        Assert.Equal(chunkStart, TranscriptionService.RegionStart(chunkStart, 0));
+    }
+
+    [Fact]
+    public void RegionStart_AddsRegionOffsetInSeconds()
+    {
+        // チャンク先頭が 30 秒地点、区間はその 10 秒後（160000 サンプル）から始まる
+        var chunkStart = TimeSpan.FromSeconds(30);
+
+        var start = TranscriptionService.RegionStart(chunkStart, 160000);
+
+        Assert.Equal(TimeSpan.FromSeconds(40), start);
+    }
+
+    [Fact]
+    public void RegionStart_UsesSampleCountNotRegionLength()
+    {
+        // 16000 サンプル = 1 秒。区間長ではなく「チャンク先頭からの位置」で換算する
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            TranscriptionService.RegionStart(TimeSpan.Zero, 16000));
+    }
+
+    [Fact]
+    public void RegionStart_SubSecondOffset_IsNotTruncated()
+    {
+        // パディング分の 3200 サンプル = 0.2 秒。整数秒に丸めると語頭がずれる
+        var start = TranscriptionService.RegionStart(TimeSpan.Zero, 3200);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(200), start);
+    }
+
+    // --- 境界値と既知の限界の固定 (T112 / ミューテーション検査で判明した穴) ---
+
+    [Fact]
+    public void SplitVoicedRegions_GapExactlyMergeThreshold_DoesNotMerge()
+    {
+        // 間隔がちょうど 2.0 秒。判定は「未満なら結合」なので結合されない。
+        // この境界を固定しないと `<` を `<=` に変えても全テストが通ってしまう。
+        var samples = MakeSamples(16000 * 20, (0, 32000), (64000, 32000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+        Assert.Equal(0, regions[0].Start);
+        Assert.Equal(32000 + 3200, regions[0].Length);
+        Assert.Equal(64000 - 3200, regions[1].Start);
+        Assert.Equal(32000 + 6400, regions[1].Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_PaddingCausesOverlap_MergesAfterPadding()
+    {
+        // 結合幅 0.1 秒 < 余白 2×0.5 秒。パディング後に区間が接触するため、
+        // 後段の再結合が無いと重なった区間を 2 つ返し、同じ音声を 2 回 Whisper に渡してしまう。
+        var samples = MakeSamples(16000 * 10, (0, 16000), (32000, 16000));
+        var options = new SilenceCutOptions(0.01, 0.1, 0.5);
+
+        var region = Assert.Single(TranscriptionService.SplitVoicedRegions(samples, options));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(56000, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ChunkLengthNotMultipleOfWindow_CoversToEnd()
+    {
+        // チャンク長が窓長の倍数でない場合、末尾の短い窓を落とさず区間が末尾まで届く。
+        var samples = MakeSamples(16000 * 10 + 800, (152000, 8800));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(152000 - 3200, region.Start);
+        Assert.Equal(samples.Length, region.Start + region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_JustBelowNoSplitRatio_ReturnsSeparateRegions()
+    {
+        // 余白込みの有声合計が 88%（< 90%）→ 分割したまま返す。
+        var samples = MakeSamples(16000 * 20, (0, 136000), (168000, 136000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ExactlyAtNoSplitRatio_ReturnsSingleFullRegion()
+    {
+        // 余白込みの有声合計がちょうど 90% → 判定は「以上」なのでチャンク全体を返す。
+        var samples = MakeSamples(16000 * 20, (0, 139200), (171200, 139200));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_TwoClicksWithinMergeGap_AreMergedAndKept()
+    {
+        // 既知の限界の固定。0.1 秒のクリック音 2 つが結合幅 2.0 秒の中にあると、
+        // 1 つの区間（大半は無音）にまとまり、span が 0.2 秒以上なので生き残る。
+        // 有声密度で切る改善は別タスクで扱う。ここは挙動を可視化するための記録テスト。
+        var samples = MakeSamples(16000 * 20, (48000, 1600), (64000, 1600));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(24000, region.Length);
     }
 }
