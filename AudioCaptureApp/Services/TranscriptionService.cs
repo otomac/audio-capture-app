@@ -137,14 +137,14 @@ public class TranscriptionService : IDisposable
     internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
 
     /// <summary>
-    /// これ未満の区間は切り出さない（0.2 秒）。パディング**前**の区間長で判定する。
+    /// 「実体のある発話」とみなす有声ランの最小長（0.2 秒）。パディング**前**の長さで判定する。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 比べる相手は「有声サンプルの合計」ではなく区間の**幅（span）**である。
-    /// 結合（<see cref="SplitVoicedRegions"/> の手順 3）を通った区間は、
-    /// 内部に吸収した無音も幅に含む。したがって、短い過渡音が複数まとまった区間は
-    /// 中身がほとんど無音でもこの足切りを生き残る（既知の限界）。
+    /// 比べる相手は結合後の区間の**幅（span）**ではなく、結合する**前**の
+    /// 連続有声窓のかたまり（ラン）の長さである。結合（<see cref="SplitVoicedRegions"/> の手順 3）
+    /// を通った区間は内部に吸収した無音も幅に含むため、幅で判定すると 0.1 秒の物音が
+    /// 結合幅の中に 2 つあるだけで足切りを素通りしてしまう（T125）。
     /// </para>
     /// <para>
     /// 値は <see cref="MinTailSamples"/> と同じだが根拠が別（あちらはセッション終端の
@@ -849,7 +849,8 @@ public class TranscriptionService : IDisposable
     /// <item>区間どうしの隙間（パディング前の生の間隔）が
     /// <see cref="SilenceCutOptions.MergeGapSeconds"/> 未満なら結合する
     /// （息継ぎ程度の間で発話を切らないため）。</item>
-    /// <item>パディング前の区間幅が <see cref="MinVoicedSamples"/> 未満の区間を捨てる（足切り）。</item>
+    /// <item><see cref="MinVoicedSamples"/> 以上続くラン（結合前のかたまり）を
+    /// 1 本も含まない区間を捨てる（足切り）。</item>
     /// <item>残った区間の前後に <see cref="SilenceCutOptions.PaddingSeconds"/> の余白を付けて
     /// チャンクの範囲内へクランプし（語頭・語尾を削らないため）、
     /// 余白で接触・交差した区間をさらに結合する。</item>
@@ -858,9 +859,16 @@ public class TranscriptionService : IDisposable
     /// </list>
     /// <para>
     /// 足切り（④）はパディング（⑤）より<b>先</b>に行う。順序を逆にすると、0.1 秒
-    /// （＝窓 1 つ分。窓量子化により、これが存在しうる最短の区間）のクリック音が
-    /// 前後 0.2 秒ずつ広がって 0.5 秒になり、0.2 秒の足切りを素通りしてしまう。
+    /// （＝窓 1 つ分。窓量子化により、これが存在しうる最短のラン）のクリック音が
+    /// 前後 0.2 秒ずつ広がって 0.5 秒のランになり、0.2 秒の足切りを素通りしてしまう。
     /// 落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。
+    /// </para>
+    /// <para>
+    /// 足切り（④）が結合後の区間幅ではなく<b>結合前のラン</b>を見るのも同じ理由による。
+    /// 結合後の幅には内部に吸収した無音が含まれるため、0.1 秒の物音が結合幅の中に
+    /// 2 つあるだけで 0.2 秒を超え、中身の大半が無音の区間が生き残っていた（T125）。
+    /// 結合（③）は「実体のある発話へ、その前後の短い断片を貼り付ける」ための手順であり、
+    /// 貼り付ける先の発話が無いなら結合結果に残すべきものは無い。
     /// </para>
     /// <para>
     /// 有声判定をチャンク全体の平均ではなく窓ごとに行うのは、長い無音に埋もれた
@@ -877,14 +885,16 @@ public class TranscriptionService : IDisposable
             return [];
         }
 
-        var regions = CollectVoicedWindows(samples, options.RmsThreshold);
-        if (regions.Count == 0)
+        // ラン（結合前の連続有声窓）は足切り（④）の判定に要るので、結合で潰さず取っておく。
+        var runs = CollectVoicedWindows(samples, options.RmsThreshold);
+        if (runs.Count == 0)
         {
             return [];
         }
 
+        var regions = new List<VoicedRegion>(runs);
         MergeCloseRegions(regions, SecondsToSamples(options.MergeGapSeconds));
-        regions.RemoveAll(r => r.Length < MinVoicedSamples);
+        regions.RemoveAll(region => !ContainsSustainedRun(runs, region));
         if (regions.Count == 0)
         {
             return [];
@@ -904,6 +914,30 @@ public class TranscriptionService : IDisposable
         return voicedTotal >= samples.Length * NoSplitVoicedRatio
             ? [new VoicedRegion(0, samples.Length)]
             : regions;
+    }
+
+    /// <summary>
+    /// <paramref name="region"/> が <see cref="MinVoicedSamples"/> 以上続くランを含むか。
+    /// </summary>
+    /// <param name="runs">結合前のラン。時刻順・非交差であること。</param>
+    /// <remarks>
+    /// 結合（<see cref="MergeCloseRegions"/>）は隣接する区間の和集合しか作らないため、
+    /// 結合後の区間は必ず「連続するいくつかのランとその隙間」になる。
+    /// ランが区間の境界をまたいで半分だけ入ることはないので、包含判定で足りる。
+    /// </remarks>
+    private static bool ContainsSustainedRun(List<VoicedRegion> runs, VoicedRegion region)
+    {
+        int regionEnd = region.Start + region.Length;
+        foreach (var run in runs)
+        {
+            if (run.Length >= MinVoicedSamples
+                && run.Start >= region.Start
+                && run.Start + run.Length <= regionEnd)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>区間を切り出す。チャンク全体と一致するならコピーせず元配列を返す。</summary>
