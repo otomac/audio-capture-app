@@ -121,6 +121,7 @@ classDiagram
         +StopSession()
         +Dispose()
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
+        +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
         event Error
         event SegmentTranscribed

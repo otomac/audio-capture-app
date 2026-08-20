@@ -729,4 +729,58 @@ public class TranscriptionServiceTests
         Assert.Equal(48000 - 3200, region.Start);
         Assert.Equal(24000, region.Length);
     }
+
+    // --- 確定済みの行の書き出し (T126) ---
+    //
+    // ProcessChunk はキャンセル・例外で区間ループを抜けたあとも、確定済みの行を
+    // 必ずここへ通す。ヘルパーが例外を投げるとワーカースレッドごと落ちるため、
+    // 失敗は戻り値で返す契約になっている。
+
+    [Fact]
+    public void AppendTranscriptLines_EmptyList_DoesNotCreateFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, []);
+
+        Assert.Null(failure);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_AppendsToExistingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+        File.WriteAllLines(path, ["[00:00:01 - 00:00:02] [マイク] 既存の行"]);
+        try
+        {
+            var failure = TranscriptionService.AppendTranscriptLines(
+                path, ["[00:00:03 - 00:00:04] [マイク] 追加の行"]);
+
+            Assert.Null(failure);
+            Assert.Equal(
+                [
+                    "[00:00:01 - 00:00:02] [マイク] 既存の行",
+                    "[00:00:03 - 00:00:04] [マイク] 追加の行"
+                ],
+                File.ReadAllLines(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_MissingDirectory_ReturnsError()
+    {
+        // 書き出しに失敗しても例外を投げない（投げると TranscriptionLoop まで抜けて
+        // ワーカースレッドが死に、以降のチャンクが全部落ちる）
+        var path = Path.Combine(
+            Path.GetTempPath(), $"acapp-nodir-{Guid.NewGuid():N}", "live.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, ["行"]);
+
+        Assert.NotNull(failure);
+    }
 }

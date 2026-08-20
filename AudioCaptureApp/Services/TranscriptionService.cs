@@ -1019,18 +1019,15 @@ public class TranscriptionService : IDisposable
     private void ProcessChunk(
         PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
     {
+        // results は try の外で宣言する。中で宣言すると、Whisper がキャンセル例外を投げたときに
+        // 確定済みの区間の行まで一緒に捨てられる。それらの行は TranscribeRegion の中で
+        // SegmentTranscribed により画面へ出た後なので、捨てると画面と .txt が食い違う（T126）。
+        var results = new List<string>();
         try
         {
             // 無音は Whisper に渡さない（ハルシネーション防止）。
             // 時刻は区間自身が持つため、無音を捨てても後続の時刻はずれない。
-            var regions = SplitVoicedRegions(chunk.Samples, SilenceCut);
-            if (regions.Count == 0)
-            {
-                return;
-            }
-
-            var results = new List<string>();
-            foreach (var region in regions)
+            foreach (var region in SplitVoicedRegions(chunk.Samples, SilenceCut))
             {
                 if (ShouldStopRegionLoop(interruptible, token))
                 {
@@ -1040,11 +1037,6 @@ public class TranscriptionService : IDisposable
                 var regionStart = RegionStart(chunk.StartElapsed, region.Start);
                 var samples = PadToMinimum(SliceRegion(chunk.Samples, region), MinWhisperSamples);
                 TranscribeRegion(state, samples, regionStart, results, token);
-            }
-
-            if (results.Count > 0)
-            {
-                File.AppendAllLines(_outputPath, results, Encoding.UTF8);
             }
         }
         catch (OperationCanceledException)
@@ -1059,6 +1051,42 @@ public class TranscriptionService : IDisposable
             Error?.Invoke($"文字起こしエラー: {ex.Message}");
         }
 #pragma warning restore CA1031
+
+        // 追記は catch の後ろに置く（finally ではない）。finally に置くと、ここで起きた
+        // IOException が上の catch 節を通らずに TranscriptionLoop まで抜け、
+        // ワーカースレッドごと落ちる。
+        var failure = AppendTranscriptLines(_outputPath, results);
+        if (failure != null)
+        {
+            Error?.Invoke($"文字起こし結果の書き出しに失敗しました: {failure}");
+        }
+    }
+
+    /// <summary>
+    /// 確定した行をテキストファイルへ追記する（REQ-TRX-07）。
+    /// </summary>
+    /// <returns>成功したら <c>null</c>。失敗したらユーザー向けの理由。</returns>
+    /// <remarks>
+    /// 失敗を例外ではなく戻り値で返すのは、呼び出し元（<see cref="ProcessChunk"/>）が
+    /// キャンセル・Whisper の例外を処理し終えた **後** にここを通るためである。
+    /// 例外で返すとワーカースレッドの境界を越えてしまう。
+    /// </remarks>
+    internal static string? AppendTranscriptLines(string outputPath, IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            File.AppendAllLines(outputPath, lines, Encoding.UTF8);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex.Message;
+        }
     }
 
     /// <summary>

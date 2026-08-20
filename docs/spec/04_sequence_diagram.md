@@ -105,7 +105,8 @@ sequenceDiagram
         TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
         TS-->>VM: SegmentTranscribed イベント（セグメント毎、必要に応じ購読側でUI通知）
     end
-    TS->>TS: File.AppendAllLines(outputPath, results)（results が空でなければ）
+    Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る
+    TS->>TS: AppendTranscriptLines(outputPath, results)（results が空でなければ）
 ```
 
 ## 4. 録音停止
