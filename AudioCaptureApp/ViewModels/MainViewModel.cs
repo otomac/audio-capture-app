@@ -53,6 +53,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transcriptionService.RuntimeInfo += runtime =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"Whisperランタイム: {runtime}");
+        // 文字起こしワーカースレッドから発火するため、必ず Dispatcher を経由する（NFR-01）
+        _transcriptionService.SegmentTranscribed += line =>
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+                AppendLiveTranscriptLine(LiveTranscriptLines, line, MaxLiveTranscriptLines));
 
         _settings = _settingsService.Load();
         OutputFolder = _settings.OutputFolder;
@@ -249,6 +253,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
         => total <= TimeSpan.Zero
             ? 0.0
             : Math.Clamp(processed / total * 100.0, 0.0, 100.0);
+
+    // --- 文字起こし表示ウィンドウ (T114) ---
+
+    /// <summary>
+    /// 文字起こし表示ウィンドウを開いてほしい、という要求（REQ-LIVEVIEW-01）。
+    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
+    /// </summary>
+    public event Action? LiveTranscriptRequested;
+
+    /// <summary>
+    /// 表示する文字起こし行。ライブ・ファイルの両方を含む（REQ-LIVEVIEW-03）。
+    /// </summary>
+    public ObservableCollection<string> LiveTranscriptLines { get; } = new();
+
+    /// <summary>
+    /// 表示行数の上限（REQ-LIVEVIEW-04）。長時間録音でコレクションが無制限に伸びるのを防ぐ。
+    /// 捨てられるのは表示だけで、テキストファイルには全行が残る。
+    /// </summary>
+    internal const int MaxLiveTranscriptLines = 1000;
+
+    /// <summary>
+    /// 行を末尾へ追加し、上限を超えた分を<b>先頭から</b>捨てる（REQ-LIVEVIEW-04）。
+    /// 末尾から捨てると最新の行が消えるため、向きを間違えないこと。
+    /// </summary>
+    internal static void AppendLiveTranscriptLine(IList<string> lines, string line, int maxLines)
+    {
+        lines.Add(line);
+        while (lines.Count > maxLines)
+        {
+            lines.RemoveAt(0);
+        }
+    }
+
+    [RelayCommand]
+    private void ShowLiveTranscript() => LiveTranscriptRequested?.Invoke();
 
     private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
     private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));

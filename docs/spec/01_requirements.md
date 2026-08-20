@@ -152,6 +152,20 @@
 > 録音の保存先は `OutputFolder`、ファイル文字起こしの出力先は入力ファイルと同じフォルダであり
 > 両者は一致しない。そのため「設定上の保存先」ではなく **「直近の成果物の場所」** を開く。
 
+## 12. 文字起こし表示ウィンドウ
+
+| ID | 要件 | 実装箇所 |
+|---|---|---|
+| REQ-LIVEVIEW-01 | 文字起こしされた行を時刻順に表示するサブウィンドウを開ける。導線は文字起こし設定グループのヘッダーに置き、録音中・処理中でも押せる（見るための窓のため無効化しない） | `MainWindow.xaml`, `MainViewModel.ShowLiveTranscript`, `LiveTranscriptWindow` |
+| REQ-LIVEVIEW-02 | 初期サイズは 320x240 でリサイズ可能。文字サイズは 9pt とする | `LiveTranscriptWindow.xaml` |
+| REQ-LIVEVIEW-03 | 表示するのは `TranscriptionService.SegmentTranscribed` が通知した行であり、**ライブ文字起こしとファイル文字起こしの両方**を含む。行頭のラベル（`[マイク]` / `[スピーカー]` / `[ファイル]`）で区別できる。イベントは文字起こしワーカースレッドから発火するため、`Dispatcher.BeginInvoke` を経由して UI スレッドで追加する（NFR-01） | `MainViewModel` コンストラクタ, `LiveTranscriptLines` |
+| REQ-LIVEVIEW-04 | 表示行数の上限は 1,000 行とし、超えたら**古い行から**捨てる。捨てられるのは表示のみで、テキストファイルには全行が残る | `MainViewModel.AppendLiveTranscriptLine`, `MaxLiveTranscriptLines` |
+| REQ-LIVEVIEW-05 | 録音を停止してもウィンドウは閉じない。表示中の行も消さない（録音開始時にも消さない）。メインウィンドウを閉じたとき（プロセス終了）に一緒に閉じる。後者は `Owner` に `MainWindow` を設定することで WPF の既定動作として実現し、追随処理を自前で書かない | `MainWindow.xaml.cs` (`Owner = this`) |
+| REQ-LIVEVIEW-06 | ウィンドウは同時に 1 つだけ開く。既に開いている状態で操作された場合は手前に出す（`Activate`）。新しい行が届いたら最新行までスクロールする | `MainWindow.xaml.cs`, `LiveTranscriptWindow.xaml.cs` |
+
+> ウィンドウは自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを
+> `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。
+
 ## 非機能要件
 
 | ID | 要件 | 補足 |

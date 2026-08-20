@@ -1,0 +1,28 @@
+<Window x:Class="AudioCaptureApp.LiveTranscriptWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="文字起こし"
+        Width="320" Height="240"
+        MinWidth="200" MinHeight="120"
+        ResizeMode="CanResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#FFE0E0E0">
+
+    <!--
+        REQ-LIVEVIEW-02: 9pt。WPF の FontSize は既定で DIP（1/96 インチ）だが、
+        単位付きで書けるので意図がそのまま読める形にしている。
+    -->
+    <ListBox x:Name="LinesList" Margin="8" FontSize="9pt"
+             ItemsSource="{Binding LiveTranscriptLines}"
+             HorizontalContentAlignment="Stretch"
+             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemTemplate>
+            <DataTemplate>
+                <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+            </DataTemplate>
+        </ListBox.ItemTemplate>
+    </ListBox>
+</Window>

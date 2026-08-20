@@ -203,4 +203,39 @@ public class MainViewModelTests
 
         Assert.Equal(100.0, value);
     }
+
+    // --- 文字起こし表示ウィンドウの行バッファ (T114 / REQ-LIVEVIEW-04) ---
+
+    [Fact]
+    public void AppendLiveTranscriptLine_AddsToEnd()
+    {
+        var lines = new List<string>();
+
+        MainViewModel.AppendLiveTranscriptLine(lines, "1 行目", maxLines: 10);
+        MainViewModel.AppendLiveTranscriptLine(lines, "2 行目", maxLines: 10);
+
+        Assert.Equal(["1 行目", "2 行目"], lines);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLine_OverLimit_DropsOldest()
+    {
+        // 捨てるのは先頭（古い行）。末尾から捨てると最新の行が消えて用を成さない
+        var lines = new List<string> { "古", "中", "新" };
+
+        MainViewModel.AppendLiveTranscriptLine(lines, "最新", maxLines: 3);
+
+        Assert.Equal(["中", "新", "最新"], lines);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLine_AtLimit_KeepsAll()
+    {
+        // ちょうど上限。境界で 1 行余計に捨てないことを固定する
+        var lines = new List<string> { "1", "2" };
+
+        MainViewModel.AppendLiveTranscriptLine(lines, "3", maxLines: 3);
+
+        Assert.Equal(["1", "2", "3"], lines);
+    }
 }

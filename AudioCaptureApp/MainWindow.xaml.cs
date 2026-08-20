@@ -8,6 +8,7 @@ namespace AudioCaptureApp;
 public partial class MainWindow : Window, IDisposable
 {
     private readonly MainViewModel _viewModel = new();
+    private LiveTranscriptWindow? _liveTranscriptWindow;
     private bool _disposed;
 
     public MainWindow()
@@ -16,6 +17,7 @@ public partial class MainWindow : Window, IDisposable
         DataContext = _viewModel;
         // 補助ウィンドウの生成は View 層の責務（ADR-0002）。ViewModel はイベントで要求だけを上げる。
         _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
+        _viewModel.LiveTranscriptRequested += ShowLiveTranscript;
         Closed += (_, _) => Dispose();
     }
 
@@ -26,6 +28,23 @@ public partial class MainWindow : Window, IDisposable
     {
         var dialog = new FileTranscriptionOptionsWindow(_viewModel) { Owner = this };
         dialog.ShowDialog();
+    }
+
+    /// <summary>
+    /// 文字起こし表示ウィンドウを開く。同時に 1 つだけ持ち、既に開いていれば手前に出す
+    /// （REQ-LIVEVIEW-06）。<c>Owner</c> の設定により、メインウィンドウを閉じると
+    /// 一緒に閉じる（REQ-LIVEVIEW-05）。
+    /// </summary>
+    private void ShowLiveTranscript()
+    {
+        if (_liveTranscriptWindow == null)
+        {
+            _liveTranscriptWindow = new LiveTranscriptWindow(_viewModel) { Owner = this };
+            _liveTranscriptWindow.Closed += (_, _) => _liveTranscriptWindow = null;
+            _liveTranscriptWindow.Show();
+        }
+
+        _liveTranscriptWindow.Activate();
     }
 
     private static bool TryGetSingleDroppedFile(DragEventArgs e, out string filePath)
