@@ -26,3 +26,4 @@
 | # | 決定 | 状態 | 日付 |
 |---|---|---|---|
 | [0001](./0001-baseline-architecture.md) | ベースラインアーキテクチャ（3 層 / DI なし / 抽象化なし） | 承認済み | 2026-08-14 |
+| [0002](./0002-secondary-windows-share-mainviewmodel.md) | 補助ウィンドウは `MainViewModel` を共有する View として追加する | 承認済み | 2026-08-20 |

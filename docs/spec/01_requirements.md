@@ -115,14 +115,19 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選び文字起こしできる | `MainViewModel.TranscribeFromFileAsync` |
-| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルをウィンドウ上の文字起こしグループへドラッグ＆ドロップして文字起こしを開始できる | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFileAsync` |
-| REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFileAsync`, `IsSupportedAudioExtension` |
+| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選べる。選択後は直ちに処理を始めず、オプション指定ダイアログ（REQ-TRX-FILE-09）を表示する | `MainViewModel.TranscribeFromFile` |
+| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルをウィンドウ上の文字起こしグループへドラッグ＆ドロップして文字起こしを開始できる。この経路でもオプション指定ダイアログ（REQ-TRX-FILE-09）を経由する | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFile` |
+| REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFile`, `IsSupportedAudioExtension` |
 | REQ-TRX-FILE-04 | ドラッグオーバー中、ドロップ可能かどうかに応じてオーバーレイ表示を切り替える | `MainWindow.xaml.cs` (`DragOver`/`DragLeave`) |
 | REQ-TRX-FILE-05 | 出力ファイルは `{入力ファイル名}.transcript.txt`（録音時生成の `.txt` と名前衝突しない命名）として同フォルダに保存する | `TranscriptionService.BuildTranscriptPath` |
-| REQ-TRX-FILE-06 | 処理中は進捗（処理済み時間／総時間）を UI に表示する | `MainViewModel.RunFileTranscriptionAsync`, `IProgress<(TimeSpan,TimeSpan)>` |
-| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
+| REQ-TRX-FILE-06 | 処理中は進捗（処理済み時間／総時間）を UI に表示する。オプション指定ダイアログ（REQ-TRX-FILE-09）には百分率の進捗バーも表示する。進捗は常に**ファイル先頭を基準**とし、REQ-TRX-FILE-10 の開始時刻を足さない（残り時間の目安であって時刻ではないため） | `MainViewModel.RunFileTranscriptionAsync`, `FileTranscriptionProgressFor`, `IProgress<(TimeSpan,TimeSpan)>` |
+| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない。「中止」はオプション指定ダイアログとメインウィンドウの双方に置く（REQ-TRX-FILE-13 でダイアログを閉じても処理は続くため） | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
 | REQ-TRX-FILE-08 | ファイル文字起こし処理は UI スレッドをブロックしないようバックグラウンドスレッドで実行する | `MainViewModel.RunFileTranscriptionAsync` (`Task.Run`) |
+| REQ-TRX-FILE-09 | ファイルが決まったら（選択・ドロップのいずれでも）、処理を始める前に**モーダルダイアログ**を表示する。ダイアログは対象ファイル名・開始時刻の入力欄（REQ-TRX-FILE-10）・進捗表示・「開始」「キャンセル」／処理中は「中止」を持つ。ダイアログは `MainViewModel` を `DataContext` として共有する状態レスな View であり、生成・表示は `MainWindow` が行う（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)） | `FileTranscriptionOptionsWindow`, `MainWindow.xaml.cs`, `MainViewModel.FileTranscriptionRequested` |
+| REQ-TRX-FILE-10 | 開始時刻を `h:mm` または `hh:mm`（24 時間表記）で指定できる。指定した時刻を出力行のタイムスタンプの起点にする。**空欄なら未指定**とし、従来どおりファイル先頭を `00:00:00` として出力する。書式が不正な間は「開始」を無効化し、理由をダイアログ上に表示する。開始時刻とファイル長の合計が 24 時間を超えた場合は翌日の時刻として折り返す（`23:00` 開始の 2 時間後は `01:00:00`） | `MainViewModel.TryParseStartTime`, `TranscriptionService.TranscribeFileAsync` (`startOffset`) |
+| REQ-TRX-FILE-11 | ダイアログの「開始」を押すと、同じダイアログが進捗表示へ切り替わる（別ウィンドウを開き直さない） | `FileTranscriptionOptionsWindow.xaml` (`IsTranscribingFile` の DataTrigger) |
+| REQ-TRX-FILE-12 | 処理が終わったら（完了・失敗・中止のいずれでも）ダイアログを自動的に閉じる。結果はメインウィンドウのステータスバーに表示する | `FileTranscriptionOptionsWindow.xaml.cs` |
+| REQ-TRX-FILE-13 | 処理中にダイアログを閉じても処理は継続する。メインウィンドウ側の進捗表示と「中止」ボタンが引き継ぐ | `MainWindow.xaml` (既存の進捗行), `MainViewModel.IsTranscribingFile` |
 
 ## 10. GPU 使用切り替え
 

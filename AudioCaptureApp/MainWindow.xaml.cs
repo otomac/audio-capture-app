@@ -14,7 +14,18 @@ public partial class MainWindow : Window, IDisposable
     {
         InitializeComponent();
         DataContext = _viewModel;
+        // 補助ウィンドウの生成は View 層の責務（ADR-0002）。ViewModel はイベントで要求だけを上げる。
+        _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
         Closed += (_, _) => Dispose();
+    }
+
+    /// <summary>
+    /// ファイル文字起こしのオプション指定ダイアログをモーダルで開く（REQ-TRX-FILE-09）。
+    /// </summary>
+    private void ShowFileTranscriptionOptions()
+    {
+        var dialog = new FileTranscriptionOptionsWindow(_viewModel) { Owner = this };
+        dialog.ShowDialog();
     }
 
     private static bool TryGetSingleDroppedFile(DragEventArgs e, out string filePath)
@@ -45,7 +56,7 @@ public partial class MainWindow : Window, IDisposable
         DropOverlay.Visibility = Visibility.Collapsed;
     }
 
-    private async void TranscriptionGroup_Drop(object sender, DragEventArgs e)
+    private void TranscriptionGroup_Drop(object sender, DragEventArgs e)
     {
         DropOverlay.Visibility = Visibility.Collapsed;
         if (!TryGetSingleDroppedFile(e, out var filePath))
@@ -53,7 +64,8 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
         e.Handled = true;
-        await _viewModel.TranscribeDroppedFileAsync(filePath);
+        // 処理はすぐには始まらない。オプション指定ダイアログの表示要求が上がるだけ（REQ-TRX-FILE-02）。
+        _viewModel.TranscribeDroppedFile(filePath);
     }
 
     public void Dispose()

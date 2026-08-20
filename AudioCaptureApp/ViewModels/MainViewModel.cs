@@ -182,6 +182,74 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private CancellationTokenSource? _fileTranscriptionCts;
 
+    // --- ファイル文字起こしのオプション指定ダイアログ (T113) ---
+    //
+    // ダイアログは MainViewModel を DataContext として共有する状態レスな View である
+    // （ADR-0002）。ここに置くのはダイアログが見る状態だけで、Window の生成は View 層が行う。
+
+    /// <summary>
+    /// オプション指定ダイアログを開いてほしい、という要求（REQ-TRX-FILE-09）。
+    /// 購読するのは <c>MainWindow</c> のコードビハインド。ViewModel から
+    /// <see cref="System.Windows.Window"/> を直接生成しないための逃がし口（ADR-0002 の規則 2・3）。
+    /// </summary>
+    public event Action? FileTranscriptionRequested;
+
+    /// <summary>ダイアログで「開始」を押されたときに処理する対象。</summary>
+    private string _pendingTranscriptionFilePath = "";
+
+    /// <summary>ダイアログに表示する対象ファイル名（パスは含めない）。</summary>
+    [ObservableProperty]
+    private string _fileTranscriptionFileName = "";
+
+    /// <summary>開始時刻の入力（`h:mm` / `hh:mm`、空欄は未指定）。REQ-TRX-FILE-10。</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanStartFileTranscription))]
+    [NotifyPropertyChangedFor(nameof(HasFileTranscriptionStartTimeError))]
+    private string _fileTranscriptionStartTime = "";
+
+    /// <summary>進捗の百分率（0〜100）。ダイアログの <c>ProgressBar</c> 用。</summary>
+    [ObservableProperty]
+    private double _fileTranscriptionProgress;
+
+    /// <summary>
+    /// ダイアログの「開始」が押せるか。書式が不正な間は押させない（REQ-TRX-FILE-10）。
+    /// </summary>
+    public bool CanStartFileTranscription =>
+        !IsTranscribingFile && TryParseStartTime(FileTranscriptionStartTime, out _);
+
+    /// <summary>開始時刻の書式が不正か。ダイアログの注意書きの表示条件。</summary>
+    public bool HasFileTranscriptionStartTimeError =>
+        !TryParseStartTime(FileTranscriptionStartTime, out _);
+
+    /// <summary>
+    /// 開始時刻の入力を解析する（REQ-TRX-FILE-10）。
+    /// </summary>
+    /// <returns>
+    /// 受理できたら <c>true</c>。空欄は「未指定」として受理し <see cref="TimeSpan.Zero"/> を返す。
+    /// </returns>
+    /// <remarks>
+    /// 受理するのは 24 時間表記の `h:mm` / `hh:mm` のみ。秒は受け付けない。
+    /// <see cref="TimeSpan.TryParseExact(string, string[], IFormatProvider, out TimeSpan)"/> の
+    /// `hh` は 0〜23 しか取らないため、`24:00` は自動的に弾かれる。
+    /// </remarks>
+    internal static bool TryParseStartTime(string text, out TimeSpan startTime)
+    {
+        startTime = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        return TimeSpan.TryParseExact(
+            text.Trim(), [@"h\:mm", @"hh\:mm"], CultureInfo.InvariantCulture, out startTime);
+    }
+
+    /// <summary>進捗を百分率（0〜100）に直す。総時間が 0 なら 0。</summary>
+    internal static double FileTranscriptionProgressFor(TimeSpan processed, TimeSpan total)
+        => total <= TimeSpan.Zero
+            ? 0.0
+            : Math.Clamp(processed / total * 100.0, 0.0, 100.0);
+
     private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
     private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));
 
@@ -215,6 +283,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(IsNotBusy));
         OnPropertyChanged(nameof(CanToggleGpu));
+        OnPropertyChanged(nameof(CanStartFileTranscription));
     }
 
     [ObservableProperty]
@@ -631,7 +700,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         && _transcriptionService.IsModelLoaded;
 
     [RelayCommand(CanExecute = nameof(CanTranscribeFromFile))]
-    private async Task TranscribeFromFileAsync()
+    private void TranscribeFromFile()
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
@@ -643,12 +712,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        await RunFileTranscriptionAsync(dialog.FileName);
+        RequestFileTranscription(dialog.FileName);
     }
 
     public bool CanAcceptFileDrop => CanTranscribeFromFile;
 
-    public async Task TranscribeDroppedFileAsync(string filePath)
+    public void TranscribeDroppedFile(string filePath)
     {
         if (!CanTranscribeFromFile)
         {
@@ -662,7 +731,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        await RunFileTranscriptionAsync(filePath);
+        RequestFileTranscription(filePath);
+    }
+
+    /// <summary>
+    /// 対象ファイルを確定し、オプション指定ダイアログの表示を要求する（REQ-TRX-FILE-09）。
+    /// ここでは処理を始めない。始めるのはダイアログの「開始」から呼ばれる
+    /// <see cref="StartFileTranscriptionAsync"/>。
+    /// </summary>
+    private void RequestFileTranscription(string filePath)
+    {
+        _pendingTranscriptionFilePath = filePath;
+        FileTranscriptionFileName = System.IO.Path.GetFileName(filePath);
+        FileTranscriptionStartTime = "";
+        FileTranscriptionStatus = "";
+        FileTranscriptionProgress = 0;
+        FileTranscriptionRequested?.Invoke();
+    }
+
+    /// <summary>
+    /// ダイアログの「開始」から呼ばれる。開始時刻を解析して本処理へ渡す。
+    /// </summary>
+    public async Task StartFileTranscriptionAsync()
+    {
+        if (!TryParseStartTime(FileTranscriptionStartTime, out var startOffset))
+        {
+            return;
+        }
+
+        await RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
     }
 
     internal static bool IsSupportedAudioExtension(string filePath)
@@ -672,21 +769,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task RunFileTranscriptionAsync(string filePath)
+    private async Task RunFileTranscriptionAsync(string filePath, TimeSpan startOffset)
     {
         _fileTranscriptionCts = new CancellationTokenSource();
         IsTranscribingFile = true;
         FileTranscriptionStatus = "準備中...";
+        FileTranscriptionProgress = 0;
         StatusMessage = "音声ファイルから文字起こし中...";
         try
         {
             var progress = new Progress<(TimeSpan processed, TimeSpan total)>(v =>
+            {
                 FileTranscriptionStatus =
-                    $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}");
+                    $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}";
+                FileTranscriptionProgress = FileTranscriptionProgressFor(v.processed, v.total);
+            });
             var token = _fileTranscriptionCts.Token;
             // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
             var ok = await Task.Run(() =>
-                _transcriptionService.TranscribeFileAsync(filePath, progress, token));
+                _transcriptionService.TranscribeFileAsync(filePath, startOffset, progress, token));
             if (ok)
             {
                 var txtPath = TranscriptionService.BuildTranscriptPath(filePath);

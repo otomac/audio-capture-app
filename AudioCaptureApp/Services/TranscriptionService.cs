@@ -522,8 +522,20 @@ public class TranscriptionService : IDisposable
         lpfPrev = prev;
     }
 
+    /// <summary>
+    /// 音声ファイルを文字起こしする。
+    /// </summary>
+    /// <param name="startOffset">
+    /// 出力行のタイムスタンプの起点（REQ-TRX-FILE-10）。ファイル先頭がこの時刻に録音されたものとして扱う。
+    /// 未指定なら <see cref="TimeSpan.Zero"/> を渡す（＝ファイル先頭からの経過時間になる）。
+    /// </param>
+    /// <remarks>
+    /// <paramref name="startOffset"/> は進捗（<paramref name="progress"/>）には足さない。
+    /// 進捗は残りの目安であって時刻ではないため、常にファイル先頭基準で報告する。
+    /// </remarks>
     public async Task<bool> TranscribeFileAsync(
         string audioFilePath,
+        TimeSpan startOffset,
         IProgress<(TimeSpan processed, TimeSpan total)>? progress,
         CancellationToken ct)
     {
@@ -536,7 +548,7 @@ public class TranscriptionService : IDisposable
         string outputPath = BuildTranscriptPath(audioFilePath);
         try
         {
-            return await TranscribeFileCoreAsync(audioFilePath, outputPath, progress, ct)
+            return await TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, progress, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -569,6 +581,7 @@ public class TranscriptionService : IDisposable
     private async Task<bool> TranscribeFileCoreAsync(
         string audioFilePath,
         string outputPath,
+        TimeSpan startOffset,
         IProgress<(TimeSpan processed, TimeSpan total)>? progress,
         CancellationToken ct)
     {
@@ -607,7 +620,8 @@ public class TranscriptionService : IDisposable
                 pcm16kBuffer.CopyTo(0, chunk, 0, BufferThresholdSamples);
                 pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
 
-                await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                await ProcessFileChunkAsync(
+                        processor, chunk, startOffset + chunkOffset, label, writer, ct)
                     .ConfigureAwait(false);
                 chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
                 progress?.Report((chunkOffset, totalTime));
@@ -619,7 +633,8 @@ public class TranscriptionService : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             var chunk = pcm16kBuffer.ToArray();
-            await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+            await ProcessFileChunkAsync(
+                    processor, chunk, startOffset + chunkOffset, label, writer, ct)
                 .ConfigureAwait(false);
             chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
         }
@@ -651,15 +666,19 @@ public class TranscriptionService : IDisposable
         }
     }
 
+    /// <param name="chunkStart">
+    /// このチャンク先頭のタイムスタンプ。開始時刻の指定（REQ-TRX-FILE-10）を含んだ値が渡る。
+    /// 未指定ならファイル先頭からの経過時間そのもの。
+    /// </param>
     private async Task ProcessFileChunkAsync(
-        WhisperProcessor processor, float[] samples, TimeSpan chunkOffset,
+        WhisperProcessor processor, float[] samples, TimeSpan chunkStart,
         string label, StreamWriter writer, CancellationToken ct)
     {
         foreach (var region in SplitVoicedRegions(samples, SilenceCut))
         {
             ct.ThrowIfCancellationRequested();
 
-            var regionOffset = RegionStart(chunkOffset, region.Start);
+            var regionOffset = RegionStart(chunkStart, region.Start);
             var regionSamples = PadToMinimum(SliceRegion(samples, region), MinWhisperSamples);
 
             await foreach (var segment in processor.ProcessAsync(regionSamples, ct).ConfigureAwait(false))

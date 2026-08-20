@@ -18,7 +18,7 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 | 層 | 場所 | 責務 | 禁止 |
 |---|---|---|---|
-| **View** | `MainWindow.xaml(.cs)` / `Controls/` | 表示とユーザー操作の受付、バインディング | 業務ロジック、Service の直接呼び出し |
+| **View** | `MainWindow.xaml(.cs)` / 補助ウィンドウ（`*Window.xaml(.cs)`） / `Controls/` | 表示とユーザー操作の受付、バインディング | 業務ロジック、Service の直接呼び出し |
 | **ViewModel** | `ViewModels/MainViewModel.cs` | UI 状態の保持、コマンド、Service のオーケストレーション | NAudio / Whisper.net / `System.IO` の直接使用 |
 | **Service** | `Services/` | 外部リソース（NAudio・Whisper.net・ファイル I/O）の操作 | View / ViewModel への参照、`MessageBox` 等の UI 呼び出し |
 | **Model** | `Models/` | データ保持のみの POCO | ロジック、外部依存 |
@@ -27,6 +27,11 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 1. **Service → ViewModel の参照は禁止。** Service から上位へ伝えたいことは **イベント** で通知する
    （`RecordingError` / `Error` / `RuntimeInfo` が既存の例）。
+   **ViewModel → View も同様に禁止。** ViewModel が `Window` の派生型を `new` してはならない。
+   「このウィンドウを開いてほしい」も **イベント** で上げ、生成・表示は `MainWindow` の
+   コードビハインドが行う（`FileTranscriptionRequested` / `LiveTranscriptRequested` が既存の例。
+   [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。
+   ただし `Microsoft.Win32` の共通ファイルダイアログは OS 側の部品であり、この禁止に当たらない。
 2. **Model → 何か への参照は禁止。** Model は他の層も外部ライブラリも知らない。
 3. **View → Service の直接呼び出しは禁止。** 必ず ViewModel を経由する。
 4. **Service 間の相互参照は禁止。** 現状 `AudioCaptureService → TranscriptionService` の
@@ -84,6 +89,7 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` が既存の例） |
 | データの入れ物 | `Models/` の POCO | ロジックを入れない |
 | 再利用する UI 部品 | `Controls/` のユーザーコントロール | 依存プロパティで ViewModel とバインドする |
+| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` | `MainViewModel` を `DataContext` に共有し、自前の状態を持たない。生成は `MainWindow` が行い、`Owner` を設定する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)） |
 
 ## 6. 構造が壊れかけているサイン
 

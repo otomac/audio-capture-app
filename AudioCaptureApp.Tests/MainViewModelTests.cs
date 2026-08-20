@@ -135,4 +135,72 @@ public class MainViewModelTests
         // 起動直後（REQ-OPEN-04）
         Assert.False(MainViewModel.CanOpenResultFolderFor("", isNotBusy: true));
     }
+
+    // --- ファイル文字起こしの開始時刻 (T113 / REQ-TRX-FILE-10) ---
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void TryParseStartTime_Blank_ReturnsZero(string text)
+    {
+        // 空欄は「未指定」。これまでどおりファイル先頭を 00:00:00 として出力する
+        Assert.True(MainViewModel.TryParseStartTime(text, out var startTime));
+        Assert.Equal(TimeSpan.Zero, startTime);
+    }
+
+    [Theory]
+    [InlineData("9:05", 9, 5)]
+    [InlineData("09:05", 9, 5)]
+    [InlineData("0:00", 0, 0)]
+    [InlineData("23:59", 23, 59)]
+    [InlineData(" 14:30 ", 14, 30)]
+    public void TryParseStartTime_ValidForms_AreAccepted(string text, int hours, int minutes)
+    {
+        Assert.True(MainViewModel.TryParseStartTime(text, out var startTime));
+        Assert.Equal(new TimeSpan(hours, minutes, 0), startTime);
+    }
+
+    [Theory]
+    [InlineData("24:00")]   // 24 時は存在しない
+    [InlineData("9:5")]     // 分は 2 桁
+    [InlineData("12:60")]   // 分が範囲外
+    [InlineData("12")]      // 区切りが無い
+    [InlineData("12:34:56")]// 秒は受け付けない
+    [InlineData("あ:い")]
+    public void TryParseStartTime_InvalidForms_AreRejected(string text)
+    {
+        // 拒否できないと、不正な時刻のまま文字起こしが走り出す
+        Assert.False(MainViewModel.TryParseStartTime(text, out _));
+    }
+
+    // --- ファイル文字起こしの進捗率 (T113 / REQ-TRX-FILE-06) ---
+
+    [Fact]
+    public void FileTranscriptionProgress_ZeroTotal_ReturnsZero()
+    {
+        // 総時間を取れないファイルでゼロ除算しない
+        var value = MainViewModel.FileTranscriptionProgressFor(
+            TimeSpan.FromSeconds(5), TimeSpan.Zero);
+
+        Assert.Equal(0.0, value);
+    }
+
+    [Fact]
+    public void FileTranscriptionProgress_HalfProcessed_ReturnsFifty()
+    {
+        var value = MainViewModel.FileTranscriptionProgressFor(
+            TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(10));
+
+        Assert.Equal(50.0, value);
+    }
+
+    [Fact]
+    public void FileTranscriptionProgress_ProcessedExceedsTotal_ClampsTo100()
+    {
+        // 最終チャンクは総時間を跨ぐことがある（20 秒単位で切り出すため）
+        var value = MainViewModel.FileTranscriptionProgressFor(
+            TimeSpan.FromMinutes(11), TimeSpan.FromMinutes(10));
+
+        Assert.Equal(100.0, value);
+    }
 }
