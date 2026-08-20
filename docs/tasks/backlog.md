@@ -15,12 +15,14 @@
 （なし）
 
 ## 未着手
-- [ ] **T129** ライブ文字起こしの出力粒度が 20 秒固定で、「発話が終わった」契機が存在しない。マイクは無音でも WASAPI が供給を続けるためギャップ分割（500ms）が発火せず、`StaleBufferAge`（20 秒）も `BufferThresholdSamples`（20 秒）と同値のため連続供給では常に空振りする。結果、発話から出力までが 0〜20 秒＋推論時間まで変動し「一個前の発話まで」に見える。実測: 57 秒の録音でリアルタイムに出たのは +40 秒時点の 1 チャンクのみ、残りは停止時の残バッファ処理まで出なかった。**要設計判断**（末尾無音での確定 vs チャンク長短縮。推論回数と停止レイテンシ（T127）に影響するため、REQ-TRX-LIVE-04 の仕様変更を伴う）。T114 の実機確認で発覚
+- [ ] **T131** `docs/spec/04_sequence_diagram.md` のライブ文字起こしの図が「1,000 行超は先頭から破棄」と書いているが、T130 で上限は 100 行になっており `REQ-LIVEVIEW-04` と食い違う（T130 が 01_requirements.md しか直さなかった）。T129 の作業中に発見
+- [ ] **T132** `docs/spec/01_requirements.md` の §8 で `REQ-TRX-LIVE-06` が 2 行に重複して振られている（`_sessionClock` の要件と、`REQ-TRX-LIVE-11` と内容が重なる「セッション終了処理は最大 30 秒待機」の要件）。ID は再利用しない規約（50-spec-standards §3）に反する。後者は REQ-TRX-LIVE-11 に吸収して行ごと消すのが妥当。T129 の作業中に発見
 - [ ] **T115** 話者識別（Speaker Diarization）を sherpa-onnx で導入する → **要 ADR（新規外部ライブラリ採用 ＋ ADR-0001 の「Service 抽象化しない」方針との整合）／要パッケージ個別承認**
 - [ ] **T109** `README.md` の「ビルド」節が存在しない `AudioCaptureApp.sln` を参照している（正: `AudioCaptureApp.slnx`）。T108 の作業中に発見
 
 ## 完了
 
+- [x] **T129** ライブ文字起こしの出力粒度が 20 秒固定で、「発話が終わった」契機が存在しなかった。マイクは無音でも WASAPI が供給を続けるためギャップ分割（500ms）が発火せず、`StaleBufferAge`（20 秒）も `BufferThresholdSamples`（20 秒）と同値のため連続供給では常に空振りしていた。確定契機に「末尾に `MergeGapSeconds`（2.0 秒）以上の無音が積まれたら確定する」を追加し（REQ-TRX-LIVE-13）、滞留契機を「バッファ先頭サンプルの滞留」から「供給の途絶 5 秒」へ定義し直した（REQ-TRX-LIVE-12、定数も `StaleSupplyIdle` へ改名）。保持時間を `MergeGapSeconds` と同値にしたため Whisper の呼び出し回数は据え置き。実測: 発話終了から表示まで 0〜20 秒 → 3〜4 秒以内、1 発話が複数行に割れないことも確認。T114 の実機確認で発覚 (2026-08-21) → [詳細](./T129-live-transcript-endpointing.md)
 - [x] **T130** 文字起こし表示ウィンドウの改良（初期サイズ 480x240 / ボタン文言「文字起こし表示」→「表示」/ 録音開始成功時に表示内容をクリア / 表示上限 1,000 行 → 100 行）。T114 §8-1 の未解決事項「表示をクリアする手段が無い」はこれで解決 (2026-08-21) → [詳細](./T130-live-transcript-window-tweaks.md)
 - [x] **T128** 文字起こし表示ウィンドウで `ScrollIntoView` を `CollectionChanged` ハンドラー内から同期的に呼んでおり、`ItemContainerGenerator` の状態と食い違って `InvalidOperationException`（「ItemsControl が項目のソースと一致していません」）でプロセスが落ちる。1 チャンクから複数行が連続で届くと再現。`Dispatcher.BeginInvoke(Background)` へ後回しにして解消（実測: 修正前 3/3 クラッシュ → 修正後 0/3）。T114 の実機確認で発覚 (2026-08-21) → [詳細](./T128-live-transcript-scroll-crash.md)
 - [x] **T114** リアルタイム文字起こしのテキストを表示するサブウィンドウを追加する（320x240・リサイズ可・9pt・録音停止で閉じない・プロセス終了で閉じる）。`SegmentTranscribed` を初めて購読した (2026-08-20) → [詳細](./T114-live-transcript-window.md)

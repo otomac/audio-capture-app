@@ -131,10 +131,19 @@ public class TranscriptionService : IDisposable
     internal const int MinTailSamples = TargetRate / 5;
 
     /// <summary>
-    /// バッファ先頭サンプルがこの時間以上書き出されずに残っていたら、
-    /// 20 秒分たまっていなくてもチャンクとして確定する（T120）。
+    /// 音声の供給がこの時間以上途絶えていたら、20 秒分たまっていなくても
+    /// チャンクとして確定する（T120 / REQ-TRX-LIVE-12）。
     /// </summary>
-    internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
+    /// <remarks>
+    /// 測るのは「最後にサンプルを受け取ってからの経過時間」であって、
+    /// <b>バッファ先頭サンプルの滞留時間ではない</b>。滞留時間は
+    /// 「供給の途絶時間 ＋ バッファ長」なので、供給が続いている限りバッファ長とほぼ等しくなる。
+    /// 滞留時間で 5 秒を判定すると「バッファ長 5 秒で確定」＝チャンク長を 5 秒に固定したのと
+    /// 同じ挙動になり、発話の途中で機械的に分断される。
+    /// この同値性のため、閾値が 20 秒だった頃はこの契機が
+    /// <see cref="BufferThresholdSamples"/> に吸収され、連続供給下では常に空振りしていた（T129）。
+    /// </remarks>
+    internal static readonly TimeSpan StaleSupplyIdle = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// 「実体のある発話」とみなす有声ランの最小長（0.2 秒）。パディング**前**の長さで判定する。
@@ -733,7 +742,7 @@ public class TranscriptionService : IDisposable
                 // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
                 PendingChunk? chunk;
                 while (_isRunning && !token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
                     // 通常運転中。停止要求が来たらチャンクの途中（区間の切れ目）で抜ける。
                     ProcessChunk(chunk, state, interruptible: true, token);
@@ -748,7 +757,7 @@ public class TranscriptionService : IDisposable
             {
                 PendingChunk? chunk;
                 while (!token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed)) != null)
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
                     // 排出処理。ここは _isRunning が false の状態で走るため打ち切ってはならない。
                     // 打ち切りたいときは token をキャンセルする（StopSession の 2 段目）。
@@ -784,7 +793,8 @@ public class TranscriptionService : IDisposable
     /// 確定済みチャンクを 1 つ取り出す。無ければバッファから 1 チャンク切り出す。
     /// どちらも無ければ <c>null</c>。
     /// </summary>
-    private static PendingChunk? TakeNextChunk(SourceState state, TimeSpan nowElapsed)
+    private static PendingChunk? TakeNextChunk(
+        SourceState state, TimeSpan nowElapsed, SilenceCutOptions options)
     {
         lock (state.BufferLock)
         {
@@ -799,7 +809,11 @@ public class TranscriptionService : IDisposable
             }
 
             var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
-            int take = ChunkTakeCount(state.Pcm16kBuffer.Count, nowElapsed - start);
+            int take = ChunkTakeCount(
+                state.Pcm16kBuffer.Count,
+                nowElapsed - state.BufferEndElapsed,
+                TrailingSilenceSamples(state.Pcm16kBuffer, options.RmsThreshold),
+                SecondsToSamples(options.MergeGapSeconds));
             if (take == 0)
             {
                 return null;
@@ -813,35 +827,108 @@ public class TranscriptionService : IDisposable
     }
 
     /// <summary>
+    /// バッファ末尾から 100ms 窓ごとに遡り、最初の有声窓に当たるまでの無音サンプル数を返す。
+    /// 有声窓が 1 つも無ければ <c>null</c>（＝バッファ全体が無音）。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 窓は<b>末尾に揃えて</b>敷く。判定したいのは末尾の連続無音であり、
+    /// <see cref="CollectVoicedWindows"/> と同じ先頭揃えにすると末尾の最大 99ms が
+    /// 端数窓に紛れて判定がぶれる。先頭側に余る端数も実長で 1 つの窓として評価する。
+    /// 飛ばすと、発話がバッファ先頭の端数に収まっている場合に「全体が無音」と
+    /// 誤判定して確定を取りこぼす。
+    /// </para>
+    /// <para>
+    /// 有声窓を見つけた時点で打ち切るため、全体が無音のときだけ全走査になる。
+    /// 20 秒分でも 200 窓であり、1 秒周期のポーリングに対して無視できる。
+    /// </para>
+    /// </remarks>
+    internal static int? TrailingSilenceSamples(List<float> buffer, double rmsThreshold)
+    {
+        int end = buffer.Count;
+        while (end > 0)
+        {
+            int start = Math.Max(0, end - SilenceWindowSamples);
+
+            double sumSquares = 0;
+            for (int i = start; i < end; i++)
+            {
+                sumSquares += buffer[i] * (double)buffer[i];
+            }
+
+            if (Math.Sqrt(sumSquares / (end - start)) >= rmsThreshold)
+            {
+                return buffer.Count - end;
+            }
+
+            end = start;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// バッファから今回切り出すサンプル数を決める。<c>0</c> ならまだ切り出さない。
     /// </summary>
     /// <param name="bufferedSampleCount">バッファに溜まっているサンプル数（16kHz）。</param>
-    /// <param name="bufferAge">バッファ先頭サンプルが書き出されずに待っている実時間。</param>
+    /// <param name="supplyIdle">最後にサンプルを受け取ってからの経過時間。</param>
+    /// <param name="trailingSilenceSamples">
+    /// 末尾の連続無音サンプル数。バッファ全体が無音なら <c>null</c>
+    /// （<see cref="TrailingSilenceSamples"/> の戻り値）。
+    /// </param>
+    /// <param name="endpointSilenceSamples">発話が終わったとみなす末尾無音の長さ。</param>
     /// <remarks>
-    /// 契機は 2 つ。
+    /// 契機は 3 つあり、この優先順で判定する。
     /// <list type="number">
     /// <item>20 秒分たまった → 20 秒分だけ切り出す（1 回の Whisper 呼び出しを
-    /// 際限なく長くしないため。T117）。</item>
-    /// <item>20 秒分に届かないが、先頭サンプルが 20 秒以上書き出されずに残っている
-    /// → バッファ全部を切り出す（T120）。</item>
+    /// 際限なく長くしないための上限。T117）。</item>
+    /// <item>末尾に <paramref name="endpointSilenceSamples"/> 以上の無音が積まれ、かつ
+    /// バッファ内に有声窓がある → 発話が終わったとみなしてバッファ全部を切り出す（T129）。</item>
+    /// <item>供給が <see cref="StaleSupplyIdle"/> 以上途絶えている → バッファ全部を切り出す（T120）。</item>
     /// </list>
-    /// 2 が無いと、ミュートや再生停止で供給が止まったソースのバッファは
+    /// <para>
+    /// 2 が無いと、マイクは無音でも WASAPI がサンプルを供給し続けるため
+    /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が 20 秒固定になる。
+    /// 保持時間に <see cref="SilenceCutOptions.MergeGapSeconds"/> と同じ値を渡すのは、
+    /// それが <see cref="SplitVoicedRegions"/> で「発話の切れ目」を定義している値そのものだからで、
+    /// 揃えれば確定チャンクは有声区間ちょうど 1 個を含む形になり、Whisper の呼び出し回数は
+    /// この契機の導入前と変わらない。
+    /// </para>
+    /// <para>
+    /// バッファ全体が無音（<paramref name="trailingSilenceSamples"/> が <c>null</c>）なら
+    /// 2 では確定しない。1 で切り出され、有声区間 0 件として Whisper を呼ばずに捨てられる。
+    /// </para>
+    /// <para>
+    /// 3 が無いと、ミュートや再生停止で供給が止まったソースのバッファは
     /// 「次のパケットが来てギャップ分割が発火するまで」書き出されない。
     /// 実測では 16 秒分の音声が 57 秒間放置され、その間に他ソースが書き進んだため
     /// 出力行の時刻が前後して見えていた。
-    /// なお 1 回の Whisper 推論コストは入力長にほぼ依存しないため、
-    /// この契機で確定するチャンクは「ギャップ分割で作られるはずだったものが
-    /// 早く出る」だけであり、推論回数は増えない。
+    /// </para>
     /// </remarks>
-    internal static int ChunkTakeCount(int bufferedSampleCount, TimeSpan bufferAge)
+    internal static int ChunkTakeCount(
+        int bufferedSampleCount,
+        TimeSpan supplyIdle,
+        int? trailingSilenceSamples,
+        int endpointSilenceSamples)
     {
         if (bufferedSampleCount >= BufferThresholdSamples)
         {
             return BufferThresholdSamples;
         }
 
+        // null（＝全体が無音）はここで確定しない。1 で切り出され、有声区間 0 件として捨てられる。
+        // 末尾無音が測れている＝有声窓が 1 つ以上あるので、最小長は自動的に満たす
+        // （有声 100ms + 無音 > 0.2 秒）ため MinTailSamples は見ない。
+        // 0 サンプルを弾くのは、MergeGapSeconds に 0 を設定されたときに
+        // 有声のまま（発話の途中で）毎ポーリング確定してしまうのを防ぐため。
+        if (trailingSilenceSamples is int trailingSilence
+            && trailingSilence > 0 && trailingSilence >= endpointSilenceSamples)
+        {
+            return bufferedSampleCount;
+        }
+
         // 0.2 秒未満の断片は 1 回の推論に見合わないため、セッション終了まで持ち越す
-        if (bufferAge >= StaleBufferAge && bufferedSampleCount >= MinTailSamples)
+        if (supplyIdle >= StaleSupplyIdle && bufferedSampleCount >= MinTailSamples)
         {
             return bufferedSampleCount;
         }
