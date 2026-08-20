@@ -18,6 +18,19 @@ classDiagram
         +Dispose()
     }
 
+    class FileTranscriptionOptionsWindow {
+        <<Window>>
+        -MainViewModel _viewModel
+        +FileTranscriptionOptionsWindow(MainViewModel)
+        -StartButton_Click(object, RoutedEventArgs)
+    }
+
+    class LiveTranscriptWindow {
+        <<Window>>
+        +LiveTranscriptWindow(MainViewModel)
+        -OnLinesChanged(object, NotifyCollectionChangedEventArgs)
+    }
+
     class InverseBoolConverter {
         <<IValueConverter>>
         +Convert(object, Type, object, CultureInfo) object
@@ -58,19 +71,31 @@ classDiagram
         +double MicLevelDb
         +double LoopbackLevelDb
         +string FileTranscriptionStatus
+        +string FileTranscriptionFileName
+        +string FileTranscriptionStartTime
+        +double FileTranscriptionProgress
+        +bool CanStartFileTranscription
+        +ObservableCollection~string~ LiveTranscriptLines
         +string LastResultPath
         +StartRecording()
         +StopRecordingAsync() Task
         +SelectOutputFolder()
         +RefreshDevices()
         +SelectWhisperModel()
-        +TranscribeFromFileAsync() Task
-        +TranscribeDroppedFileAsync(string) Task
+        +TranscribeFromFile()
+        +TranscribeDroppedFile(string)
+        +StartFileTranscriptionAsync() Task
         +CancelFileTranscription()
+        +ShowLiveTranscript()
         +OpenResultFolder()
         +PeakToDb(float) double
         +BuildExplorerArguments(string) string
+        +TryParseStartTime(string, out TimeSpan) bool
+        +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double
+        +AppendLiveTranscriptLine(IList~string~, string, int)$
         +Dispose()
+        event FileTranscriptionRequested
+        event LiveTranscriptRequested
     }
 
     %% ==================== Service層 ====================
@@ -117,10 +142,11 @@ classDiagram
         +RegisterSource(AudioSourceType, string, int, int)
         +StartSession(string, DateTime)
         +AddSamples(AudioSourceType, float[], int)
-        +TranscribeFileAsync(string, IProgress, CancellationToken) Task~bool~
+        +TranscribeFileAsync(string, TimeSpan, IProgress, CancellationToken) Task~bool~
         +StopSession()
         +Dispose()
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
+        +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
         event Error
         event SegmentTranscribed
@@ -185,6 +211,11 @@ classDiagram
     MainWindow "1" --> "2" LevelMeterControl : 配置
     LevelMeterControl ..> MainViewModel : Level (dB) バインド
 
+    MainWindow "1" ..> "0..1" FileTranscriptionOptionsWindow : ShowDialog (Owner)
+    MainWindow "1" ..> "0..1" LiveTranscriptWindow : Show (Owner)
+    FileTranscriptionOptionsWindow --> MainViewModel : DataContext（同一インスタンス）
+    LiveTranscriptWindow --> MainViewModel : DataContext（同一インスタンス）
+
     MainViewModel "1" --> "1" AudioCaptureService
     MainViewModel "1" --> "1" TranscriptionService
     MainViewModel "1" --> "1" SettingsService
@@ -201,4 +232,6 @@ classDiagram
     SettingsService ..> AppSettings : 生成 / 読み書き
 ```
 
-> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `BuildTranscriptPath`（`TranscriptionService`）、`PeakToDb`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
+> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath`（`TranscriptionService`）、`PeakToDb` / `TryParseStartTime` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
+>
+> `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。両ウィンドウの生成は `MainWindow` のコードビハインドが行い、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested`）で要求を上げるだけである。

@@ -715,18 +715,118 @@ public class TranscriptionServiceTests
         Assert.Equal(samples.Length, region.Length);
     }
 
+    // --- 結合した区間の足切り (T125) ---
+    //
+    // 足切りは結合後の区間の幅ではなく、結合「前」のラン（連続有声窓のかたまり）を見る。
+    // 幅で判定すると、0.1 秒の物音が結合幅の中に 2 つあるだけで 0.2 秒を超えてしまい、
+    // 中身の大半が無音の区間が Whisper に渡っていた。
+
     [Fact]
-    public void SplitVoicedRegions_TwoClicksWithinMergeGap_AreMergedAndKept()
+    public void SplitVoicedRegions_TwoClicksWithinMergeGap_AreDropped()
     {
-        // 既知の限界の固定。0.1 秒のクリック音 2 つが結合幅 2.0 秒の中にあると、
-        // 1 つの区間（大半は無音）にまとまり、span が 0.2 秒以上なので生き残る。
-        // 有声密度で切る改善は別タスクで扱う。ここは挙動を可視化するための記録テスト。
+        // 0.1 秒のクリック音 2 つ。結合されて span は 1.1 秒になるが、
+        // 0.2 秒以上続くランが 1 本も無いので区間ごと捨てる。
         var samples = MakeSamples(16000 * 20, (48000, 1600), (64000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ManyClicksWithinMergeGap_AreDropped()
+    {
+        // クリック音 5 つ＝有声合計 0.5 秒。「有声合計が 0.2 秒以上なら残す」に
+        // 退行すると生き残ってしまうため、合計では判定していないことを固定する。
+        var samples = MakeSamples(
+            16000 * 20,
+            (48000, 1600), (64000, 1600), (80000, 1600), (96000, 1600), (112000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ClickNearUtterance_KeepsMergedRegion()
+    {
+        // 0.5 秒の発話の 1.9 秒後に 0.1 秒の物音。結合されて 1 区間になる。
+        // 有声密度（0.6 / 2.5 = 0.24）で切ると実体のある発話まで巻き添えで消えるため、
+        // 密度ではなく「0.2 秒以上のランを含むか」で判定している。
+        var samples = MakeSamples(16000 * 20, (48000, 8000), (86400, 1600));
 
         var region = Assert.Single(
             TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
 
         Assert.Equal(48000 - 3200, region.Start);
-        Assert.Equal(24000, region.Length);
+        Assert.Equal(88000 + 3200, region.Start + region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_SustainedRunAtExactMinimum_IsKept()
+    {
+        // ちょうど 0.2 秒のランと 0.1 秒の物音。判定は「以上」なので発話側が実体とみなされ、
+        // 区間は残る。`>=` を `>` に変えるとこのテストが落ちる。
+        var samples = MakeSamples(16000 * 20, (48000, 3200), (64000, 1600));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(65600 + 3200, region.Start + region.Length);
+    }
+
+    // --- 確定済みの行の書き出し (T126) ---
+    //
+    // ProcessChunk はキャンセル・例外で区間ループを抜けたあとも、確定済みの行を
+    // 必ずここへ通す。ヘルパーが例外を投げるとワーカースレッドごと落ちるため、
+    // 失敗は戻り値で返す契約になっている。
+
+    [Fact]
+    public void AppendTranscriptLines_EmptyList_DoesNotCreateFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, []);
+
+        Assert.Null(failure);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_AppendsToExistingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+        File.WriteAllLines(path, ["[00:00:01 - 00:00:02] [マイク] 既存の行"]);
+        try
+        {
+            var failure = TranscriptionService.AppendTranscriptLines(
+                path, ["[00:00:03 - 00:00:04] [マイク] 追加の行"]);
+
+            Assert.Null(failure);
+            Assert.Equal(
+                [
+                    "[00:00:01 - 00:00:02] [マイク] 既存の行",
+                    "[00:00:03 - 00:00:04] [マイク] 追加の行"
+                ],
+                File.ReadAllLines(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_MissingDirectory_ReturnsError()
+    {
+        // 書き出しに失敗しても例外を投げない（投げると TranscriptionLoop まで抜けて
+        // ワーカースレッドが死に、以降のチャンクが全部落ちる）
+        var path = Path.Combine(
+            Path.GetTempPath(), $"acapp-nodir-{Guid.NewGuid():N}", "live.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, ["行"]);
+
+        Assert.NotNull(failure);
     }
 }

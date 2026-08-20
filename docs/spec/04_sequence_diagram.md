@@ -103,9 +103,12 @@ sequenceDiagram
     loop 有声区間ごと
         TS->>TS: WhisperProcessor.ProcessAsync(region)
         TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
-        TS-->>VM: SegmentTranscribed イベント（セグメント毎、必要に応じ購読側でUI通知）
+        TS-->>VM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
+        VM->>VM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（1,000 行超は先頭から破棄）
+        Note over VM: 文字起こし表示ウィンドウが開いていれば最新行が見える（REQ-LIVEVIEW-03）
     end
-    TS->>TS: File.AppendAllLines(outputPath, results)（results が空でなければ）
+    Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る
+    TS->>TS: AppendTranscriptLines(outputPath, results)（results が空でなければ）
 ```
 
 ## 4. 録音停止
@@ -181,6 +184,8 @@ sequenceDiagram
     participant VM as MainViewModel
     participant TS as TranscriptionService
 
+    participant OW as FileTranscriptionOptionsWindow
+
     alt ダイアログから選択
         User->>VM: 「音声ファイルから文字起こし」クリック
         VM->>VM: OpenFileDialog 表示 (*.wav / *.mp3)
@@ -188,28 +193,45 @@ sequenceDiagram
     else ドラッグ＆ドロップ
         User->>MW: 音声ファイルをドロップ
         MW->>MW: TryGetSingleDroppedFile()
-        MW->>VM: TranscribeDroppedFileAsync(filePath)
+        MW->>VM: TranscribeDroppedFile(filePath)
         VM->>VM: CanTranscribeFromFile / 拡張子チェック
     end
 
-    VM->>VM: RunFileTranscriptionAsync(filePath)
-    VM->>VM: IsTranscribingFile = true
-    VM->>TS: TranscribeFileAsync(filePath, progress, token) ※Task.Run上
+    Note over VM,OW: REQ-TRX-FILE-09: すぐに処理を始めず、オプション指定ダイアログを挟む
+    VM->>VM: 対象パスを保持 / FileTranscriptionFileName を設定
+    VM-->>MW: FileTranscriptionRequested イベント
+    MW->>OW: new FileTranscriptionOptionsWindow(vm) { Owner = MainWindow }
+    MW->>OW: ShowDialog()（モーダル）
+
+    alt 「キャンセル」または ✕（開始前）
+        User->>OW: キャンセル
+        OW-->>MW: 閉じる（処理は行わない）
+    else 「開始」
+        User->>OW: 開始時刻 hh:mm を入力（空欄可）
+        Note over OW: 書式が不正な間は「開始」を無効化（REQ-TRX-FILE-10）
+        User->>OW: 「開始」クリック
+        OW->>VM: StartFileTranscriptionAsync()
+    end
+
+    VM->>VM: TryParseStartTime() → startOffset
+    VM->>VM: RunFileTranscriptionAsync(filePath, startOffset)
+    VM->>VM: IsTranscribingFile = true（ダイアログが進捗表示へ切り替わる）
+    VM->>TS: TranscribeFileAsync(filePath, startOffset, progress, token) ※Task.Run上
 
     TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
     loop 閾値(20秒)到達毎
         TS->>TS: SplitVoicedRegions() で有声区間に分割
         loop 有声区間ごと
             TS->>TS: WhisperProcessor.ProcessAsync(region)
-            TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（chunkOffset + 区間先頭のオフセット を基準に加算）
+            TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（startOffset + chunkOffset + 区間先頭のオフセット を基準に加算）
             TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
         end
         TS->>TS: FlushAsync()
-        TS-->>VM: progress.Report(processed, total)
-        VM->>VM: FileTranscriptionStatus 更新
+        TS-->>VM: progress.Report(processed, total) ※ファイル先頭基準（startOffset を足さない）
+        VM->>VM: FileTranscriptionStatus / FileTranscriptionProgress 更新
     end
 
-    alt ユーザーが「中止」をクリック
+    alt ユーザーが「中止」をクリック（ダイアログまたはメインウィンドウ）
         User->>VM: CancelFileTranscription()
         VM->>TS: CancellationTokenSource.Cancel()
         TS->>TS: OperationCanceledException 捕捉 → 出力ファイル削除
@@ -221,6 +243,10 @@ sequenceDiagram
     end
 
     VM->>VM: IsTranscribingFile = false
+    VM-->>OW: StartFileTranscriptionAsync() の await が完了
+    OW->>OW: Close()（完了・失敗・中止のいずれでも自動で閉じる。REQ-TRX-FILE-12）
+
+    Note over MW,OW: 処理中にダイアログを ✕ で閉じても処理は続き、<br/>メインウィンドウの進捗表示と「中止」が引き継ぐ（REQ-TRX-FILE-13）
 ```
 
 ## 7. 文字起こし GPU 使用設定の切り替え

@@ -20,6 +20,8 @@
 graph TB
     subgraph View["View層"]
         MW["MainWindow.xaml / .xaml.cs"]
+        FTW["FileTranscriptionOptionsWindow"]
+        LTW["LiveTranscriptWindow"]
         LMC["LevelMeterControl"]
     end
 
@@ -47,6 +49,10 @@ graph TB
     end
 
     MW -->|"DataContext"| MVM
+    MW -->|"生成・表示 (ShowDialog)"| FTW
+    MW -->|"生成・表示 (Show, Owner=MainWindow)"| LTW
+    FTW -->|"DataContext (同一インスタンス)"| MVM
+    LTW -->|"DataContext (同一インスタンス)"| MVM
     MW --> LMC
     LMC -->|"Level (dB) バインド"| MVM
 
@@ -70,8 +76,9 @@ graph TB
 
 ### 各層の責務
 
-- **View層**（`MainWindow.xaml(.cs)`, `Controls/LevelMeterControl`）
+- **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `Controls/LevelMeterControl`）
   UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、`MainViewModel` へのバインディングのみを持ち、業務ロジックは持たない。
+  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
 - **ViewModel層**（`ViewModels/MainViewModel`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
 - **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SettingsService`）
@@ -81,7 +88,7 @@ graph TB
 
 ## 3. コンポーネント間の主要な依存関係
 
-- `MainWindow` は `MainViewModel` を直接 `new` して `DataContext` に設定する（DI コンテナは使用しない、シンプル優先の方針）。
+- `MainWindow` は `MainViewModel` を直接 `new` して `DataContext` に設定する（DI コンテナは使用しない、シンプル優先の方針）。補助ウィンドウにも同じインスタンスを渡す（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。補助ウィンドウは `Owner` に `MainWindow` を設定するため、メインウィンドウを閉じると WPF の既定動作で一緒に閉じる。
 - `MainViewModel` は `AudioCaptureService` / `TranscriptionService` / `SettingsService` をフィールドとして保持し、直接インスタンス化する。
 - `AudioCaptureService` はライブ文字起こしのために `TranscriptionService` への参照を `SetTranscriptionService` で受け取る（null 許容、疎結合）。録音中のみ音声サンプルを `AddSamples` で渡す。
 - `TranscriptionService` は `AudioCaptureService` を一切参照しない（一方向依存）。

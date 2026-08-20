@@ -89,9 +89,9 @@
 | REQ-TRX-04 | モデルパスが設定されていれば、ライブ文字起こしの ON/OFF に関わらず常にモデルをロードする（ファイル文字起こしはライブ設定と独立して動作するため） | `MainViewModel` コンストラクタ, `TryLoadWhisperModel` |
 | REQ-TRX-05 | 入力音声はダウンミックス（ステレオ→モノラル）・1 次 IIR ローパスフィルタ・線形リサンプリングにより 16kHz モノラルへ変換してから Whisper に渡す | `TranscriptionService.DownmixResampleAppend` |
 | REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行う。各窓の RMS が設定値（既定 -40dB 相当 = 0.01）**以上**であればその窓を「有声」と判定する。チャンク全体の平均で判定しないのは、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.SplitVoicedRegions` |
-| REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する | `TranscriptionService.ProcessChunk`, `ProcessFileChunkAsync` |
+| REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する。**ライブ文字起こしでは、チャンクの区間ループがキャンセル・例外で途中終了した場合でも、その時点までに確定していた行を必ず追記する。**確定した行は `SegmentTranscribed` イベントで既に画面へ出ているため、書き出さないと画面と `.txt` が食い違うためである。追記そのものに失敗した場合は `Error` イベントで通知し、ワーカースレッドは継続する。なおファイル文字起こし側は逆に、キャンセル時は出力ファイルごと削除して部分結果を残さない（REQ-TRX-FILE-07）。ライブの `.txt` は録音中に追記され続けるログであるのに対し、ファイル側の `.transcript.txt` は完結した成果物であるという性質の違いによる | `TranscriptionService.ProcessChunk`, `AppendTranscriptLines`, `ProcessFileChunkAsync` |
 | REQ-TRX-08 | Whisper へ渡す区間（チャンク全体を 1 区間とする場合を含む）が 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
-| REQ-TRX-09 | チャンクを Whisper に渡す前に有声区間へ分割し、無音区間そのものは渡さない（ハルシネーション防止）。<br>①100ms 窓ごとに RMS が閾値以上かで有声／無音を判定する（REQ-TRX-06）<br>②連続する有声窓をひとつの区間にまとめる<br>③区間同士の間にある無音（パディング前の生の隙間）が `MergeGapSeconds`（既定 2.0 秒）未満であれば区間を結合する<br>④パディング前の区間長（③で結合した場合は結合後の区間全体の長さ。内部に取り込んだ無音を含む）が 0.2 秒未満の区間は捨てる<br>⑤各区間の前後を `PaddingSeconds`（既定 0.2 秒）だけ広げ、チャンク範囲でクランプしたうえで、接触した区間はさらに結合する<br>⑥パディング後の区間の合計がチャンク全体の 90% 以上を占める場合は、分割してもほとんど無音を削減できず Whisper 呼び出し回数だけが増えるため、チャンク全体を単一区間として返す。<br>**④（最小長判定）は⑤（パディング）より必ず先に行う**。順序を逆にすると、0.1 秒（＝窓 1 つ分。窓量子化により、これが存在しうる最短の区間）のクリックノイズが前後 0.2 秒ずつ広がって 0.5 秒になり、0.2 秒のカットオフを生き残ってしまうため。<br>有声区間が 1 件も無い場合は Whisper を呼ばず、ファイルへの書き込みも行わない。<br>分割された各区間は個別に Whisper へ渡し、区間ごとに自身のチャンク内開始オフセットを保持することでタイムスタンプの整合性を保つ。渡す前に各区間へ REQ-TRX-08 の最小長パディングを適用する。<br>ライブ文字起こし・ファイル文字起こしの両方に適用する | `TranscriptionService.SplitVoicedRegions`, `ProcessChunk`, `ProcessFileChunkAsync` |
+| REQ-TRX-09 | チャンクを Whisper に渡す前に有声区間へ分割し、無音区間そのものは渡さない（ハルシネーション防止）。<br>①100ms 窓ごとに RMS が閾値以上かで有声／無音を判定する（REQ-TRX-06）<br>②連続する有声窓をひとつの区間にまとめる<br>③区間同士の間にある無音（パディング前の生の隙間）が `MergeGapSeconds`（既定 2.0 秒）未満であれば区間を結合する<br>④**0.2 秒以上続く有声ラン（③で結合する前の、①②で得た連続有声窓のかたまり）を 1 本も含まない区間を捨てる**。結合後の区間長で判定してはならない。結合後の長さは内部に取り込んだ無音を含むため、0.1 秒の物音が結合幅の中に 2 つあるだけで 0.2 秒を超え、中身の大半が無音の区間が生き残ってしまう。③の結合は「実体のある発話へ、その前後の短い断片を貼り付ける」ための手順であり、貼り付ける先の発話（＝0.2 秒以上続くラン）が無いなら結合結果に残すべきものは無い。結合が起きていない区間ではラン＝区間なので、判定は「区間長が 0.2 秒未満なら捨てる」と一致する<br>⑤各区間の前後を `PaddingSeconds`（既定 0.2 秒）だけ広げ、チャンク範囲でクランプしたうえで、接触した区間はさらに結合する<br>⑥パディング後の区間の合計がチャンク全体の 90% 以上を占める場合は、分割してもほとんど無音を削減できず Whisper 呼び出し回数だけが増えるため、チャンク全体を単一区間として返す。<br>**④（足切り）は⑤（パディング）より必ず先に行う**。順序を逆にすると、0.1 秒（＝窓 1 つ分。窓量子化により、これが存在しうる最短のラン）のクリックノイズが前後 0.2 秒ずつ広がって 0.5 秒のランになり、0.2 秒のカットオフを生き残ってしまうため。落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。<br>有声区間が 1 件も無い場合は Whisper を呼ばず、ファイルへの書き込みも行わない。<br>分割された各区間は個別に Whisper へ渡し、区間ごとに自身のチャンク内開始オフセットを保持することでタイムスタンプの整合性を保つ。渡す前に各区間へ REQ-TRX-08 の最小長パディングを適用する。<br>ライブ文字起こし・ファイル文字起こしの両方に適用する | `TranscriptionService.SplitVoicedRegions`, `ProcessChunk`, `ProcessFileChunkAsync` |
 
 ## 8. ライブ文字起こし（録音中）
 
@@ -115,14 +115,19 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選び文字起こしできる | `MainViewModel.TranscribeFromFileAsync` |
-| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルをウィンドウ上の文字起こしグループへドラッグ＆ドロップして文字起こしを開始できる | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFileAsync` |
-| REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFileAsync`, `IsSupportedAudioExtension` |
+| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選べる。選択後は直ちに処理を始めず、オプション指定ダイアログ（REQ-TRX-FILE-09）を表示する | `MainViewModel.TranscribeFromFile` |
+| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルをウィンドウ上の文字起こしグループへドラッグ＆ドロップして文字起こしを開始できる。この経路でもオプション指定ダイアログ（REQ-TRX-FILE-09）を経由する | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFile` |
+| REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFile`, `IsSupportedAudioExtension` |
 | REQ-TRX-FILE-04 | ドラッグオーバー中、ドロップ可能かどうかに応じてオーバーレイ表示を切り替える | `MainWindow.xaml.cs` (`DragOver`/`DragLeave`) |
 | REQ-TRX-FILE-05 | 出力ファイルは `{入力ファイル名}.transcript.txt`（録音時生成の `.txt` と名前衝突しない命名）として同フォルダに保存する | `TranscriptionService.BuildTranscriptPath` |
-| REQ-TRX-FILE-06 | 処理中は進捗（処理済み時間／総時間）を UI に表示する | `MainViewModel.RunFileTranscriptionAsync`, `IProgress<(TimeSpan,TimeSpan)>` |
-| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
+| REQ-TRX-FILE-06 | 処理中は進捗（処理済み時間／総時間）を UI に表示する。オプション指定ダイアログ（REQ-TRX-FILE-09）には百分率の進捗バーも表示する。進捗は常に**ファイル先頭を基準**とし、REQ-TRX-FILE-10 の開始時刻を足さない（残り時間の目安であって時刻ではないため） | `MainViewModel.RunFileTranscriptionAsync`, `FileTranscriptionProgressFor`, `IProgress<(TimeSpan,TimeSpan)>` |
+| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない。「中止」はオプション指定ダイアログとメインウィンドウの双方に置く（REQ-TRX-FILE-13 でダイアログを閉じても処理は続くため） | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
 | REQ-TRX-FILE-08 | ファイル文字起こし処理は UI スレッドをブロックしないようバックグラウンドスレッドで実行する | `MainViewModel.RunFileTranscriptionAsync` (`Task.Run`) |
+| REQ-TRX-FILE-09 | ファイルが決まったら（選択・ドロップのいずれでも）、処理を始める前に**モーダルダイアログ**を表示する。ダイアログは対象ファイル名・開始時刻の入力欄（REQ-TRX-FILE-10）・進捗表示・「開始」「キャンセル」／処理中は「中止」を持つ。ダイアログは `MainViewModel` を `DataContext` として共有する状態レスな View であり、生成・表示は `MainWindow` が行う（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)） | `FileTranscriptionOptionsWindow`, `MainWindow.xaml.cs`, `MainViewModel.FileTranscriptionRequested` |
+| REQ-TRX-FILE-10 | 開始時刻を `h:mm` または `hh:mm`（24 時間表記）で指定できる。指定した時刻を出力行のタイムスタンプの起点にする。**空欄なら未指定**とし、従来どおりファイル先頭を `00:00:00` として出力する。書式が不正な間は「開始」を無効化し、理由をダイアログ上に表示する。開始時刻とファイル長の合計が 24 時間を超えた場合は翌日の時刻として折り返す（`23:00` 開始の 2 時間後は `01:00:00`） | `MainViewModel.TryParseStartTime`, `TranscriptionService.TranscribeFileAsync` (`startOffset`) |
+| REQ-TRX-FILE-11 | ダイアログの「開始」を押すと、同じダイアログが進捗表示へ切り替わる（別ウィンドウを開き直さない） | `FileTranscriptionOptionsWindow.xaml` (`IsTranscribingFile` の DataTrigger) |
+| REQ-TRX-FILE-12 | 処理が終わったら（完了・失敗・中止のいずれでも）ダイアログを自動的に閉じる。結果はメインウィンドウのステータスバーに表示する | `FileTranscriptionOptionsWindow.xaml.cs` |
+| REQ-TRX-FILE-13 | 処理中にダイアログを閉じても処理は継続する。メインウィンドウ側の進捗表示と「中止」ボタンが引き継ぐ | `MainWindow.xaml` (既存の進捗行), `MainViewModel.IsTranscribingFile` |
 
 ## 10. GPU 使用切り替え
 
@@ -146,6 +151,21 @@
 
 > 録音の保存先は `OutputFolder`、ファイル文字起こしの出力先は入力ファイルと同じフォルダであり
 > 両者は一致しない。そのため「設定上の保存先」ではなく **「直近の成果物の場所」** を開く。
+
+## 12. 文字起こし表示ウィンドウ
+
+| ID | 要件 | 実装箇所 |
+|---|---|---|
+| REQ-LIVEVIEW-01 | 文字起こしされた行を時刻順に表示するサブウィンドウを開ける。導線は文字起こし設定グループのヘッダーに置き、録音中・処理中でも押せる（見るための窓のため無効化しない） | `MainWindow.xaml`, `MainViewModel.ShowLiveTranscript`, `LiveTranscriptWindow` |
+| REQ-LIVEVIEW-02 | 初期サイズは 320x240 でリサイズ可能。文字サイズは 9pt とする | `LiveTranscriptWindow.xaml` |
+| REQ-LIVEVIEW-03 | 表示するのは `TranscriptionService.SegmentTranscribed` が通知した行であり、**ライブ文字起こしとファイル文字起こしの両方**を含む。行頭のラベル（`[マイク]` / `[スピーカー]` / `[ファイル]`）で区別できる。イベントは文字起こしワーカースレッドから発火するため、`Dispatcher.BeginInvoke` を経由して UI スレッドで追加する（NFR-01） | `MainViewModel` コンストラクタ, `LiveTranscriptLines` |
+| REQ-LIVEVIEW-04 | 表示行数の上限は 1,000 行とし、超えたら**古い行から**捨てる。捨てられるのは表示のみで、テキストファイルには全行が残る | `MainViewModel.AppendLiveTranscriptLine`, `MaxLiveTranscriptLines` |
+| REQ-LIVEVIEW-05 | 録音を停止してもウィンドウは閉じない。表示中の行も消さない（録音開始時にも消さない）。メインウィンドウを閉じたとき（プロセス終了）に一緒に閉じる。後者は `Owner` に `MainWindow` を設定することで WPF の既定動作として実現し、追随処理を自前で書かない | `MainWindow.xaml.cs` (`Owner = this`) |
+| REQ-LIVEVIEW-06 | ウィンドウは同時に 1 つだけ開く。既に開いている状態で操作された場合は手前に出す（`Activate`）。新しい行が届いたら最新行までスクロールする。**このスクロールを `CollectionChanged` ハンドラーの中で同期的に行ってはならない**（次行 REQ-LIVEVIEW-07） | `MainWindow.xaml.cs`, `LiveTranscriptWindow.xaml.cs` |
+| REQ-LIVEVIEW-07 | 最新行へのスクロールは `Dispatcher.BeginInvoke(DispatcherPriority.Background, ...)` で**後回しにして**実行する。`CollectionChanged` ハンドラーの中から `ScrollIntoView` を同期的に呼ぶと `ItemsControl.OnBringItemIntoView` → `UpdateLayout()` が走り、まだ変更を処理し終えていない `ItemContainerGenerator` の累計カウントと `ItemCollection.Count` が食い違って `Verify()` が `InvalidOperationException`（「ItemsControl が項目のソースと一致していません」）を投げる。UI スレッドの未処理例外となりプロセスが落ちる（T128 で実際に発生）。ウィンドウのコンストラクターは XAML バインディングより先に `CollectionChanged` を購読するため、自分のハンドラーは WPF 側のジェネレーターより**先に**呼ばれる。この順序は WPF の内部都合であり、こちらから制御できない | `LiveTranscriptWindow.OnLinesChanged` |
+
+> ウィンドウは自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを
+> `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。
 
 ## 非機能要件
 

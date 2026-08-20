@@ -137,14 +137,14 @@ public class TranscriptionService : IDisposable
     internal static readonly TimeSpan StaleBufferAge = TimeSpan.FromSeconds(20);
 
     /// <summary>
-    /// これ未満の区間は切り出さない（0.2 秒）。パディング**前**の区間長で判定する。
+    /// 「実体のある発話」とみなす有声ランの最小長（0.2 秒）。パディング**前**の長さで判定する。
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 比べる相手は「有声サンプルの合計」ではなく区間の**幅（span）**である。
-    /// 結合（<see cref="SplitVoicedRegions"/> の手順 3）を通った区間は、
-    /// 内部に吸収した無音も幅に含む。したがって、短い過渡音が複数まとまった区間は
-    /// 中身がほとんど無音でもこの足切りを生き残る（既知の限界）。
+    /// 比べる相手は結合後の区間の**幅（span）**ではなく、結合する**前**の
+    /// 連続有声窓のかたまり（ラン）の長さである。結合（<see cref="SplitVoicedRegions"/> の手順 3）
+    /// を通った区間は内部に吸収した無音も幅に含むため、幅で判定すると 0.1 秒の物音が
+    /// 結合幅の中に 2 つあるだけで足切りを素通りしてしまう（T125）。
     /// </para>
     /// <para>
     /// 値は <see cref="MinTailSamples"/> と同じだが根拠が別（あちらはセッション終端の
@@ -522,8 +522,20 @@ public class TranscriptionService : IDisposable
         lpfPrev = prev;
     }
 
+    /// <summary>
+    /// 音声ファイルを文字起こしする。
+    /// </summary>
+    /// <param name="startOffset">
+    /// 出力行のタイムスタンプの起点（REQ-TRX-FILE-10）。ファイル先頭がこの時刻に録音されたものとして扱う。
+    /// 未指定なら <see cref="TimeSpan.Zero"/> を渡す（＝ファイル先頭からの経過時間になる）。
+    /// </param>
+    /// <remarks>
+    /// <paramref name="startOffset"/> は進捗（<paramref name="progress"/>）には足さない。
+    /// 進捗は残りの目安であって時刻ではないため、常にファイル先頭基準で報告する。
+    /// </remarks>
     public async Task<bool> TranscribeFileAsync(
         string audioFilePath,
+        TimeSpan startOffset,
         IProgress<(TimeSpan processed, TimeSpan total)>? progress,
         CancellationToken ct)
     {
@@ -536,7 +548,7 @@ public class TranscriptionService : IDisposable
         string outputPath = BuildTranscriptPath(audioFilePath);
         try
         {
-            return await TranscribeFileCoreAsync(audioFilePath, outputPath, progress, ct)
+            return await TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, progress, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -569,6 +581,7 @@ public class TranscriptionService : IDisposable
     private async Task<bool> TranscribeFileCoreAsync(
         string audioFilePath,
         string outputPath,
+        TimeSpan startOffset,
         IProgress<(TimeSpan processed, TimeSpan total)>? progress,
         CancellationToken ct)
     {
@@ -607,7 +620,8 @@ public class TranscriptionService : IDisposable
                 pcm16kBuffer.CopyTo(0, chunk, 0, BufferThresholdSamples);
                 pcm16kBuffer.RemoveRange(0, BufferThresholdSamples);
 
-                await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+                await ProcessFileChunkAsync(
+                        processor, chunk, startOffset + chunkOffset, label, writer, ct)
                     .ConfigureAwait(false);
                 chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
                 progress?.Report((chunkOffset, totalTime));
@@ -619,7 +633,8 @@ public class TranscriptionService : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             var chunk = pcm16kBuffer.ToArray();
-            await ProcessFileChunkAsync(processor, chunk, chunkOffset, label, writer, ct)
+            await ProcessFileChunkAsync(
+                    processor, chunk, startOffset + chunkOffset, label, writer, ct)
                 .ConfigureAwait(false);
             chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
         }
@@ -651,15 +666,19 @@ public class TranscriptionService : IDisposable
         }
     }
 
+    /// <param name="chunkStart">
+    /// このチャンク先頭のタイムスタンプ。開始時刻の指定（REQ-TRX-FILE-10）を含んだ値が渡る。
+    /// 未指定ならファイル先頭からの経過時間そのもの。
+    /// </param>
     private async Task ProcessFileChunkAsync(
-        WhisperProcessor processor, float[] samples, TimeSpan chunkOffset,
+        WhisperProcessor processor, float[] samples, TimeSpan chunkStart,
         string label, StreamWriter writer, CancellationToken ct)
     {
         foreach (var region in SplitVoicedRegions(samples, SilenceCut))
         {
             ct.ThrowIfCancellationRequested();
 
-            var regionOffset = RegionStart(chunkOffset, region.Start);
+            var regionOffset = RegionStart(chunkStart, region.Start);
             var regionSamples = PadToMinimum(SliceRegion(samples, region), MinWhisperSamples);
 
             await foreach (var segment in processor.ProcessAsync(regionSamples, ct).ConfigureAwait(false))
@@ -849,7 +868,8 @@ public class TranscriptionService : IDisposable
     /// <item>区間どうしの隙間（パディング前の生の間隔）が
     /// <see cref="SilenceCutOptions.MergeGapSeconds"/> 未満なら結合する
     /// （息継ぎ程度の間で発話を切らないため）。</item>
-    /// <item>パディング前の区間幅が <see cref="MinVoicedSamples"/> 未満の区間を捨てる（足切り）。</item>
+    /// <item><see cref="MinVoicedSamples"/> 以上続くラン（結合前のかたまり）を
+    /// 1 本も含まない区間を捨てる（足切り）。</item>
     /// <item>残った区間の前後に <see cref="SilenceCutOptions.PaddingSeconds"/> の余白を付けて
     /// チャンクの範囲内へクランプし（語頭・語尾を削らないため）、
     /// 余白で接触・交差した区間をさらに結合する。</item>
@@ -858,9 +878,16 @@ public class TranscriptionService : IDisposable
     /// </list>
     /// <para>
     /// 足切り（④）はパディング（⑤）より<b>先</b>に行う。順序を逆にすると、0.1 秒
-    /// （＝窓 1 つ分。窓量子化により、これが存在しうる最短の区間）のクリック音が
-    /// 前後 0.2 秒ずつ広がって 0.5 秒になり、0.2 秒の足切りを素通りしてしまう。
+    /// （＝窓 1 つ分。窓量子化により、これが存在しうる最短のラン）のクリック音が
+    /// 前後 0.2 秒ずつ広がって 0.5 秒のランになり、0.2 秒の足切りを素通りしてしまう。
     /// 落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。
+    /// </para>
+    /// <para>
+    /// 足切り（④）が結合後の区間幅ではなく<b>結合前のラン</b>を見るのも同じ理由による。
+    /// 結合後の幅には内部に吸収した無音が含まれるため、0.1 秒の物音が結合幅の中に
+    /// 2 つあるだけで 0.2 秒を超え、中身の大半が無音の区間が生き残っていた（T125）。
+    /// 結合（③）は「実体のある発話へ、その前後の短い断片を貼り付ける」ための手順であり、
+    /// 貼り付ける先の発話が無いなら結合結果に残すべきものは無い。
     /// </para>
     /// <para>
     /// 有声判定をチャンク全体の平均ではなく窓ごとに行うのは、長い無音に埋もれた
@@ -877,14 +904,16 @@ public class TranscriptionService : IDisposable
             return [];
         }
 
-        var regions = CollectVoicedWindows(samples, options.RmsThreshold);
-        if (regions.Count == 0)
+        // ラン（結合前の連続有声窓）は足切り（④）の判定に要るので、結合で潰さず取っておく。
+        var runs = CollectVoicedWindows(samples, options.RmsThreshold);
+        if (runs.Count == 0)
         {
             return [];
         }
 
+        var regions = new List<VoicedRegion>(runs);
         MergeCloseRegions(regions, SecondsToSamples(options.MergeGapSeconds));
-        regions.RemoveAll(r => r.Length < MinVoicedSamples);
+        regions.RemoveAll(region => !ContainsSustainedRun(runs, region));
         if (regions.Count == 0)
         {
             return [];
@@ -904,6 +933,30 @@ public class TranscriptionService : IDisposable
         return voicedTotal >= samples.Length * NoSplitVoicedRatio
             ? [new VoicedRegion(0, samples.Length)]
             : regions;
+    }
+
+    /// <summary>
+    /// <paramref name="region"/> が <see cref="MinVoicedSamples"/> 以上続くランを含むか。
+    /// </summary>
+    /// <param name="runs">結合前のラン。時刻順・非交差であること。</param>
+    /// <remarks>
+    /// 結合（<see cref="MergeCloseRegions"/>）は隣接する区間の和集合しか作らないため、
+    /// 結合後の区間は必ず「連続するいくつかのランとその隙間」になる。
+    /// ランが区間の境界をまたいで半分だけ入ることはないので、包含判定で足りる。
+    /// </remarks>
+    private static bool ContainsSustainedRun(List<VoicedRegion> runs, VoicedRegion region)
+    {
+        int regionEnd = region.Start + region.Length;
+        foreach (var run in runs)
+        {
+            if (run.Length >= MinVoicedSamples
+                && run.Start >= region.Start
+                && run.Start + run.Length <= regionEnd)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>区間を切り出す。チャンク全体と一致するならコピーせず元配列を返す。</summary>
@@ -1019,18 +1072,15 @@ public class TranscriptionService : IDisposable
     private void ProcessChunk(
         PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
     {
+        // results は try の外で宣言する。中で宣言すると、Whisper がキャンセル例外を投げたときに
+        // 確定済みの区間の行まで一緒に捨てられる。それらの行は TranscribeRegion の中で
+        // SegmentTranscribed により画面へ出た後なので、捨てると画面と .txt が食い違う（T126）。
+        var results = new List<string>();
         try
         {
             // 無音は Whisper に渡さない（ハルシネーション防止）。
             // 時刻は区間自身が持つため、無音を捨てても後続の時刻はずれない。
-            var regions = SplitVoicedRegions(chunk.Samples, SilenceCut);
-            if (regions.Count == 0)
-            {
-                return;
-            }
-
-            var results = new List<string>();
-            foreach (var region in regions)
+            foreach (var region in SplitVoicedRegions(chunk.Samples, SilenceCut))
             {
                 if (ShouldStopRegionLoop(interruptible, token))
                 {
@@ -1040,11 +1090,6 @@ public class TranscriptionService : IDisposable
                 var regionStart = RegionStart(chunk.StartElapsed, region.Start);
                 var samples = PadToMinimum(SliceRegion(chunk.Samples, region), MinWhisperSamples);
                 TranscribeRegion(state, samples, regionStart, results, token);
-            }
-
-            if (results.Count > 0)
-            {
-                File.AppendAllLines(_outputPath, results, Encoding.UTF8);
             }
         }
         catch (OperationCanceledException)
@@ -1059,6 +1104,42 @@ public class TranscriptionService : IDisposable
             Error?.Invoke($"文字起こしエラー: {ex.Message}");
         }
 #pragma warning restore CA1031
+
+        // 追記は catch の後ろに置く（finally ではない）。finally に置くと、ここで起きた
+        // IOException が上の catch 節を通らずに TranscriptionLoop まで抜け、
+        // ワーカースレッドごと落ちる。
+        var failure = AppendTranscriptLines(_outputPath, results);
+        if (failure != null)
+        {
+            Error?.Invoke($"文字起こし結果の書き出しに失敗しました: {failure}");
+        }
+    }
+
+    /// <summary>
+    /// 確定した行をテキストファイルへ追記する（REQ-TRX-07）。
+    /// </summary>
+    /// <returns>成功したら <c>null</c>。失敗したらユーザー向けの理由。</returns>
+    /// <remarks>
+    /// 失敗を例外ではなく戻り値で返すのは、呼び出し元（<see cref="ProcessChunk"/>）が
+    /// キャンセル・Whisper の例外を処理し終えた **後** にここを通るためである。
+    /// 例外で返すとワーカースレッドの境界を越えてしまう。
+    /// </remarks>
+    internal static string? AppendTranscriptLines(string outputPath, IReadOnlyList<string> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            File.AppendAllLines(outputPath, lines, Encoding.UTF8);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex.Message;
+        }
     }
 
     /// <summary>
