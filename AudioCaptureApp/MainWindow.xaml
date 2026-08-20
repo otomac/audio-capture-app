@@ -194,7 +194,7 @@
                               VerticalAlignment="Center"
                               IsEnabled="{Binding IsNotBusy}"/>
                     <!-- REQ-LIVEVIEW-01: 見るための窓なので、録音中・処理中でも押せる -->
-                    <Button Content="文字起こし表示" Command="{Binding ShowLiveTranscriptCommand}"
+                    <Button Content="表示" Command="{Binding ShowLiveTranscriptCommand}"
                             Padding="12,2" Margin="8,0,0,0"/>
                 </StackPanel>
             </GroupBox.Header>

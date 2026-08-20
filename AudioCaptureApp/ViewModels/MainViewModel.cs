@@ -271,7 +271,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// 表示行数の上限（REQ-LIVEVIEW-04）。長時間録音でコレクションが無制限に伸びるのを防ぐ。
     /// 捨てられるのは表示だけで、テキストファイルには全行が残る。
     /// </summary>
-    internal const int MaxLiveTranscriptLines = 1000;
+    internal const int MaxLiveTranscriptLines = 100;
 
     /// <summary>
     /// 行を末尾へ追加し、上限を超えた分を<b>先頭から</b>捨てる（REQ-LIVEVIEW-04）。
@@ -500,6 +500,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             _recordingStartTime = _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, OutputFolder);
+
+            // REQ-LIVEVIEW-08: 前のセッションの行が新しいセッションの行に混ざらないようにする。
+            // 開始に成功したあとで消すこと。失敗したのに消すと、失敗の前後を見比べられなくなる。
+            LiveTranscriptLines.Clear();
+
             IsRecording = true;
             ElapsedTime = "00:00:00";
             _clockTimer.Start();

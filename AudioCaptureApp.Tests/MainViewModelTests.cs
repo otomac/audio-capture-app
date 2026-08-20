@@ -229,6 +229,23 @@ public class MainViewModelTests
     }
 
     [Fact]
+    public void AppendLiveTranscriptLine_BeyondConfiguredMaximum_KeepsNewest100()
+    {
+        // 実際の上限値（REQ-LIVEVIEW-04）を使って、超過分が古い方から落ちることを固定する。
+        // 定数を 1,000 に戻す／破棄の向きを逆にする、のどちらでもこのテストが落ちる。
+        var lines = new List<string>();
+        for (int i = 0; i < 150; i++)
+        {
+            MainViewModel.AppendLiveTranscriptLine(
+                lines, $"行 {i}", MainViewModel.MaxLiveTranscriptLines);
+        }
+
+        Assert.Equal(100, lines.Count);
+        Assert.Equal("行 50", lines[0]);
+        Assert.Equal("行 149", lines[^1]);
+    }
+
+    [Fact]
     public void AppendLiveTranscriptLine_AtLimit_KeepsAll()
     {
         // ちょうど上限。境界で 1 行余計に捨てないことを固定する

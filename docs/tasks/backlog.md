@@ -21,6 +21,7 @@
 
 ## 完了
 
+- [x] **T130** 文字起こし表示ウィンドウの改良（初期サイズ 480x240 / ボタン文言「文字起こし表示」→「表示」/ 録音開始成功時に表示内容をクリア / 表示上限 1,000 行 → 100 行）。T114 §8-1 の未解決事項「表示をクリアする手段が無い」はこれで解決 (2026-08-21) → [詳細](./T130-live-transcript-window-tweaks.md)
 - [x] **T128** 文字起こし表示ウィンドウで `ScrollIntoView` を `CollectionChanged` ハンドラー内から同期的に呼んでおり、`ItemContainerGenerator` の状態と食い違って `InvalidOperationException`（「ItemsControl が項目のソースと一致していません」）でプロセスが落ちる。1 チャンクから複数行が連続で届くと再現。`Dispatcher.BeginInvoke(Background)` へ後回しにして解消（実測: 修正前 3/3 クラッシュ → 修正後 0/3）。T114 の実機確認で発覚 (2026-08-21) → [詳細](./T128-live-transcript-scroll-crash.md)
 - [x] **T114** リアルタイム文字起こしのテキストを表示するサブウィンドウを追加する（320x240・リサイズ可・9pt・録音停止で閉じない・プロセス終了で閉じる）。`SegmentTranscribed` を初めて購読した (2026-08-20) → [詳細](./T114-live-transcript-window.md)
 - [x] **T113** 音声ファイル文字起こしの前にオプション指定モーダルダイアログを表示する（ファイル名表示・開始時刻 `hh:mm` 指定・進捗表示・キャンセル）。補助ウィンドウの追加にあたり [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md) を起票 (2026-08-20) → [詳細](./T113-file-transcription-options-dialog.md)
