@@ -20,6 +20,7 @@
 
 ## 完了
 
+- [x] **T133** ハーネスが `docs/spec/` 以外の場所に仕様文書が作られることを禁じていない。実際に `docs/superpowers/specs/2026-08-19-silence-cut-before-whisper-design.md`（T112 の設計文書）が生まれ、内容は `docs/tasks/T112-silence-cut-before-whisper.md` と重複したうえ T125 / T129 の改訂を取り込んでいない古い記述になっていた。50-spec-standards §1 と 00-ways-of-working 法 2 に禁止規則を明記し、当該ファイルを削除した。CLAUDE.md の「ドキュメントの置き場」表にも同じ禁止を明記 (2026-08-22)
 - [x] **T131** `docs/spec/04_sequence_diagram.md` のライブ文字起こしの図が「1,000 行超は先頭から破棄」と書いているが、T130 で上限は 100 行になっており `REQ-LIVEVIEW-04` と食い違う（T130 が 01_requirements.md しか直さなかった）。T129 の作業中に発見。図を 100 行へ修正 (2026-08-21)
 - [x] **T132** `docs/spec/01_requirements.md` の §8 で `REQ-TRX-LIVE-06` が 2 行に重複して振られている（`_sessionClock` の要件と、`REQ-TRX-LIVE-11` と内容が重なる「セッション終了処理は最大 30 秒待機」の要件）。ID は再利用しない規約（50-spec-standards §3）に反する。後者は REQ-TRX-LIVE-11 に吸収して行ごと消すのが妥当。T129 の作業中に発見。重複していた後者の行を削除し REQ-TRX-LIVE-11 に一本化 (2026-08-21)
 - [x] **T129** ライブ文字起こしの出力粒度が 20 秒固定で、「発話が終わった」契機が存在しなかった。マイクは無音でも WASAPI が供給を続けるためギャップ分割（500ms）が発火せず、`StaleBufferAge`（20 秒）も `BufferThresholdSamples`（20 秒）と同値のため連続供給では常に空振りしていた。確定契機に「末尾に `MergeGapSeconds`（2.0 秒）以上の無音が積まれたら確定する」を追加し（REQ-TRX-LIVE-13）、滞留契機を「バッファ先頭サンプルの滞留」から「供給の途絶 5 秒」へ定義し直した（REQ-TRX-LIVE-12、定数も `StaleSupplyIdle` へ改名）。保持時間を `MergeGapSeconds` と同値にしたため Whisper の呼び出し回数は据え置き。実測: 発話終了から表示まで 0〜20 秒 → 3〜4 秒以内、1 発話が複数行に割れないことも確認。T114 の実機確認で発覚 (2026-08-21) → [詳細](./T129-live-transcript-endpointing.md)

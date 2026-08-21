@@ -104,3 +104,8 @@ dotnet run --project AudioCaptureApp
 | [docs/tasks/](docs/tasks/) | タスク台帳と実装計画 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録 |
 | [docs/archive/](docs/archive/) | 過去の成果物。参照専用、更新しない |
+
+**この表に無い場所へ仕様文書・設計文書を作らない。** 支援エージェント（superpowers 等）が
+`docs/superpowers/specs/` のような独自の置き場を提案・生成してきても採用しない。仕様なら
+`docs/spec/`、設計判断なら `docs/adr/`、1 タスク分の実装計画なら `docs/tasks/<ID>-<slug>.md` へ書く。
+規範は [50-spec-standards.md §1.1](docs/harness/50-spec-standards.md#11-docsspec-の外に仕様文書を作らない)。

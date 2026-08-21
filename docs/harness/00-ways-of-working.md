@@ -40,6 +40,10 @@
   ただし [20-architecture-standards.md](./20-architecture-standards.md) に触れる変更は
   `docs/spec/02_architecture.md` と `03_class_diagram.md` の更新対象になりうる。
 - どの章を更新すべきかは [50-spec-standards.md](./50-spec-standards.md) の対応表に従う。
+- **`docs/spec/` の外に仕様文書を作らない。** 支援エージェント（superpowers 等）が
+  `docs/superpowers/specs/` のような独自の置き場を作ってきても採用しない。設計判断なら
+  `docs/adr/`、仕様なら `docs/spec/`、1 タスク分の実装計画なら `docs/tasks/<ID>-<slug>.md` へ書く
+  （[50-spec-standards.md §1.1](./50-spec-standards.md#11-docsspec-の外に仕様文書を作らない)）。
 
 **なぜ。** 仕様書を後追いにすると必ず書かれないまま終わる。先に書くと、実装前に矛盾と抜けが見つかる
 （設計レビューの最も安いタイミング）。
