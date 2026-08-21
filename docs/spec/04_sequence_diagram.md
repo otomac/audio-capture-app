@@ -104,7 +104,7 @@ sequenceDiagram
         TS->>TS: WhisperProcessor.ProcessAsync(region)
         TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
         TS-->>VM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
-        VM->>VM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（1,000 行超は先頭から破棄）
+        VM->>VM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（100 行超は先頭から破棄）
         Note over VM: 文字起こし表示ウィンドウが開いていれば最新行が見える（REQ-LIVEVIEW-03）
     end
     Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る

@@ -110,7 +110,6 @@
 | REQ-TRX-LIVE-07 | 音声の供給が 500ms を超えて途切れた場合、そこまでのバッファを 20 秒未満でも 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。これによりミュート／再生停止をまたいでも時刻が実時刻に追従する | `TranscriptionService.AddSamples`, `ShouldSplitOnGap` |
 | REQ-TRX-LIVE-08 | チャンク先頭の時刻は、バッファ末尾の経過時間からバッファ長を差し引いて求める。末尾を毎パケット実時間へ再アンカーするため、リサンプル誤差が累積しない | `TranscriptionService.ChunkStartElapsed` |
 | REQ-TRX-LIVE-09 | ギャップでチャンクを分割する際、リサンプラとローパスフィルタの状態もリセットする（不連続な音声を地続きとして扱わないため） | `TranscriptionService.AddSamples` |
-| REQ-TRX-LIVE-06 | セッション終了処理は最大 30 秒待機し、タイムアウトした場合はキャンセルして強制終了する | `TranscriptionService.StopSession` |
 
 ## 9. ファイルからの文字起こし
 
