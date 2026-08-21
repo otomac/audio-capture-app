@@ -44,7 +44,7 @@ Windows向け音声キャプチャアプリ。WASAPI Shared Mode で入力デバ
 ### ビルド
 
 ```bash
-dotnet build AudioCaptureApp.sln
+dotnet build AudioCaptureApp.slnx
 ```
 
 ### 実行（動作確認）
