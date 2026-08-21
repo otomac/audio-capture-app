@@ -99,73 +99,180 @@ public class TranscriptionServiceTests
         Assert.Equal(chunkStart + TimeSpan.FromSeconds(20), remainderStart);
     }
 
-    // --- 滞留バッファの切り出し判定 (T120) ---
+    // --- チャンクの確定契機 (T117 / T120 / T129) ---
     //
-    // 20 秒分たまらなくても、先頭サンプルが 20 秒以上書き出されずに残っていたら確定する。
-    // これが無いと、ミュートや再生停止で供給が止まったソースのバッファは
-    // 「次のパケットが来てギャップ分割が発火するまで」書き出されない。
+    // 契機は 3 つ。①20 秒分たまった ②末尾に発話終了とみなせる無音が積まれた
+    // ③供給が途絶えた。この優先順で判定する（REQ-TRX-LIVE-04）。
 
     private const int Threshold = 16000 * 20;   // BufferThresholdSamples
+    private const int Endpoint = 16000 * 2;     // 既定 MergeGapSeconds = 2.0 秒
+
+    /// <summary>供給が続いている（最後のパケットを受け取った直後）状態。</summary>
+    private static readonly TimeSpan Supplying = TimeSpan.Zero;
+
+    private static readonly double Rms = SilenceCutOptions.Default.RmsThreshold;
 
     [Fact]
     public void ChunkTakeCount_ReachedThreshold_TakesExactlyThreshold()
     {
         // 20 秒分に達していれば、それ以上溜まっていても 20 秒分だけ（T117）
-        Assert.Equal(Threshold, TranscriptionService.ChunkTakeCount(Threshold, TimeSpan.FromSeconds(20)));
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(Threshold, Supplying, 0, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_FarOverThresholdAndStale_StillTakesOnlyThreshold()
+    public void ChunkTakeCount_FarOverThresholdAndIdle_StillTakesOnlyThreshold()
     {
         // バックログが積んでいても 1 回の Whisper 呼び出しは 20 秒分に制限する
         Assert.Equal(
             Threshold,
-            TranscriptionService.ChunkTakeCount(Threshold * 6, TimeSpan.FromSeconds(600)));
+            TranscriptionService.ChunkTakeCount(
+                Threshold * 6, TimeSpan.FromSeconds(600), null, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_BelowThresholdAndFresh_TakesNothing()
+    public void ChunkTakeCount_OverThresholdWithSilentTail_StillTakesOnlyThreshold()
     {
-        // まだ溜め続けるべき状態（通常の録音中）
-        Assert.Equal(0, TranscriptionService.ChunkTakeCount(16000 * 16, TimeSpan.FromSeconds(16)));
+        // 末尾無音の契機が同時に成立していても、上限（①）を優先する
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(Threshold + 1, Supplying, Endpoint, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_BelowThresholdButStale_TakesWholeBuffer()
+    public void ChunkTakeCount_ContinuousSupplyWithVoiceAtEnd_TakesNothing()
     {
-        // 報告事象の再現条件: 16 秒分たまった直後にミュートされ、
-        // 20 秒経っても次のパケットが来ない → バッファ全部を確定させる
+        // まだ溜め続けるべき状態（発話の途中）
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 16, Supplying, 0, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SilentTailAtEndpointLength_TakesWholeBuffer()
+    {
+        // 発話が終わった契機。20 秒に達していなくても確定する（T129）
+        const int buffered = 16000 * 5;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(buffered, Supplying, Endpoint, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SilentTailOneSampleShort_TakesNothing()
+    {
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 5, Supplying, Endpoint - 1, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_AllSilenceBelowThreshold_TakesNothing()
+    {
+        // バッファ全体が無音（null）では末尾無音で確定しない。20 秒たまってから切り出され、
+        // 有声区間 0 件として Whisper を呼ばずに捨てられる
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 19, Supplying, null, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_ZeroEndpointLengthWithVoiceAtEnd_TakesNothing()
+    {
+        // MergeGapSeconds に 0 を設定されても、有声のまま（発話の途中で）確定しない
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 5, Supplying, 0, 0));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SupplyIdleAtThreshold_TakesWholeBuffer()
+    {
+        // 報告事象の再現条件: 16 秒分たまった直後にミュートされ、次のパケットが来ない
         const int buffered = 16000 * 16;
 
         Assert.Equal(
             buffered,
-            TranscriptionService.ChunkTakeCount(buffered, TimeSpan.FromSeconds(57)));
+            TranscriptionService.ChunkTakeCount(
+                buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_ExactlyAtStaleAge_TakesWholeBuffer()
-    {
-        const int buffered = 16000 * 16;
-
-        Assert.Equal(
-            buffered,
-            TranscriptionService.ChunkTakeCount(buffered, TranscriptionService.StaleBufferAge));
-    }
-
-    [Fact]
-    public void ChunkTakeCount_StaleButShorterThanTailMinimum_TakesNothing()
+    public void ChunkTakeCount_SupplyIdleButShorterThanTailMinimum_TakesNothing()
     {
         // 0.2 秒未満の断片は 1 回の推論に見合わないためセッション終了まで持ち越す
         Assert.Equal(
             0,
             TranscriptionService.ChunkTakeCount(
-                TranscriptionService.MinTailSamples - 1, TimeSpan.FromSeconds(600)));
+                TranscriptionService.MinTailSamples - 1,
+                TimeSpan.FromSeconds(600),
+                null,
+                Endpoint));
     }
 
     [Fact]
     public void ChunkTakeCount_EmptyBuffer_TakesNothing()
     {
-        Assert.Equal(0, TranscriptionService.ChunkTakeCount(0, TimeSpan.FromSeconds(600)));
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(0, TimeSpan.FromSeconds(600), null, Endpoint));
+    }
+
+    // --- 末尾無音の検出 (T129) ---
+
+    [Fact]
+    public void TrailingSilenceSamples_AllSilence_ReturnsNull()
+    {
+        var buffer = new List<float>(new float[16000 * 3]);
+
+        Assert.Null(TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_EmptyBuffer_ReturnsNull()
+    {
+        Assert.Null(TranscriptionService.TrailingSilenceSamples([], Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_EndsWithVoice_ReturnsZero()
+    {
+        var buffer = new List<float>(MakeSamples(16000, (12800, 3200)));
+
+        Assert.Equal(0, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_SilentTail_ReturnsTailLength()
+    {
+        // 先頭 1 秒が有声、残り 2 秒が無音
+        var buffer = new List<float>(MakeSamples(16000 * 3, (0, 16000)));
+
+        Assert.Equal(16000 * 2, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_LengthNotWindowMultiple_CountsFromEnd()
+    {
+        // 4000 サンプル（窓 2 個 + 端数 800）。有声は先頭 2000 まで。
+        // 末尾揃えなら窓は [2400,4000) [800,2400) [0,800) と敷かれ、
+        // [800,2400) が有声に当たるので末尾無音は 1600。
+        // 先頭揃えだと 800 になるため、この値で敷き方の違いを検出できる。
+        var buffer = new List<float>(MakeSamples(4000, (0, 2000)));
+
+        Assert.Equal(1600, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_VoiceOnlyInHeadRemainder_NotAllSilence()
+    {
+        // 有声が先頭側の端数窓（500 サンプル）にしかない。
+        // 端数窓を評価しないと「全体が無音」と誤判定して確定を取りこぼす
+        var buffer = new List<float>(MakeSamples(5300, (0, 500)));
+
+        Assert.Equal(4800, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
     }
 
     // --- 短いチャンクのパディング (T116) ---
