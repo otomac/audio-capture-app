@@ -16,10 +16,10 @@
 
 ## 未着手
 - [ ] **T115** 話者識別（Speaker Diarization）を sherpa-onnx で導入する → **要 ADR（新規外部ライブラリ採用 ＋ ADR-0001 の「Service 抽象化しない」方針との整合）／要パッケージ個別承認**
-- [ ] **T109** `README.md` の「ビルド」節が存在しない `AudioCaptureApp.sln` を参照している（正: `AudioCaptureApp.slnx`）。T108 の作業中に発見
 
 ## 完了
 
+- [x] **T109** `README.md` の「ビルド」節が存在しない `AudioCaptureApp.sln` を参照していた（正: `AudioCaptureApp.slnx`）。T108 の作業中に発見。当該 1 行を `.slnx` へ修正（`docs/archive/` 内の同種の記述は参照専用のため対象外） (2026-08-22)
 - [x] **T133** ハーネスが `docs/spec/` 以外の場所に仕様文書が作られることを禁じていない。実際に `docs/superpowers/specs/2026-08-19-silence-cut-before-whisper-design.md`（T112 の設計文書）が生まれ、内容は `docs/tasks/T112-silence-cut-before-whisper.md` と重複したうえ T125 / T129 の改訂を取り込んでいない古い記述になっていた。50-spec-standards §1 と 00-ways-of-working 法 2 に禁止規則を明記し、当該ファイルを削除した。CLAUDE.md の「ドキュメントの置き場」表にも同じ禁止を明記 (2026-08-22)
 - [x] **T131** `docs/spec/04_sequence_diagram.md` のライブ文字起こしの図が「1,000 行超は先頭から破棄」と書いているが、T130 で上限は 100 行になっており `REQ-LIVEVIEW-04` と食い違う（T130 が 01_requirements.md しか直さなかった）。T129 の作業中に発見。図を 100 行へ修正 (2026-08-21)
 - [x] **T132** `docs/spec/01_requirements.md` の §8 で `REQ-TRX-LIVE-06` が 2 行に重複して振られている（`_sessionClock` の要件と、`REQ-TRX-LIVE-11` と内容が重なる「セッション終了処理は最大 30 秒待機」の要件）。ID は再利用しない規約（50-spec-standards §3）に反する。後者は REQ-TRX-LIVE-11 に吸収して行ごと消すのが妥当。T129 の作業中に発見。重複していた後者の行を削除し REQ-TRX-LIVE-11 に一本化 (2026-08-21)
