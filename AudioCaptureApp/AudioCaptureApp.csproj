@@ -31,6 +31,22 @@
     <PackageReference Include="Whisper.net.Runtime.Cuda" />
     <PackageReference Include="Whisper.net.Runtime.Vulkan" />
     <PackageReference Include="Whisper.net.Runtime" />
+    <!--
+      話者ダイアライゼーション（ADR-0003）。org.k2fsa.sherpa.onnx は 9 プラットフォーム分の
+      ネイティブランタイムを推移的に引き込むため、win-x64 以外を直接参照 ＋ ExcludeAssets="all" で打ち消す。
+      直接参照は推移参照より優先されるため、これで当該アセットが一切流れてこなくなる。
+      実測: 未対策だと出力に約 330MB のネイティブが並ぶ。対策後は runtimes/win-x64 のみ（約 22MB）。
+    -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x86" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-arm64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.osx-x64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.osx-arm64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.android-x64" ExcludeAssets="all" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.android-arm64" ExcludeAssets="all" />
   </ItemGroup>
 
   <!-- PublishSingleFile 時: 不要な runtimes (arm64/x86) と .pdb を削除 -->

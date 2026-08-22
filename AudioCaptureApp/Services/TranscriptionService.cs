@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using AudioCaptureApp.Models;
 using NAudio.Wave;
 using Whisper.net;
 using Whisper.net.LibraryLoader;
@@ -55,6 +56,20 @@ public sealed record SilenceCutOptions
 
 /// <summary>チャンク内の有声区間。Start はチャンク先頭からのサンプル位置。</summary>
 public readonly record struct VoicedRegion(int Start, int Length);
+
+/// <summary>
+/// ファイル文字起こしの進捗（REQ-TRX-FILE-06）。
+/// </summary>
+/// <param name="Phase">
+/// 実行中のフェーズ名。話者ダイアライゼーションが有効なときは「話者識別中」→「処理中」の
+/// 2 フェーズになり、フェーズごとに 0% から進む。フェーズ名とセットで表示しないと
+/// 進捗バーが 2 度 0% に戻る理由が分からなくなる。
+/// </param>
+/// <param name="Processed">
+/// そのフェーズが読み終えたファイル内の位置。**常にファイル先頭を基準**とし、
+/// REQ-TRX-FILE-10 の開始時刻は足さない（残り時間の目安であって時刻ではないため）。
+/// </param>
+public readonly record struct FileTranscriptionProgress(string Phase, TimeSpan Processed, TimeSpan Total);
 
 public class TranscriptionService : IDisposable
 {
@@ -545,7 +560,8 @@ public class TranscriptionService : IDisposable
     public async Task<bool> TranscribeFileAsync(
         string audioFilePath,
         TimeSpan startOffset,
-        IProgress<(TimeSpan processed, TimeSpan total)>? progress,
+        SpeakerDiarizationService? diarization,
+        IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
         if (_factory == null)
@@ -557,14 +573,19 @@ public class TranscriptionService : IDisposable
         string outputPath = BuildTranscriptPath(audioFilePath);
         try
         {
-            return await TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, progress, ct)
-                .ConfigureAwait(false);
+            // diarization が null なら従来どおりストリーミングで処理する（REQ-TRX-DIA-03）。
+            // 非 null のときだけ、音声全体をメモリへ載せる経路へ分岐する（NFR-07）。
+            var work = diarization == null
+                ? TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, progress, ct)
+                : TranscribeFileWithDiarizationAsync(
+                    audioFilePath, outputPath, startOffset, diarization, progress, ct);
+            return await work.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // 部分出力ファイルは削除する（ユーザーが完結したと誤認しないように）。
             // Core を抜ける時点で using が StreamWriter を破棄済みのため、ここで削除できる。
-            TryDeleteFile(outputPath);
+            DeletePartialOutput(outputPath, diarization);
             throw;
         }
         // CA1031: キャンセル判定のため全例外をいったん見る必要がある（次行のコメント参照）。
@@ -576,7 +597,7 @@ public class TranscriptionService : IDisposable
             // 投げることがあるため、トークンがキャンセル済みなら中止として扱う
             if (ct.IsCancellationRequested)
             {
-                TryDeleteFile(outputPath);
+                DeletePartialOutput(outputPath, diarization);
                 throw new OperationCanceledException(ct);
             }
             Error?.Invoke($"ファイル文字起こしエラー: {ex.Message}");
@@ -591,7 +612,7 @@ public class TranscriptionService : IDisposable
         string audioFilePath,
         string outputPath,
         TimeSpan startOffset,
-        IProgress<(TimeSpan processed, TimeSpan total)>? progress,
+        IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
         await using var reader = new AudioFileReader(audioFilePath);
@@ -609,9 +630,9 @@ public class TranscriptionService : IDisposable
         double resamplePos = 0;
         float lpfPrev = 0f;
         TimeSpan chunkOffset = TimeSpan.Zero;
-        const string label = "ファイル";
+        const string label = FileSourceLabel;
 
-        progress?.Report((TimeSpan.Zero, totalTime));
+        progress?.Report(new FileTranscriptionProgress(TranscribePhase, TimeSpan.Zero, totalTime));
 
         int samplesRead;
         while ((samplesRead = reader.Read(readBuffer, 0, readBuffer.Length)) > 0)
@@ -633,7 +654,7 @@ public class TranscriptionService : IDisposable
                         processor, chunk, startOffset + chunkOffset, label, writer, ct)
                     .ConfigureAwait(false);
                 chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
-                progress?.Report((chunkOffset, totalTime));
+                progress?.Report(new FileTranscriptionProgress(TranscribePhase, chunkOffset, totalTime));
             }
         }
 
@@ -648,8 +669,216 @@ public class TranscriptionService : IDisposable
             chunkOffset += TimeSpan.FromSeconds((double)chunk.Length / TargetRate);
         }
 
-        progress?.Report((totalTime, totalTime));
+        progress?.Report(new FileTranscriptionProgress(TranscribePhase, totalTime, totalTime));
         return true;
+    }
+
+    /// <summary>進捗表示に出すフェーズ名（REQ-TRX-FILE-06）。</summary>
+    private const string TranscribePhase = "処理中";
+
+    /// <summary>進捗表示に出すフェーズ名（話者ダイアライゼーション有効時のみ現れる）。</summary>
+    private const string DiarizePhase = "話者識別中";
+
+    /// <summary>ファイル文字起こしの出力行に付けるラベル。</summary>
+    internal const string FileSourceLabel = "ファイル";
+
+    /// <summary>
+    /// 話者ダイアライゼーション有効時のファイル文字起こし（REQ-TRX-DIA-04）。
+    /// </summary>
+    /// <remarks>
+    /// 従来経路（<see cref="TranscribeFileCoreAsync"/>）と違い、**デコード結果を丸ごとメモリへ載せる**。
+    /// sherpa-onnx の Diarization API が音声全体を 1 つの配列で要求するためで、
+    /// 16kHz モノラル float では 約 230MB/時間 になる（NFR-07）。この経路は
+    /// <c>SpeakerDiarizationEnabled = true</c> のときにしか通らない。
+    /// <para>
+    /// **Diarization を Whisper より先に走らせる。** モデル不備やレート不一致を、
+    /// Whisper に数分掛けた後ではなく着手直後に判明させるためである（REQ-TRX-DIA-11）。
+    /// </para>
+    /// <para>
+    /// 出力ファイルはマージが終わってから開く。途中で失敗・中止したときに
+    /// 話者欄の欠けた中途半端な .transcript.txt を残さないためである。
+    /// </para>
+    /// </remarks>
+    private async Task<bool> TranscribeFileWithDiarizationAsync(
+        string audioFilePath,
+        string outputPath,
+        TimeSpan startOffset,
+        SpeakerDiarizationService diarization,
+        IProgress<FileTranscriptionProgress>? progress,
+        CancellationToken ct)
+    {
+        var pcm = DecodeToMono16k(audioFilePath, ct, out var totalTime);
+        progress?.Report(new FileTranscriptionProgress(DiarizePhase, TimeSpan.Zero, totalTime));
+
+        // ① 話者識別。キャンセルは開始前と完了後にだけ効く（REQ-TRX-DIA-12）。
+        ct.ThrowIfCancellationRequested();
+        var diarizeProgress = progress == null
+            ? null
+            : new FractionProgress(progress, DiarizePhase, totalTime);
+        var speakerSegments = diarization.Diarize(pcm, diarizeProgress, ct);
+        ct.ThrowIfCancellationRequested();
+
+        // ② Whisper は同じ音声を独立に解析する。Diarization の結果で音声を切り分けない
+        //    （切り分けると Whisper の認識コンテキストが失われる）。
+        var transcriptSegments = await CollectTranscriptSegmentsAsync(pcm, totalTime, progress, ct)
+            .ConfigureAwait(false);
+
+        // ③ タイムラインを突き合わせる。ここは純粋関数で、推論も I/O も行わない。
+        var attributed = TranscriptDiarizationMerger.Merge(transcriptSegments, speakerSegments);
+
+        // ④ ここで初めてファイルへ書く。
+        // ここから先はキャンセルを見ない。全部書くか一行も書かないかのどちらかにする。
+        await WriteAttributedSegmentsAsync(outputPath, attributed, startOffset).ConfigureAwait(false);
+
+        progress?.Report(new FileTranscriptionProgress(TranscribePhase, totalTime, totalTime));
+        return true;
+    }
+
+    /// <summary>
+    /// 音声ファイル全体を 16kHz モノラルへデコードする（REQ-TRX-05 と同じ変換）。
+    /// </summary>
+    /// <remarks>
+    /// 総再生時間から必要量を先に確保する。<see cref="List{T}"/> の倍々成長に任せると、
+    /// 拡張のたびに旧配列と新配列が同時に存在して長時間音声でメモリのピークが跳ねるため。
+    /// 末尾の <c>ToArray</c> で一度だけコピーが発生し、その瞬間だけ約 2 倍を要する
+    /// （sherpa-onnx が <c>float[]</c> を要求するため避けられない）。
+    /// </remarks>
+    private static float[] DecodeToMono16k(string audioFilePath, CancellationToken ct, out TimeSpan totalTime)
+    {
+        using var reader = new AudioFileReader(audioFilePath);
+        int sourceRate = reader.WaveFormat.SampleRate;
+        int channels = reader.WaveFormat.Channels;
+        totalTime = reader.TotalTime;
+        float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
+
+        long estimated = (long)(totalTime.TotalSeconds * TargetRate) + TargetRate;
+        var pcm = new List<float>((int)Math.Clamp(estimated, TargetRate, int.MaxValue / 2));
+
+        var readBuffer = new float[sourceRate * channels];
+        double resamplePos = 0;
+        float lpfPrev = 0f;
+
+        int samplesRead;
+        while ((samplesRead = reader.Read(readBuffer, 0, readBuffer.Length)) > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            DownmixResampleAppend(
+                readBuffer, samplesRead, channels, sourceRate,
+                alpha, ref resamplePos, ref lpfPrev, pcm);
+        }
+
+        return pcm.ToArray();
+    }
+
+    /// <summary>
+    /// デコード済み PCM を 20 秒チャンク → 有声区間の順に Whisper へ掛け、結果を溜める。
+    /// </summary>
+    /// <remarks>
+    /// 時刻は**ファイル先頭基準**で持つ。REQ-TRX-FILE-10 の開始時刻をここで足してはならない。
+    /// 足すと話者区間（ファイル先頭基準）と同じ時間軸で比較できなくなる。開始時刻は
+    /// <see cref="WriteAttributedSegmentsAsync"/> で行を整形する直前に足す。
+    /// </remarks>
+    private async Task<List<TranscriptSegment>> CollectTranscriptSegmentsAsync(
+        float[] pcm,
+        TimeSpan totalTime,
+        IProgress<FileTranscriptionProgress>? progress,
+        CancellationToken ct)
+    {
+        var segments = new List<TranscriptSegment>();
+        await using var processor = _factory!.CreateBuilder().WithLanguage("ja").Build();
+
+        progress?.Report(new FileTranscriptionProgress(TranscribePhase, TimeSpan.Zero, totalTime));
+
+        for (int offset = 0; offset < pcm.Length; offset += BufferThresholdSamples)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            int take = Math.Min(BufferThresholdSamples, pcm.Length - offset);
+
+            // 末尾の端数は従来経路と同じ足切り（0.2 秒未満は Whisper がセグメントを返さない）。
+            if (take < MinTailSamples)
+            {
+                break;
+            }
+
+            var chunk = new float[take];
+            Array.Copy(pcm, offset, chunk, 0, take);
+            var chunkStart = TimeSpan.FromSeconds((double)offset / TargetRate);
+
+            foreach (var region in SplitVoicedRegions(chunk, SilenceCut))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var regionOffset = RegionStart(chunkStart, region.Start);
+                var samples = PadToMinimum(SliceRegion(chunk, region), MinWhisperSamples);
+
+                await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
+                {
+                    var text = segment.Text?.Trim();
+                    if (string.IsNullOrEmpty(text))
+                    {
+                        continue;
+                    }
+
+                    segments.Add(new TranscriptSegment(
+                        regionOffset + segment.Start, regionOffset + segment.End, text));
+                }
+            }
+
+            progress?.Report(new FileTranscriptionProgress(
+                TranscribePhase,
+                TimeSpan.FromSeconds((double)(offset + take) / TargetRate),
+                totalTime));
+        }
+
+        return segments;
+    }
+
+    /// <summary>
+    /// 話者付きの結果を <c>.transcript.txt</c> へ書き出す（REQ-TRX-07 / REQ-TRX-DIA-06）。
+    /// </summary>
+    /// <remarks>
+    /// 話者の割り当てはタイムライン全体が揃うまで確定しないため、
+    /// <see cref="SegmentTranscribed"/> の発火もここまで遅れる。
+    /// 従来経路（Diarization 無効）は 1 セグメント確定ごとに発火する。
+    /// <para>
+    /// **ここではキャンセルを見ない。** 推論はすべて終わっており、残るのは整形と書き出しだけの
+    /// 確定処理である。途中で抜けると話者欄の欠けた中途半端なファイルが残るうえ、
+    /// このファイルは <see cref="DeletePartialOutput"/> の対象外（Diarization 経路では
+    /// 「この実行が作ったか」を区別できない）なので消してもやれない。
+    /// 全部書くか、一行も書かないかのどちらかにする。
+    /// </para>
+    /// </remarks>
+    private async Task WriteAttributedSegmentsAsync(
+        string outputPath,
+        IReadOnlyList<SpeakerAttributedSegment> segments,
+        TimeSpan startOffset)
+    {
+        await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
+
+        foreach (var segment in segments)
+        {
+            var startTime = startOffset + segment.Start;
+            var endTime = startOffset + segment.End;
+            var speaker = TranscriptDiarizationMerger.FormatSpeaker(segment.SpeakerId);
+            var line =
+                $"[{startTime:hh\\:mm\\:ss} - {endTime:hh\\:mm\\:ss}] [{FileSourceLabel}] [{speaker}] {segment.Text}";
+            await writer.WriteLineAsync(line).ConfigureAwait(false);
+            SegmentTranscribed?.Invoke(line);
+        }
+
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 0.0〜1.0 の割合を、フェーズ名付きのファイル進捗へ変換する小さなアダプター。
+    /// <see cref="SpeakerDiarizationService"/> に UI 都合の型を持ち込まないために挟む。
+    /// </summary>
+    private sealed class FractionProgress(
+        IProgress<FileTranscriptionProgress> inner, string phase, TimeSpan total) : IProgress<double>
+    {
+        public void Report(double value)
+            => inner.Report(new FileTranscriptionProgress(phase, total * Math.Clamp(value, 0.0, 1.0), total));
     }
 
     // {入力ファイル名}.transcript.txt を同じフォルダに配置
@@ -658,6 +887,26 @@ public class TranscriptionService : IDisposable
     internal static string BuildTranscriptPath(string audioFilePath)
     {
         return Path.ChangeExtension(audioFilePath, ".transcript.txt");
+    }
+
+    /// <summary>
+    /// 中止時に、この実行が作りかけた出力ファイルだけを消す（REQ-TRX-FILE-07）。
+    /// </summary>
+    /// <remarks>
+    /// 従来経路（<paramref name="diarization"/> が <c>null</c>）は開始時点で出力ファイルを
+    /// <c>append: false</c> で開いて中身を捨てているため、中止したら消すのが正しい。
+    /// Diarization 経路はマージが終わるまで出力ファイルを開かない。中止時点では未作成なので、
+    /// ここで無条件に消すと **前回成功したときの `.transcript.txt` を巻き添えで削除してしまう**。
+    /// 消してよいのは「この実行が作ったもの」だけである。
+    /// </remarks>
+    private static void DeletePartialOutput(string path, SpeakerDiarizationService? diarization)
+    {
+        if (diarization != null)
+        {
+            return;
+        }
+
+        TryDeleteFile(path);
     }
 
     private static void TryDeleteFile(string path)

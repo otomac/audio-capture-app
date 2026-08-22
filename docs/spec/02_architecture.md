@@ -9,6 +9,7 @@
 | 録音 | NAudio 2.2.1 + NAudio.Wasapi 2.2.1（WASAPI Shared Mode） |
 | MP3 エンコード | NAudio.Lame 2.1.0（`LameMP3FileWriter`） |
 | 文字起こし | Whisper.net 1.9.0 + Whisper.net.Runtime / Runtime.Cuda / Runtime.Vulkan（GGML モデル） |
+| 話者ダイアライゼーション | sherpa-onnx 1.13.5（`org.k2fsa.sherpa.onnx`、ネイティブランタイムは win-x64 のみ同梱）。ファイル文字起こし経路でのみ使用し、既定は無効（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md)） |
 | 設定永続化 | System.Text.Json（`settings.json`） |
 | テスト | xUnit（`AudioCaptureApp.Tests`） |
 
@@ -32,6 +33,9 @@ graph TB
     subgraph Service["Service層"]
         ACS["AudioCaptureService"]
         TS["TranscriptionService"]
+        SDS["SpeakerDiarizationService"]
+        TDM["TranscriptDiarizationMerger
+(static)"]
         SS["SettingsService"]
     end
 
@@ -45,6 +49,7 @@ graph TB
         NAudio["NAudio (WASAPI / MMDevice)"]
         Lame["NAudio.Lame (LameMP3FileWriter)"]
         Whisper["Whisper.net (WhisperFactory / WhisperProcessor)"]
+        Sherpa["sherpa-onnx (OfflineSpeakerDiarization)"]
         FS["ファイルシステム (settings.json, *.mp3, *.txt)"]
     end
 
@@ -81,9 +86,9 @@ graph TB
   補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
 - **ViewModel層**（`ViewModels/MainViewModel`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
-- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SettingsService`）
+- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`）
   NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
-- **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`）
+- **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
   可変・不変データを保持する POCO。ロジックを持たない。
 
 ## 3. コンポーネント間の主要な依存関係
@@ -92,6 +97,9 @@ graph TB
 - `MainViewModel` は `AudioCaptureService` / `TranscriptionService` / `SettingsService` をフィールドとして保持し、直接インスタンス化する。
 - `AudioCaptureService` はライブ文字起こしのために `TranscriptionService` への参照を `SetTranscriptionService` で受け取る（null 許容、疎結合）。録音中のみ音声サンプルを `AddSamples` で渡す。
 - `TranscriptionService` は `AudioCaptureService` を一切参照しない（一方向依存）。
+- `MainViewModel` は話者ダイアライゼーションが有効な設定のときだけ `SpeakerDiarizationService` を生成して保持し、`Dispose` で解放する。無効なら `null` のままにする。
+- `TranscriptionService.TranscribeFileAsync` は `SpeakerDiarizationService?` を**引数で受け取るだけ**であり、フィールドとして保持も破棄もしない。`null` なら Diarization を行わない従来経路を走る。sherpa-onnx への依存は `SpeakerDiarizationService` の中だけに閉じている（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md) 争点 3）。
+- `SpeakerDiarizationService` は `TranscriptionService` も Whisper.net も一切参照しない。両エンジンは同じ音声を独立に解析し、結果の統合は `TranscriptDiarizationMerger`（static・純粋関数）だけが担う（REQ-TRX-DIA-04）。
 
 ## 4. スレッドモデル
 
@@ -106,6 +114,7 @@ graph TB
 | `WhisperTranscription` | `TranscriptionService.TranscriptionLoop`（ライブ文字起こしセッション中のみ起動する専用 `Thread`） | 1 秒周期で各音声ソースのバッファを確認し、閾値到達分を Whisper で処理 |
 | ハードウェアミュート通知 | `AudioEndpointVolume.OnVolumeNotification`（OS コールバック） | OS 側のミュート変更をアプリへ通知（非 UI スレッド） |
 | `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `TryLoadWhisperModel` / `RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
+| sherpa-onnx ネイティブ推論 | `SpeakerDiarizationService.Diarize`（上記 `Task.Run` ワーカーから同期的に呼ぶ） | 話者ダイアライゼーション。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`lock` で 1 度に 1 呼び出しへ直列化する（REQ-TRX-DIA-10） |
 
 UI スレッド以外からプロパティを更新する箇所（`MicMuteChangedExternally`、`TranscriptionService.Error`/`RuntimeInfo`、`AudioCaptureService.RecordingError`）はすべて `Application.Current.Dispatcher.BeginInvoke` を介して UI スレッドに戻す（[CLAUDE.md](../../CLAUDE.md) の開発ルールに準拠）。
 
@@ -135,6 +144,34 @@ flowchart LR
     Whisper1 --> Txt["*.txt (同名, 追記)"]
     Whisper2 --> Txt
 ```
+
+### 5.3 文字起こし（ファイル・話者ダイアライゼーション有効時）
+
+無効時は従来どおり、読み込みながら 20 秒チャンクを順に処理して 1 行ずつ書き出す（5.2 と同じ流れをファイル読み込み側で行う）。
+**有効時のみ**下図の流れになる。Diarization API が音声全体を要求するため、デコード結果を一度メモリへ載せる（NFR-07）。
+
+```mermaid
+flowchart TB
+    File["音声ファイル (*.wav / *.mp3)"] --> Dec["AudioFileReader
+ダウンミックス+LPF+リサンプル"]
+    Dec --> Pcm["16kHz モノラル PCM 全体
+(float[])"]
+    Pcm --> Dia["SpeakerDiarizationService
+(sherpa-onnx)"]
+    Pcm --> Chunk["20秒チャンク → 有声区間分割"]
+    Chunk --> Whisper["WhisperProcessor"]
+    Dia --> SS2["SpeakerSegment[]"]
+    Whisper --> TS2["TranscriptSegment[]"]
+    SS2 --> Merge["TranscriptDiarizationMerger.Merge
+(重複長で話者を決める)"]
+    TS2 --> Merge
+    Merge --> Out["SpeakerAttributedSegment[]"]
+    Out --> Txt2["*.transcript.txt
+[時刻] [ファイル] [話者N] テキスト"]
+```
+
+**Diarization を先に走らせる。** 失敗（モデル未配置・破損・レート不一致）は Whisper を 1 秒も回す前に
+判明させたいためである（REQ-TRX-DIA-11）。
 
 ## 6. 永続化されるデータ
 

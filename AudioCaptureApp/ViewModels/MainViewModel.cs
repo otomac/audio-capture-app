@@ -14,6 +14,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly AudioCaptureService _audioCaptureService = new();
     private readonly TranscriptionService _transcriptionService = new();
     private readonly SettingsService _settingsService = new();
+
+    /// <summary>
+    /// 話者ダイアライゼーション（REQ-TRX-DIA-03）。設定で無効なら <c>null</c> のままにする。
+    /// 生成と破棄はここが持ち、<see cref="TranscriptionService"/> へは引数で貸すだけである
+    /// （[ADR-0003](../../docs/adr/0003-speaker-diarization-with-sherpa-onnx.md) の決定 D11）。
+    /// </summary>
+    private readonly SpeakerDiarizationService? _speakerDiarizationService;
     private readonly DispatcherTimer _meterTimer;
     private readonly DispatcherTimer _clockTimer;
 
@@ -67,6 +74,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.SilenceRmsThreshold,
             _settings.SilenceMergeGapSeconds,
             _settings.VoicedPaddingSeconds);
+
+        // 有効なときだけ生成する。モデルの読み込みは初回の実行まで遅らせるため、
+        // ここで生成してもモデルが未配置なら起動を妨げない（エラーは実行時に出る）。
+        if (_settings.SpeakerDiarizationEnabled)
+        {
+            _speakerDiarizationService = new SpeakerDiarizationService(new SpeakerDiarizationOptions(
+                _settings.SpeakerSegmentationModelPath,
+                _settings.SpeakerEmbeddingModelPath,
+                _settings.SpeakerClusteringThreshold,
+                _settings.KnownSpeakerCount,
+                _settings.SpeakerDiarizationThreads));
+        }
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
         // ライブ用チェックボックスと独立して動作する）
@@ -822,16 +841,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusMessage = "音声ファイルから文字起こし中...";
         try
         {
-            var progress = new Progress<(TimeSpan processed, TimeSpan total)>(v =>
+            // 話者ダイアライゼーションが有効だと「話者識別中」→「処理中」の 2 フェーズになる。
+            // フェーズ名を出さないと、進捗バーが 2 度 0% に戻る理由が分からない（REQ-TRX-FILE-06）。
+            var progress = new Progress<Services.FileTranscriptionProgress>(v =>
             {
                 FileTranscriptionStatus =
-                    $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}";
-                FileTranscriptionProgress = FileTranscriptionProgressFor(v.processed, v.total);
+                    $"{v.Phase}: {v.Processed:hh\\:mm\\:ss} / {v.Total:hh\\:mm\\:ss}";
+                FileTranscriptionProgress = FileTranscriptionProgressFor(v.Processed, v.Total);
             });
             var token = _fileTranscriptionCts.Token;
             // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
-            var ok = await Task.Run(() =>
-                _transcriptionService.TranscribeFileAsync(filePath, startOffset, progress, token));
+            var ok = await Task.Run(() => _transcriptionService.TranscribeFileAsync(
+                filePath, startOffset, _speakerDiarizationService, progress, token));
             if (ok)
             {
                 var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
@@ -909,5 +930,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _fileTranscriptionCts = null;
         _audioCaptureService.Dispose();
         _transcriptionService.Dispose();
+        _speakerDiarizationService?.Dispose();
     }
 }

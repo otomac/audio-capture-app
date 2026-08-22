@@ -19,6 +19,14 @@ public class AppSettingsTests
         Assert.Equal(0.01, settings.SilenceRmsThreshold);
         Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
         Assert.Equal(0.2, settings.VoicedPaddingSeconds);
+        // 話者ダイアライゼーションは既定で無効（REQ-TRX-DIA-03）。
+        Assert.False(settings.SpeakerDiarizationEnabled);
+        Assert.Contains("diarization", settings.SpeakerSegmentationModelPath, StringComparison.Ordinal);
+        Assert.Contains("diarization", settings.SpeakerEmbeddingModelPath, StringComparison.Ordinal);
+        Assert.Equal(0.5, settings.SpeakerClusteringThreshold);
+        // 話者数は既定で未指定。固定値を既定にしてはならない（REQ-TRX-DIA-07）。
+        Assert.Null(settings.KnownSpeakerCount);
+        Assert.Equal(1, settings.SpeakerDiarizationThreads);
     }
 
     [Fact]
@@ -34,7 +42,13 @@ public class AppSettingsTests
             UseGpuForTranscription = false,
             SilenceRmsThreshold = 0.02,
             SilenceMergeGapSeconds = 1.5,
-            VoicedPaddingSeconds = 0.3
+            VoicedPaddingSeconds = 0.3,
+            SpeakerDiarizationEnabled = true,
+            SpeakerSegmentationModelPath = @"C:\models\seg.onnx",
+            SpeakerEmbeddingModelPath = @"C:\models\emb.onnx",
+            SpeakerClusteringThreshold = 0.7,
+            KnownSpeakerCount = 3,
+            SpeakerDiarizationThreads = 4
         };
 
         var json = JsonSerializer.Serialize(original);
@@ -50,6 +64,12 @@ public class AppSettingsTests
         Assert.Equal(original.SilenceRmsThreshold, deserialized.SilenceRmsThreshold);
         Assert.Equal(original.SilenceMergeGapSeconds, deserialized.SilenceMergeGapSeconds);
         Assert.Equal(original.VoicedPaddingSeconds, deserialized.VoicedPaddingSeconds);
+        Assert.Equal(original.SpeakerDiarizationEnabled, deserialized.SpeakerDiarizationEnabled);
+        Assert.Equal(original.SpeakerSegmentationModelPath, deserialized.SpeakerSegmentationModelPath);
+        Assert.Equal(original.SpeakerEmbeddingModelPath, deserialized.SpeakerEmbeddingModelPath);
+        Assert.Equal(original.SpeakerClusteringThreshold, deserialized.SpeakerClusteringThreshold);
+        Assert.Equal(original.KnownSpeakerCount, deserialized.KnownSpeakerCount);
+        Assert.Equal(original.SpeakerDiarizationThreads, deserialized.SpeakerDiarizationThreads);
     }
 
     [Fact]
@@ -68,5 +88,10 @@ public class AppSettingsTests
         Assert.Equal(0.01, settings.SilenceRmsThreshold);
         Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
         Assert.Equal(0.2, settings.VoicedPaddingSeconds);
+        // 既存の settings.json には話者ダイアライゼーションのキーも無い。
+        // 既定が無効であること（勝手に有効化されないこと）を固定する。
+        Assert.False(settings.SpeakerDiarizationEnabled);
+        Assert.Equal(0.5, settings.SpeakerClusteringThreshold);
+        Assert.Equal(1, settings.SpeakerDiarizationThreads);
     }
 }
