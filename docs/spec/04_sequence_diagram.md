@@ -216,8 +216,9 @@ sequenceDiagram
     VM->>VM: TryParseStartTime() → startOffset
     VM->>VM: RunFileTranscriptionAsync(filePath, startOffset)
     VM->>VM: IsTranscribingFile = true（ダイアログが進捗表示へ切り替わる）
-    VM->>TS: TranscribeFileAsync(filePath, startOffset, progress, token) ※Task.Run上
+    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token) ※Task.Run上
 
+    Note over TS: diarization が null（＝話者ダイアライゼーション無効）なら以下の従来経路。<br/>非 null のときは §6.1 の経路を通る
     TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
     loop 閾値(20秒)到達毎
         TS->>TS: SplitVoicedRegions() で有声区間に分割
@@ -227,7 +228,7 @@ sequenceDiagram
             TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
         end
         TS->>TS: FlushAsync()
-        TS-->>VM: progress.Report(processed, total) ※ファイル先頭基準（startOffset を足さない）
+        TS-->>VM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）
         VM->>VM: FileTranscriptionStatus / FileTranscriptionProgress 更新
     end
 
@@ -248,6 +249,60 @@ sequenceDiagram
 
     Note over MW,OW: 処理中にダイアログを ✕ で閉じても処理は続き、<br/>メインウィンドウの進捗表示と「中止」が引き継ぐ（REQ-TRX-FILE-13）
 ```
+
+### 6.1 話者ダイアライゼーション有効時（REQ-TRX-DIA-*）
+
+`SpeakerDiarizationEnabled = true` のときだけこの経路を通る。無効時は §6 の従来経路がそのまま走る。
+
+```mermaid
+sequenceDiagram
+    participant VM as MainViewModel
+    participant TS as TranscriptionService
+    participant SD as SpeakerDiarizationService
+    participant M as TranscriptDiarizationMerger
+
+    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token)
+
+    Note over TS: ① デコード（1 回だけ）
+    TS->>TS: AudioFileReader → ダウンミックス+LPF+リサンプル → 16kHz モノラル PCM 全体（NFR-07）
+
+    Note over TS,SD: ② 話者ダイアライゼーションを先に走らせる<br/>モデル不備は Whisper を回す前に判明させたいため（REQ-TRX-DIA-11）
+    TS->>TS: token.ThrowIfCancellationRequested()（REQ-TRX-DIA-12）
+    TS->>SD: Diarize(pcm, progress, token)
+    SD->>SD: 初回のみ: 両モデルの File.Exists を検査（REQ-TRX-DIA-08）
+    Note over SD: 検査を省くとネイティブが NULL ハンドルを返し、<br/>その後の呼び出しでアクセス違反（catch 不能）になる
+    SD->>SD: OfflineSpeakerDiarization 生成（lock 内・以後は使い回す。REQ-TRX-DIA-10）
+    SD->>SD: SampleRate == 16000 を検証（REQ-TRX-DIA-09）
+    SD->>SD: ProcessWithCallback(pcm, 進捗コールバック)
+    SD-->>TS: 進捗コールバック（0.0〜1.0）
+    TS-->>VM: progress.Report("話者識別中", processed, total)
+    SD-->>TS: SpeakerSegment[]（Start / End / 0 始まりの SpeakerId）
+    TS->>TS: token.ThrowIfCancellationRequested()
+
+    Note over TS: ③ Whisper は同じ PCM を独立に解析する（REQ-TRX-DIA-04）
+    loop 20秒チャンク → 有声区間ごと
+        TS->>TS: WhisperProcessor.ProcessAsync(region)
+        TS->>TS: TranscriptSegment（ファイル先頭基準の時刻）として溜める
+        TS-->>VM: progress.Report("処理中", processed, total)
+    end
+
+    Note over TS,M: ④ タイムラインを突き合わせる
+    TS->>M: Merge(transcriptSegments, speakerSegments)
+    M->>M: 重複長が最大の話者を選ぶ。同値なら小さい ID。重複ゼロなら話者不明（REQ-TRX-DIA-05）
+    M-->>TS: SpeakerAttributedSegment[]
+
+    Note over TS: ⑤ ここで初めてファイルへ書く（確定処理。ここではキャンセルを見ない）
+    TS->>TS: [時刻] [ファイル] [話者N] テキスト を .transcript.txt へ書き出す
+    TS-->>VM: SegmentTranscribed（行ごと。表示ウィンドウへ）
+    TS-->>VM: true
+```
+
+> **逐次表示のタイミングが変わる。** 話者の割り当てはタイムライン全体が揃うまで確定できないため、
+> 有効時の `SegmentTranscribed` は最後の書き出し（⑤）でまとめて発火する。無効時は従来どおり
+> 1 セグメント確定するたびに発火する。
+>
+> **Diarization が失敗した場合は文字起こしごと中止する**（REQ-TRX-DIA-11）。
+> 話者欄が黙って欠けた `.transcript.txt` を作らないためである。
 
 ## 7. 文字起こし GPU 使用設定の切り替え
 

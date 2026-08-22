@@ -36,6 +36,27 @@
     <PackageVersion Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
   </ItemGroup>
 
+  <ItemGroup Label="Speaker Diarization">
+    <!--
+      話者ダイアライゼーション（sherpa-onnx）。採用理由は docs/adr/0003-speaker-diarization-with-sherpa-onnx.md。
+      本体パッケージは 9 プラットフォーム分のネイティブランタイム（計 約 330MB）を推移的に引き込むが、
+      本アプリは net10.0-windows の Windows 専用であり win-x64 しか使わない。
+      .csproj 側で win-x64 以外へ ExcludeAssets="all" を指定して除外するため、
+      除外する側もバージョンを固定する必要がある（CPM は直接参照すべてにバージョンを要求する）。
+      本体とランタイムは必ず同一バージョンに揃えること。
+    -->
+    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x86" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.linux-arm64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.osx-x64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.osx-arm64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.android-x64" Version="1.13.5" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.android-arm64" Version="1.13.5" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />

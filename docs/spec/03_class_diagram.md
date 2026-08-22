@@ -142,7 +142,7 @@ classDiagram
         +RegisterSource(AudioSourceType, string, int, int)
         +StartSession(string, DateTime)
         +AddSamples(AudioSourceType, float[], int)
-        +TranscribeFileAsync(string, TimeSpan, IProgress, CancellationToken) Task~bool~
+        +TranscribeFileAsync(string, TimeSpan, SpeakerDiarizationService?, IProgress~FileTranscriptionProgress~, CancellationToken) Task~bool~
         +StopSession()
         +Dispose()
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
@@ -171,6 +171,42 @@ classDiagram
         +double MergeGapSeconds
         +double PaddingSeconds
         +SilenceCutOptions Default$
+    }
+
+    class FileTranscriptionProgress {
+        <<readonly record struct>>
+        +string Phase
+        +TimeSpan Processed
+        +TimeSpan Total
+    }
+
+    class SpeakerDiarizationService {
+        <<IDisposable>>
+        -SpeakerDiarizationOptions _options
+        -OfflineSpeakerDiarization _diarization
+        -Lock _gate
+        +int RequiredSampleRate$
+        +Diarize(float[], IProgress~double~, CancellationToken) IReadOnlyList~SpeakerSegment~
+        +Dispose()
+    }
+
+    class SpeakerDiarizationOptions {
+        <<sealed record>>
+        +string SegmentationModelPath
+        +string EmbeddingModelPath
+        +double ClusteringThreshold
+        +int? KnownSpeakerCount
+        +int NumThreads
+    }
+
+    class SpeakerDiarizationException {
+        <<Exception>>
+    }
+
+    class TranscriptDiarizationMerger {
+        <<static>>
+        +Merge(IReadOnlyList~TranscriptSegment~, IReadOnlyList~SpeakerSegment~) IReadOnlyList~SpeakerAttributedSegment~
+        +FormatSpeaker(int?) string
     }
 
     class SettingsService {
@@ -203,6 +239,34 @@ classDiagram
         +double SilenceRmsThreshold
         +double SilenceMergeGapSeconds
         +double VoicedPaddingSeconds
+        +bool SpeakerDiarizationEnabled
+        +string SpeakerSegmentationModelPath
+        +string SpeakerEmbeddingModelPath
+        +double SpeakerClusteringThreshold
+        +int? KnownSpeakerCount
+        +int SpeakerDiarizationThreads
+    }
+
+    class TranscriptSegment {
+        <<sealed record>>
+        +TimeSpan Start
+        +TimeSpan End
+        +string Text
+    }
+
+    class SpeakerSegment {
+        <<sealed record>>
+        +TimeSpan Start
+        +TimeSpan End
+        +int SpeakerId
+    }
+
+    class SpeakerAttributedSegment {
+        <<sealed record>>
+        +TimeSpan Start
+        +TimeSpan End
+        +int? SpeakerId
+        +string Text
     }
 
     %% ==================== 関係 ====================
@@ -229,9 +293,22 @@ classDiagram
     TranscriptionService "1" --> "*" AudioSourceType : キー
     TranscriptionService "1" --> "1" SilenceCutOptions : SilenceCut
     TranscriptionService ..> VoicedRegion : SplitVoicedRegions が返す
+    TranscriptionService ..> SpeakerDiarizationService : TranscribeFileAsync の引数（保持も破棄もしない）
+    TranscriptionService ..> TranscriptDiarizationMerger : Merge を呼ぶ
+    TranscriptionService ..> FileTranscriptionProgress : 進捗として報告する
+
+    MainViewModel "1" --> "0..1" SpeakerDiarizationService : 設定で有効なときだけ生成し Dispose する
+
+    SpeakerDiarizationService "1" --> "1" SpeakerDiarizationOptions
+    SpeakerDiarizationService ..> SpeakerSegment : Diarize が返す
+    SpeakerDiarizationService ..> SpeakerDiarizationException : 送出する
+
+    TranscriptDiarizationMerger ..> TranscriptSegment : 入力
+    TranscriptDiarizationMerger ..> SpeakerSegment : 入力
+    TranscriptDiarizationMerger ..> SpeakerAttributedSegment : 出力
     SettingsService ..> AppSettings : 生成 / 読み書き
 ```
 
-> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath`（`TranscriptionService`）、`PeakToDb` / `TryParseStartTime` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
+> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath`（`TranscriptionService`）、`Merge` / `FormatSpeaker`（`TranscriptDiarizationMerger`。クラス自体が `internal static`）、`PeakToDb` / `TryParseStartTime` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
 >
 > `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。両ウィンドウの生成は `MainWindow` のコードビハインドが行い、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested`）で要求を上げるだけである。

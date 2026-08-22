@@ -89,7 +89,7 @@
 | REQ-TRX-04 | モデルパスが設定されていれば、ライブ文字起こしの ON/OFF に関わらず常にモデルをロードする（ファイル文字起こしはライブ設定と独立して動作するため） | `MainViewModel` コンストラクタ, `TryLoadWhisperModel` |
 | REQ-TRX-05 | 入力音声はダウンミックス（ステレオ→モノラル）・1 次 IIR ローパスフィルタ・線形リサンプリングにより 16kHz モノラルへ変換してから Whisper に渡す | `TranscriptionService.DownmixResampleAppend` |
 | REQ-TRX-06 | 無音判定はチャンクを 100ms の窓に区切って行う。各窓の RMS が設定値（既定 -40dB 相当 = 0.01）**以上**であればその窓を「有声」と判定する。チャンク全体の平均で判定しないのは、長い無音に埋もれた短い発話がならされて捨てられるため | `TranscriptionService.SplitVoicedRegions` |
-| REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する。**ライブ文字起こしでは、チャンクの区間ループがキャンセル・例外で途中終了した場合でも、その時点までに確定していた行を必ず追記する。**確定した行は `SegmentTranscribed` イベントで既に画面へ出ているため、書き出さないと画面と `.txt` が食い違うためである。追記そのものに失敗した場合は `Error` イベントで通知し、ワーカースレッドは継続する。なおファイル文字起こし側は逆に、キャンセル時は出力ファイルごと削除して部分結果を残さない（REQ-TRX-FILE-07）。ライブの `.txt` は録音中に追記され続けるログであるのに対し、ファイル側の `.transcript.txt` は完結した成果物であるという性質の違いによる | `TranscriptionService.ProcessChunk`, `AppendTranscriptLines`, `ProcessFileChunkAsync` |
+| REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する。話者ダイアライゼーションが有効なときに限り、ラベルの直後に話者欄が入り `[開始時刻 - 終了時刻] [ラベル] [話者N] テキスト` となる（REQ-TRX-DIA-06）。無効時の行は従来と 1 文字も変わらない。**ライブ文字起こしでは、チャンクの区間ループがキャンセル・例外で途中終了した場合でも、その時点までに確定していた行を必ず追記する。**確定した行は `SegmentTranscribed` イベントで既に画面へ出ているため、書き出さないと画面と `.txt` が食い違うためである。追記そのものに失敗した場合は `Error` イベントで通知し、ワーカースレッドは継続する。なおファイル文字起こし側は逆に、キャンセル時は出力ファイルごと削除して部分結果を残さない（REQ-TRX-FILE-07）。ライブの `.txt` は録音中に追記され続けるログであるのに対し、ファイル側の `.transcript.txt` は完結した成果物であるという性質の違いによる | `TranscriptionService.ProcessChunk`, `AppendTranscriptLines`, `ProcessFileChunkAsync` |
 | REQ-TRX-08 | Whisper へ渡す区間（チャンク全体を 1 区間とする場合を含む）が 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
 | REQ-TRX-09 | チャンクを Whisper に渡す前に有声区間へ分割し、無音区間そのものは渡さない（ハルシネーション防止）。<br>①100ms 窓ごとに RMS が閾値以上かで有声／無音を判定する（REQ-TRX-06）<br>②連続する有声窓をひとつの区間にまとめる<br>③区間同士の間にある無音（パディング前の生の隙間）が `MergeGapSeconds`（既定 2.0 秒）未満であれば区間を結合する<br>④**0.2 秒以上続く有声ラン（③で結合する前の、①②で得た連続有声窓のかたまり）を 1 本も含まない区間を捨てる**。結合後の区間長で判定してはならない。結合後の長さは内部に取り込んだ無音を含むため、0.1 秒の物音が結合幅の中に 2 つあるだけで 0.2 秒を超え、中身の大半が無音の区間が生き残ってしまう。③の結合は「実体のある発話へ、その前後の短い断片を貼り付ける」ための手順であり、貼り付ける先の発話（＝0.2 秒以上続くラン）が無いなら結合結果に残すべきものは無い。結合が起きていない区間ではラン＝区間なので、判定は「区間長が 0.2 秒未満なら捨てる」と一致する<br>⑤各区間の前後を `PaddingSeconds`（既定 0.2 秒）だけ広げ、チャンク範囲でクランプしたうえで、接触した区間はさらに結合する<br>⑥パディング後の区間の合計がチャンク全体の 90% 以上を占める場合は、分割してもほとんど無音を削減できず Whisper 呼び出し回数だけが増えるため、チャンク全体を単一区間として返す。<br>**④（足切り）は⑤（パディング）より必ず先に行う**。順序を逆にすると、0.1 秒（＝窓 1 つ分。窓量子化により、これが存在しうる最短のラン）のクリックノイズが前後 0.2 秒ずつ広がって 0.5 秒のランになり、0.2 秒のカットオフを生き残ってしまうため。落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。<br>有声区間が 1 件も無い場合は Whisper を呼ばず、ファイルへの書き込みも行わない。<br>分割された各区間は個別に Whisper へ渡し、区間ごとに自身のチャンク内開始オフセットを保持することでタイムスタンプの整合性を保つ。渡す前に各区間へ REQ-TRX-08 の最小長パディングを適用する。<br>ライブ文字起こし・ファイル文字起こしの両方に適用する | `TranscriptionService.SplitVoicedRegions`, `ProcessChunk`, `ProcessFileChunkAsync` |
 
@@ -120,8 +120,8 @@
 | REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFile`, `IsSupportedAudioExtension` |
 | REQ-TRX-FILE-04 | ドラッグオーバー中、ドロップ可能かどうかに応じてオーバーレイ表示を切り替える | `MainWindow.xaml.cs` (`DragOver`/`DragLeave`) |
 | REQ-TRX-FILE-05 | 出力ファイルは `{入力ファイル名}.transcript.txt`（録音時生成の `.txt` と名前衝突しない命名）として同フォルダに保存する | `TranscriptionService.BuildTranscriptPath` |
-| REQ-TRX-FILE-06 | 処理中は進捗（処理済み時間／総時間）を UI に表示する。オプション指定ダイアログ（REQ-TRX-FILE-09）には百分率の進捗バーも表示する。進捗は常に**ファイル先頭を基準**とし、REQ-TRX-FILE-10 の開始時刻を足さない（残り時間の目安であって時刻ではないため） | `MainViewModel.RunFileTranscriptionAsync`, `FileTranscriptionProgressFor`, `IProgress<(TimeSpan,TimeSpan)>` |
-| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない。「中止」はオプション指定ダイアログとメインウィンドウの双方に置く（REQ-TRX-FILE-13 でダイアログを閉じても処理は続くため） | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
+| REQ-TRX-FILE-06 | 処理中は進捗（フェーズ名・処理済み時間／総時間）を UI に表示する。オプション指定ダイアログ（REQ-TRX-FILE-09）には百分率の進捗バーも表示する。進捗は常に**ファイル先頭を基準**とし、REQ-TRX-FILE-10 の開始時刻を足さない（残り時間の目安であって時刻ではないため）。話者ダイアライゼーションが有効なときは処理が「話者識別中」→「処理中」の 2 フェーズになり、進捗はフェーズごとに 0% から進む。どちらのフェーズでも「処理済み時間」はそのフェーズが実際に読み終えたファイル内の位置であり、フェーズ名とセットで表示することで意味を保つ。無効時はフェーズが「処理中」1 つだけなので表示は従来と変わらない | `MainViewModel.RunFileTranscriptionAsync`, `FileTranscriptionProgressFor`, `IProgress<FileTranscriptionProgress>` |
+| REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない。**削除してよいのはその実行が作りかけたファイルだけである。**話者ダイアライゼーション有効時はマージが終わるまで出力ファイルを開かないため、中止時点では未作成であり削除しない（無条件に削除すると前回成功したときの `.transcript.txt` を巻き添えにする）。また有効時の書き出しは推論がすべて終わった後の確定処理なので途中でキャンセルせず、全行書くか一行も書かないかのどちらかにする。「中止」はオプション指定ダイアログとメインウィンドウの双方に置く（REQ-TRX-FILE-13 でダイアログを閉じても処理は続くため） | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
 | REQ-TRX-FILE-08 | ファイル文字起こし処理は UI スレッドをブロックしないようバックグラウンドスレッドで実行する | `MainViewModel.RunFileTranscriptionAsync` (`Task.Run`) |
 | REQ-TRX-FILE-09 | ファイルが決まったら（選択・ドロップのいずれでも）、処理を始める前に**モーダルダイアログ**を表示する。ダイアログは対象ファイル名・開始時刻の入力欄（REQ-TRX-FILE-10）・進捗表示・「開始」「キャンセル」／処理中は「中止」を持つ。ダイアログは `MainViewModel` を `DataContext` として共有する状態レスな View であり、生成・表示は `MainWindow` が行う（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)） | `FileTranscriptionOptionsWindow`, `MainWindow.xaml.cs`, `MainViewModel.FileTranscriptionRequested` |
 | REQ-TRX-FILE-10 | 開始時刻を `h:mm` または `hh:mm`（24 時間表記）で指定できる。指定した時刻を出力行のタイムスタンプの起点にする。**空欄なら未指定**とし、従来どおりファイル先頭を `00:00:00` として出力する。書式が不正な間は「開始」を無効化し、理由をダイアログ上に表示する。開始時刻とファイル長の合計が 24 時間を超えた場合は翌日の時刻として折り返す（`23:00` 開始の 2 時間後は `01:00:00`） | `MainViewModel.TryParseStartTime`, `TranscriptionService.TranscribeFileAsync` (`startOffset`) |
@@ -168,6 +168,29 @@
 > ウィンドウは自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを
 > `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。
 
+## 13. 話者ダイアライゼーション（ファイル文字起こし）
+
+同一音声内で話者を `話者1` / `話者2` … と区別する。**実在の人物名への変換（Speaker Identification）は行わない。**
+採用理由と却下した案は [ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md)。
+
+| ID | 要件 | 実装箇所 |
+|---|---|---|
+| REQ-TRX-DIA-01 | 話者ダイアライゼーションは sherpa-onnx の `OfflineSpeakerDiarization`（pyannote 系 segmentation モデル ＋ 話者埋め込みモデル）で完全ローカルに実行する。外部 API 呼び出し・モデルの実行時ダウンロード・音声や文字起こし内容の外部送信は一切行わない。ネットワーク接続が無い環境でも動作する | `SpeakerDiarizationService` |
+| REQ-TRX-DIA-02 | **適用対象はファイル文字起こし（REQ-TRX-FILE-*）のみ**とする。録音中のライブ文字起こしには適用しない。sherpa-onnx の Diarization API は音声全体を 1 つの配列で受け取る設計であり、チャンク単位のストリーミング処理に載せられないためである。加えて話者 ID は 1 回の Diarization 実行の中でのみ有効なので、チャンクごとに実行すると「同一話者が再登場したら同じ ID」を満たせない | `TranscriptionService.TranscribeFileAsync` |
+| REQ-TRX-DIA-03 | 既定は**無効**（`SpeakerDiarizationEnabled = false`）。無効時のファイル文字起こしは従来どおりストリーミングで処理し、出力行も従来と同一とする。有効化は `settings.json` で行う（本要件の範囲では UI から切り替えない） | `AppSettings`, `MainViewModel` コンストラクタ |
+| REQ-TRX-DIA-04 | Whisper による文字起こしと Diarization は互いに依存させず、**同じ 16kHz モノラル音声をそれぞれ独立に解析**し、後段でタイムラインを突き合わせて統合する。Diarization の結果で音声を切り分けてから Whisper に渡す構成にはしない（Whisper の認識コンテキストが失われるため） | `TranscriptionService.TranscribeFileWithDiarizationAsync` |
+| REQ-TRX-DIA-05 | 文字起こしセグメントへの話者割り当ては、**開始時刻の比較ではなく時間的な重複長**で決める。`overlap = max(0, min(t.End, s.End) - max(t.Start, s.Start))` が最大の話者を選ぶ。重複長が等しい話者が複数いる場合は**話者 ID が小さい方**を選ぶ（結果を決定的にするため）。重複する話者区間が 1 つも無い場合は**話者不明**とし、直前の話者を引き継がない | `TranscriptDiarizationMerger.Merge` |
+| REQ-TRX-DIA-06 | 出力行の話者欄は 1 始まりの表示番号で `[話者1]` と書く。内部の話者 ID は sherpa-onnx が返す 0 始まりの値をそのまま保持し、表示時にのみ +1 する。話者を決められなかったセグメントは `[話者不明]` と書く | `TranscriptDiarizationMerger.FormatSpeaker` |
+| REQ-TRX-DIA-07 | **話者数を固定値として既定にしない。** 話者数が未知の場合は sherpa-onnx のクラスタリング閾値（`SpeakerClusteringThreshold`、既定 0.5）を使う。設定で話者数（`KnownSpeakerCount`）が 1 以上に指定されている場合に限り `NumClusters` を使う。未指定（`null` または 0 以下）なら閾値を使う | `SpeakerDiarizationOptions` |
+| REQ-TRX-DIA-08 | モデルのパスをコードへ埋め込まない。segmentation モデルと埋め込みモデルのパスは設定（`SpeakerSegmentationModelPath` / `SpeakerEmbeddingModelPath`）で与える。**処理を開始する前に**両ファイルの存在を確認し、無ければどちらのモデルかが分かるエラーを出して処理を中止する。この事前確認は省略できない — sherpa-onnx のネイティブ側はモデルが無いと NULL ハンドルを返すが C# ラッパーがそれを検査しないため、そのまま使うとアクセス違反（0xC0000005）で**プロセスが即死する**（.NET の catch を通らない） | `SpeakerDiarizationService.EnsureLoaded` |
+| REQ-TRX-DIA-09 | Diarization へ渡す音声のサンプリングレートが、読み込んだ segmentation モデルの要求レート（`OfflineSpeakerDiarization.SampleRate`）と一致することを実行前に確認する。**不一致を暗黙に許容しない**（一致しなければエラーとして中止する）。本アプリは REQ-TRX-05 により常に 16kHz モノラルへ正規化しているため、通常は一致する | `SpeakerDiarizationService.Diarize` |
+| REQ-TRX-DIA-10 | 読み込んだモデルはアプリの実行中を通じて使い回し、ファイルごとに読み込み直さない。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`Diarize` の呼び出しは `lock` で直列化する。ネイティブリソースは `SpeakerDiarizationService.Dispose` で確実に解放する | `SpeakerDiarizationService` |
+| REQ-TRX-DIA-11 | Diarization の失敗（モデル未配置・モデル破損・初期化失敗・サンプリングレート不一致・推論失敗）は、どの段階で何が起きたかが分かるメッセージで `Error` イベントに通知する。音声の内容や文字起こし本文はエラーログに出さない。Diarization が失敗した場合は**その旨を通知したうえで文字起こし自体は中止する**（話者欄が黙って欠けた成果物を作らないため）。`SpeakerDiarizationService` が `SpeakerDiarizationException` を送出し、`TranscribeFileAsync` の catch がそれを `Error` イベントへ変換して `false` を返す | `SpeakerDiarizationService`, `TranscriptionService.TranscribeFileAsync` (catch) |
+| REQ-TRX-DIA-12 | キャンセルは Diarization の**開始前と完了後**にのみ評価する。sherpa-onnx の進捗コールバック（`ProcessWithCallback`）は進捗の報告にだけ使い、そこからネイティブ処理を中断させることはしない。ネイティブ処理の強制停止はネイティブリソースの破棄漏れとプロセスクラッシュを招くためである。したがって Diarization 実行中の「中止」操作は、その 1 回の推論が終わるまで反映されない | `SpeakerDiarizationService.Diarize` |
+
+> **話者 ID の有効範囲:** 話者 ID は**その音声ファイルの中でのみ**有効である。
+> 別のファイルの `話者1` が同一人物であることを意味しない。声紋の登録も個人の識別も行っていない。
+
 ## 非機能要件
 
 | ID | 要件 | 補足 |
@@ -178,3 +201,5 @@
 | NFR-04 | `AudioCaptureService` / `TranscriptionService` は `IDisposable` を実装し、確保したネイティブリソース（デバイスハンドル・エンコーダ・Whisper プロセッサ）を確実に解放する | 各サービスの `Dispose` |
 | NFR-05 | デバイス権限不足やハードウェア非対応など回復可能なエラーは機能を縮退（ソフトミュートのみ等）させて処理を継続し、アプリを落とさない | `AudioCaptureService` の try/catch 群 |
 | NFR-06 | 長時間録音時もメモリを蓄積しないよう、MP3 エンコード・書き込みはストリーミング方式とする | `LameMP3FileWriter` へのチャンク単位書き込み |
+| NFR-07 | 話者ダイアライゼーションが**有効な場合に限り**、ファイル文字起こしはデコード済みの 16kHz モノラル PCM をファイル全体ぶんメモリに保持する（**約 230 MB/時間**）。sherpa-onnx の Diarization API が音声全体を 1 つの配列で要求するため回避できない。無効時は従来どおりストリーミング処理でありメモリは増えない | `TranscriptionService.DecodeToMono16k` |
+| NFR-08 | `SpeakerDiarizationService` は `IDisposable` を実装し、sherpa-onnx のネイティブリソースを確実に解放する。ネイティブ API が NULL ハンドルを返しうる箇所では、ラッパーの検査に頼らず呼び出し側で事前条件を検証する（REQ-TRX-DIA-08） | `SpeakerDiarizationService.Dispose` |

@@ -46,7 +46,7 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 |---|---|---|
 | **DI コンテナ** | 不使用。`MainWindow` が `MainViewModel` を直接 `new` し、ViewModel が Service を直接生成する | 単一ウィンドウ・単一 ViewModel の規模では、コンテナの間接性が理解のコストに見合わない |
 | **ViewModel の分割** | `MainViewModel.cs` 1 ファイルに集約 | シンプル優先（`CLAUDE.md` の方針）。分割の閾値は §6 参照 |
-| **Service のインターフェース抽象** | 具象クラスを直接使用。NAudio も独自ラップせず直接使う | 実装が 1 つしかない抽象は害。テスト容易性は `InternalsVisibleTo` ＋ 純粋関数の切り出しで確保する |
+| **Service のインターフェース抽象** | 具象クラスを直接使用。NAudio・Whisper.net・sherpa-onnx も独自ラップせず直接使う | 実装が 1 つしかない抽象は害。テスト容易性は `InternalsVisibleTo` ＋ 純粋関数の切り出しで確保する。差し替え可能性が要求された場合も、抽象ではなく**依存を 1 クラスに閉じ込める**ことで満たす（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md) 争点 3） |
 | **リポジトリ／永続化層** | `SettingsService` が直接 JSON を読み書き | 永続化対象が設定ファイル 1 つのみ |
 
 ## 3. スレッドモデルの規範
