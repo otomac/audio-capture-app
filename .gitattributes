@@ -1,0 +1,27 @@
+# 改行コードの正規化（T140）
+#
+# なぜ要るか。
+#   これを書くまで、リポジトリには CRLF と LF が混在していた。しかも同じ種類の
+#   ファイルで割れていて規則性が無かった（AudioCaptureApp.csproj は CRLF だが
+#   AudioCaptureApp.Tests.csproj は LF、README.md は CRLF だが docs/ 配下 56 件は LF、
+#   AudioCaptureApp.Tests/.gitignore は CRLF だがルートの .gitignore は LF）。
+#   core.autocrlf=false なので、書いた側の改行コードがそのまま記録される。
+#   実際に T115 の作業中、docs/ を CRLF へ変換してしまい、実質 2 行の変更が
+#   224 行の差分に化けてレビュー不能になった。慣習に頼る限り再発する。
+#
+# 方針。
+#   リポジトリには常に LF で記録する。作業ツリーへどう展開するかは下の指定で決める。
+#   これで、どの環境の誰が編集しても差分が中身の変更だけになる。
+
+* text=auto
+
+# .cs / .xaml は作業ツリーで必ず CRLF にする。
+# .editorconfig が [*.cs] に end_of_line = crlf を指定しており、
+# 品質ゲート G2（dotnet format --verify-no-changes）がそれを検証するため、
+# ここを LF で展開するとゲートが落ちる。
+*.cs   text eol=crlf
+*.xaml text eol=crlf
+
+# バイナリ。text=auto の自動判定に任せず明示する（誤って変換されると壊れる）。
+*.ico binary
+*.png binary
