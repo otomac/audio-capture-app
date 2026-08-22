@@ -252,6 +252,13 @@ classDiagram
         +TimeSpan Start
         +TimeSpan End
         +string Text
+        +IReadOnlyList~SpeechSpan~? SpeechSpans
+    }
+
+    class SpeechSpan {
+        <<sealed record>>
+        +TimeSpan Start
+        +TimeSpan End
     }
 
     class SpeakerSegment {
@@ -304,6 +311,7 @@ classDiagram
     SpeakerDiarizationService ..> SpeakerDiarizationException : 送出する
 
     TranscriptDiarizationMerger ..> TranscriptSegment : 入力
+    TranscriptSegment "1" --> "*" SpeechSpan : 発話時間帯（REQ-TRX-DIA-13）
     TranscriptDiarizationMerger ..> SpeakerSegment : 入力
     TranscriptDiarizationMerger ..> SpeakerAttributedSegment : 出力
     SettingsService ..> AppSettings : 生成 / 読み書き

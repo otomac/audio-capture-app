@@ -84,6 +84,8 @@ internal static class TranscriptDiarizationMerger
             }
 
             // 走査は開始時刻の昇順なので、ここで落ちた区間は以降のどのセグメントとも重ならない。
+            // 刈り込みはセグメントの範囲で行う。発話時間帯は必ずその内側にあるため、
+            // ここで落ちる区間が発話時間帯と重なることはない。
             active.RemoveAll(s => s.End <= transcript.Start);
 
             attributed[index] = new SpeakerAttributedSegment(
@@ -122,7 +124,7 @@ internal static class TranscriptDiarizationMerger
 
         foreach (var speaker in candidates)
         {
-            var overlap = Overlap(transcript.Start, transcript.End, speaker.Start, speaker.End);
+            var overlap = OverlapWithSpeech(transcript, speaker);
             if (overlap <= TimeSpan.Zero)
             {
                 continue;
@@ -138,6 +140,34 @@ internal static class TranscriptDiarizationMerger
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// 文字起こしセグメントと話者区間が重なっている長さ（REQ-TRX-DIA-13）。
+    /// </summary>
+    /// <remarks>
+    /// 発話時間帯が分かっているならその合計で測る。分からなければセグメントの範囲をそのまま使う。
+    /// <para>
+    /// セグメントの範囲で測ると、REQ-TRX-08 の最小長パディングで足した無音や発話後の余白まで
+    /// 数えてしまい、その余白が隣の話者にかかっていると誤った話者へ寄る。実測では、
+    /// 現行設定で観測された「同一 ID が別人に跨る」2 件はすべてこれが原因だった。
+    /// </para>
+    /// </remarks>
+    private static TimeSpan OverlapWithSpeech(TranscriptSegment transcript, SpeakerSegment speaker)
+    {
+        var spans = transcript.SpeechSpans;
+        if (spans == null || spans.Count == 0)
+        {
+            return Overlap(transcript.Start, transcript.End, speaker.Start, speaker.End);
+        }
+
+        var total = TimeSpan.Zero;
+        foreach (var span in spans)
+        {
+            total += Overlap(span.Start, span.End, speaker.Start, speaker.End);
+        }
+
+        return total;
     }
 
     /// <summary>2 つの区間が重なっている長さ。重なっていなければ <see cref="TimeSpan.Zero"/>。</summary>
@@ -161,6 +191,23 @@ internal static class TranscriptDiarizationMerger
                     string.Create(CultureInfo.InvariantCulture,
                         $"文字起こしセグメント[{i}] の終了時刻 {segment.End} が開始時刻 {segment.Start} より前です。"),
                     nameof(transcriptSegments));
+            }
+
+            if (segment.SpeechSpans == null)
+            {
+                continue;
+            }
+
+            for (int j = 0; j < segment.SpeechSpans.Count; j++)
+            {
+                var span = segment.SpeechSpans[j];
+                if (span.End < span.Start)
+                {
+                    throw new ArgumentException(
+                        string.Create(CultureInfo.InvariantCulture,
+                            $"文字起こしセグメント[{i}] の発話時間帯[{j}] の終了時刻 {span.End} が開始時刻 {span.Start} より前です。"),
+                        nameof(transcriptSegments));
+                }
             }
         }
 

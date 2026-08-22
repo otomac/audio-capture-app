@@ -785,7 +785,17 @@ public class TranscriptionService : IDisposable
         CancellationToken ct)
     {
         var segments = new List<TranscriptSegment>();
-        await using var processor = _factory!.CreateBuilder().WithLanguage("ja").Build();
+
+        // トークン単位のタイムスタンプを有効にする（REQ-TRX-DIA-13）。
+        // 話者の重複長を、セグメントの範囲ではなく実際に発話がある時間帯で測るために要る。
+        // **Diarization 経路だけに付ける。** ライブ側と Diarization 無効時の推論コストと
+        // 挙動を変えないため。DTW（UseDtwTimeStamps）は使わない — 有効化にはモデルごとの
+        // alignment heads プリセットが要るが、本アプリはモデルパスを設定で差し替えられるため
+        // 対応付けを保証できない。実測では DTW なしのトークン時刻で足りている。
+        await using var processor = _factory!.CreateBuilder()
+            .WithLanguage("ja")
+            .WithTokenTimestamps()
+            .Build();
 
         progress?.Report(new FileTranscriptionProgress(TranscribePhase, TimeSpan.Zero, totalTime));
 
@@ -820,8 +830,11 @@ public class TranscriptionService : IDisposable
                         continue;
                     }
 
+                    var speechSpans = BuildSpeechSpans(
+                        segment.Tokens?.Select(t => (t.Text, t.Start, t.End)), regionOffset);
+
                     segments.Add(new TranscriptSegment(
-                        regionOffset + segment.Start, regionOffset + segment.End, text));
+                        regionOffset + segment.Start, regionOffset + segment.End, text, speechSpans));
                 }
             }
 
@@ -833,6 +846,92 @@ public class TranscriptionService : IDisposable
 
         return segments;
     }
+
+    /// <summary>whisper.cpp のトークン時刻の単位（10ms）。</summary>
+    private const int TokenTimestampUnitMs = 10;
+
+    /// <summary>
+    /// トークン時刻から、セグメント内で実際に発話が存在する時間帯を組み立てる（REQ-TRX-DIA-13）。
+    /// </summary>
+    /// <param name="tokens">
+    /// (テキスト, 開始, 終了) の並び。開始・終了は 10ms 単位で、処理対象音声の先頭が基準。
+    /// Whisper.net の型をそのまま受け取らないのは、モデル無しでテストできるようにするためである。
+    /// </param>
+    /// <param name="offset">区間先頭のオフセット。結果はこれを足した絶対時刻で返す。</param>
+    /// <returns>
+    /// 開始時刻順にならび、重なり・隣接がまとめられた時間帯。使えるトークンが 1 つも無ければ空。
+    /// 空を返した場合、呼び出し側はセグメントの範囲へ縮退する。
+    /// </returns>
+    /// <remarks>
+    /// 除くもの:
+    /// <list type="bullet">
+    /// <item><c>[_BEG_]</c> / <c>[_TT_nnn]</c> のような特殊トークン。
+    /// <see cref="WhisperToken"/> に判別用のメンバーが無く、ID の閾値はモデル依存で当てにできないため、
+    /// テキストの形（<c>[_</c> で始まり <c>]</c> で終わる）で判定する。</item>
+    /// <item>長さ 0 のトークン。重複長に寄与せず、前後のトークンが同じ時間帯を覆う。</item>
+    /// <item>終了が開始より前の壊れたトークン。</item>
+    /// </list>
+    /// </remarks>
+    internal static IReadOnlyList<SpeechSpan> BuildSpeechSpans(
+        IEnumerable<(string? Text, long Start, long End)>? tokens, TimeSpan offset)
+    {
+        var result = new List<SpeechSpan>();
+        if (tokens == null)
+        {
+            return result;
+        }
+
+        var usable = new List<(TimeSpan Start, TimeSpan End)>();
+        foreach (var (text, start, end) in tokens)
+        {
+            if (end <= start || IsSpecialToken(text))
+            {
+                continue;
+            }
+
+            usable.Add((
+                offset + TimeSpan.FromMilliseconds(start * TokenTimestampUnitMs),
+                offset + TimeSpan.FromMilliseconds(end * TokenTimestampUnitMs)));
+        }
+
+        if (usable.Count == 0)
+        {
+            return result;
+        }
+
+        // トークン時刻は概ね単調だが、それに依存せず並べ替えてから結合する。
+        usable.Sort((a, b) => a.Start.CompareTo(b.Start));
+
+        var currentStart = usable[0].Start;
+        var currentEnd = usable[0].End;
+        for (int i = 1; i < usable.Count; i++)
+        {
+            if (usable[i].Start <= currentEnd)
+            {
+                // 重なる、または隣接する。1 つにまとめる。
+                if (usable[i].End > currentEnd)
+                {
+                    currentEnd = usable[i].End;
+                }
+                continue;
+            }
+
+            result.Add(new SpeechSpan(currentStart, currentEnd));
+            currentStart = usable[i].Start;
+            currentEnd = usable[i].End;
+        }
+
+        result.Add(new SpeechSpan(currentStart, currentEnd));
+        return result;
+    }
+
+    /// <summary>
+    /// <c>[_BEG_]</c> / <c>[_TT_173]</c> / <c>[_EOT_]</c> のような特殊トークンか。
+    /// </summary>
+    internal static bool IsSpecialToken(string? text)
+        => text != null
+           && text.StartsWith("[_", StringComparison.Ordinal)
+           && text.EndsWith(']');   // char 版は常に序数比較（CA1865）
 
     /// <summary>
     /// 話者付きの結果を <c>.transcript.txt</c> へ書き出す（REQ-TRX-07 / REQ-TRX-DIA-06）。
