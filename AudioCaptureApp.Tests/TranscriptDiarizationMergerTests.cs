@@ -220,6 +220,87 @@ public class TranscriptDiarizationMergerTests
         Assert.Equal(1, Assert.Single(result).SpeakerId);
     }
 
+    // --- 発話時間帯（REQ-TRX-DIA-13）---
+
+    private static SpeechSpan Span(double start, double end)
+        => new(TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end));
+
+    [Fact]
+    public void Merge_SpeechSpans_IgnoresPaddingThatReachesIntoNextSpeaker()
+    {
+        // 本タスクの核心。セグメントは 0-5 だが、実際に喋っているのは 0-1 だけで、
+        // 残り 4 秒は最小長パディングと発話後の余白。
+        // セグメント範囲で測ると Speaker1（1-5 に 4 秒）が勝ってしまうが、
+        // 発話時間帯で測れば Speaker0（0-1 に 1 秒）が正しく選ばれる。
+        var withSpans = TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(5), "はい", [Span(0, 1)])],
+            [Speaker(0, 1, 0), Speaker(1, 5, 1)]);
+
+        Assert.Equal(0, Assert.Single(withSpans).SpeakerId);
+
+        // 発話時間帯を与えなければ従来どおり誤る（この変更が効いていることの裏取り）。
+        var withoutSpans = TranscriptDiarizationMerger.Merge(
+            [Text(0, 5, "はい")],
+            [Speaker(0, 1, 0), Speaker(1, 5, 1)]);
+
+        Assert.Equal(1, Assert.Single(withoutSpans).SpeakerId);
+    }
+
+    [Fact]
+    public void Merge_SpeechSpans_SumsMultipleSpans()
+    {
+        // 飛び飛びの発話でも合計で比較する。
+        // Speaker0 と重なるのは 0-1 と 4-5 の計 2 秒、Speaker1 とは 2-3 の 1 秒。
+        var result = TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(6), "テキスト",
+                [Span(0, 1), Span(2, 3), Span(4, 5)])],
+            [Speaker(0, 2, 0), Speaker(2, 4, 1), Speaker(4, 6, 0)]);
+
+        Assert.Equal(0, Assert.Single(result).SpeakerId);
+    }
+
+    [Fact]
+    public void Merge_SpeechSpans_Empty_FallsBackToSegmentRange()
+    {
+        var result = TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(5), "テキスト", [])],
+            [Speaker(0, 5, 3)]);
+
+        Assert.Equal(3, Assert.Single(result).SpeakerId);
+    }
+
+    [Fact]
+    public void Merge_SpeechSpans_Null_FallsBackToSegmentRange()
+    {
+        // 既存の 19 件が無改修で通る根拠。
+        var result = TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(5), "テキスト", null)],
+            [Speaker(0, 5, 3)]);
+
+        Assert.Equal(3, Assert.Single(result).SpeakerId);
+    }
+
+    [Fact]
+    public void Merge_SpeechSpans_NoOverlapWithAnySpeaker_ReturnsUnknown()
+    {
+        // セグメント範囲は話者と重なるが、発話時間帯は無音の中にある。
+        var result = TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(10), "テキスト", [Span(5, 6)])],
+            [Speaker(0, 4, 0), Speaker(7, 10, 1)]);
+
+        Assert.Null(Assert.Single(result).SpeakerId);
+    }
+
+    [Fact]
+    public void Merge_SpeechSpanEndBeforeStart_Throws()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => TranscriptDiarizationMerger.Merge(
+            [new TranscriptSegment(TimeSpan.Zero, TimeSpan.FromSeconds(5), "テキスト", [Span(4, 2)])],
+            [Speaker(0, 5, 0)]));
+
+        Assert.Equal("transcriptSegments", ex.ParamName);
+    }
+
     // --- 表示変換（REQ-TRX-DIA-06）---
 
     [Fact]

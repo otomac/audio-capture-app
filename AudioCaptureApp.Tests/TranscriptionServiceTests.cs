@@ -1,3 +1,4 @@
+using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
 using Whisper.net.LibraryLoader;
 
@@ -935,5 +936,111 @@ public class TranscriptionServiceTests
         var failure = TranscriptionService.AppendTranscriptLines(path, ["行"]);
 
         Assert.NotNull(failure);
+    }
+
+    // --- 発話時間帯の組み立て (T137 / REQ-TRX-DIA-13) ---
+
+    // (テキスト, 開始, 終了)。開始・終了は whisper.cpp と同じ 10ms 単位。
+    private static (string?, long, long) Tok(string? text, long start, long end) => (text, start, end);
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesSpecialTokens()
+    {
+        // [_BEG_] や [_TT_nnn] は発話ではない。WhisperToken に判別用のメンバーが無いため
+        // テキストの形で除いている。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("[_BEG_]", 0, 10), Tok("あ", 10, 20), Tok("[_TT_173]", 20, 30)],
+            TimeSpan.Zero);
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), span.Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), span.End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesZeroLengthTokens()
+    {
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("の", 50, 50), Tok("あ", 100, 120)],
+            TimeSpan.Zero);
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromMilliseconds(1000), span.Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesReversedTokens()
+    {
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("壊", 200, 100), Tok("あ", 300, 400)],
+            TimeSpan.Zero);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(3000), Assert.Single(spans).Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_MergesOverlappingAndAdjacent()
+    {
+        // 0-10 と 10-20 は隣接、15-25 は重なる → 1 つにまとまる。40-50 は離れているので別。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("a", 0, 10), Tok("b", 10, 20), Tok("c", 15, 25), Tok("d", 40, 50)],
+            TimeSpan.Zero);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(TimeSpan.Zero, spans[0].Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), spans[0].End);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), spans[1].Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), spans[1].End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_UnorderedTokens_AreSortedBeforeMerging()
+    {
+        // トークン時刻は概ね単調だが、それに依存しない。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("d", 40, 50), Tok("a", 0, 10), Tok("b", 10, 20)],
+            TimeSpan.Zero);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(TimeSpan.Zero, spans[0].Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_AppliesOffset()
+    {
+        // 区間先頭のオフセットを足して絶対時刻で返す。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("あ", 100, 200)],
+            TimeSpan.FromSeconds(30));
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromSeconds(31), span.Start);
+        Assert.Equal(TimeSpan.FromSeconds(32), span.End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_NoUsableTokens_ReturnsEmpty()
+    {
+        // 空を返すと呼び出し側はセグメント範囲へ縮退する（従来動作）。
+        Assert.Empty(TranscriptionService.BuildSpeechSpans(
+            [Tok("[_BEG_]", 0, 10), Tok("の", 50, 50)], TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_Null_ReturnsEmpty()
+    {
+        Assert.Empty(TranscriptionService.BuildSpeechSpans(null, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("[_BEG_]", true)]
+    [InlineData("[_TT_173]", true)]
+    [InlineData("[_EOT_]", true)]
+    [InlineData("あ", false)]
+    [InlineData("[未確定]", false)]
+    [InlineData(null, false)]
+    public void IsSpecialToken_DetectsWhisperControlTokens(string? text, bool expected)
+    {
+        Assert.Equal(expected, TranscriptionService.IsSpecialToken(text));
     }
 }

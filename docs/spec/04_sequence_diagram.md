@@ -282,13 +282,15 @@ sequenceDiagram
     Note over TS: ③ Whisper は同じ PCM を独立に解析する（REQ-TRX-DIA-04）
     loop 20秒チャンク → 有声区間ごと
         TS->>TS: WhisperProcessor.ProcessAsync(region)
-        TS->>TS: TranscriptSegment（ファイル先頭基準の時刻）として溜める
+        TS->>TS: トークン時刻から発話時間帯を作る（特殊トークン・長さ0を除き、重なりは結合）
+        TS->>TS: TranscriptSegment（ファイル先頭基準の時刻＋発話時間帯）として溜める
         TS-->>VM: progress.Report("処理中", processed, total)
     end
 
     Note over TS,M: ④ タイムラインを突き合わせる
     TS->>M: Merge(transcriptSegments, speakerSegments)
     M->>M: 重複長が最大の話者を選ぶ。同値なら小さい ID。重複ゼロなら話者不明（REQ-TRX-DIA-05）
+    Note over M: 重複は**発話時間帯の合計**で測る。セグメントの余白は数えない（REQ-TRX-DIA-13）
     M-->>TS: SpeakerAttributedSegment[]
 
     Note over TS: ⑤ ここで初めてファイルへ書く（確定処理。ここではキャンセルを見ない）

@@ -1,11 +1,30 @@
 namespace AudioCaptureApp.Models;
 
 /// <summary>
+/// セグメントの中で実際に発話が存在する時間帯（REQ-TRX-DIA-13）。
+/// Whisper のトークン単位のタイムスタンプから作る。
+/// </summary>
+/// <remarks>
+/// これが要るのは、Whisper のセグメントが実際の発話より長く伸びるためである。
+/// REQ-TRX-08 の最小長パディングで足した無音や、発話が終わった後の余白まで含んだ範囲で
+/// 重複長を測ると、その余白が隣の話者の時間帯にかかって誤った話者へ寄る。
+/// </remarks>
+public sealed record SpeechSpan(TimeSpan Start, TimeSpan End);
+
+/// <summary>
 /// 文字起こしの 1 セグメント。<see cref="Start"/> / <see cref="End"/> は
 /// **音声ファイル先頭からの相対時間**であり、REQ-TRX-FILE-10 の開始時刻は含まない。
 /// 開始時刻は行を整形する直前に足す（含めてしまうと話者区間と同じ時間軸で比較できなくなる）。
 /// </summary>
-public sealed record TranscriptSegment(TimeSpan Start, TimeSpan End, string Text);
+/// <param name="SpeechSpans">
+/// セグメント内で実際に発話が存在する時間帯（REQ-TRX-DIA-13）。話者の重複長はここだけで測る。
+/// <c>null</c> または空なら <see cref="Start"/>〜<see cref="End"/> をそのまま使う（従来動作）。
+/// </param>
+public sealed record TranscriptSegment(
+    TimeSpan Start,
+    TimeSpan End,
+    string Text,
+    IReadOnlyList<SpeechSpan>? SpeechSpans = null);
 
 /// <summary>
 /// 話者区間（REQ-TRX-DIA-05）。

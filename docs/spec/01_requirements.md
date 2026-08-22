@@ -179,14 +179,21 @@
 | REQ-TRX-DIA-02 | **適用対象はファイル文字起こし（REQ-TRX-FILE-*）のみ**とする。録音中のライブ文字起こしには適用しない。sherpa-onnx の Diarization API は音声全体を 1 つの配列で受け取る設計であり、チャンク単位のストリーミング処理に載せられないためである。加えて話者 ID は 1 回の Diarization 実行の中でのみ有効なので、チャンクごとに実行すると「同一話者が再登場したら同じ ID」を満たせない | `TranscriptionService.TranscribeFileAsync` |
 | REQ-TRX-DIA-03 | 既定は**無効**（`SpeakerDiarizationEnabled = false`）。無効時のファイル文字起こしは従来どおりストリーミングで処理し、出力行も従来と同一とする。有効化は `settings.json` で行う（本要件の範囲では UI から切り替えない） | `AppSettings`, `MainViewModel` コンストラクタ |
 | REQ-TRX-DIA-04 | Whisper による文字起こしと Diarization は互いに依存させず、**同じ 16kHz モノラル音声をそれぞれ独立に解析**し、後段でタイムラインを突き合わせて統合する。Diarization の結果で音声を切り分けてから Whisper に渡す構成にはしない（Whisper の認識コンテキストが失われるため） | `TranscriptionService.TranscribeFileWithDiarizationAsync` |
-| REQ-TRX-DIA-05 | 文字起こしセグメントへの話者割り当ては、**開始時刻の比較ではなく時間的な重複長**で決める。`overlap = max(0, min(t.End, s.End) - max(t.Start, s.Start))` が最大の話者を選ぶ。重複長が等しい話者が複数いる場合は**話者 ID が小さい方**を選ぶ（結果を決定的にするため）。重複する話者区間が 1 つも無い場合は**話者不明**とし、直前の話者を引き継がない | `TranscriptDiarizationMerger.Merge` |
+| REQ-TRX-DIA-05 | 文字起こしセグメントへの話者割り当ては、**開始時刻の比較ではなく時間的な重複長**で決める。`overlap = max(0, min(t.End, s.End) - max(t.Start, s.Start))` が最大の話者を選ぶ。重複長が等しい話者が複数いる場合は**話者 ID が小さい方**を選ぶ（結果を決定的にするため）。重複する話者区間が 1 つも無い場合は**話者不明**とし、直前の話者を引き継がない。**発話時間帯（REQ-TRX-DIA-13）が分かっている場合は、セグメント全体ではなくその時間帯の合計で重複長を測る** | `TranscriptDiarizationMerger.Merge` |
 | REQ-TRX-DIA-06 | 出力行の話者欄は 1 始まりの表示番号で `[話者1]` と書く。内部の話者 ID は sherpa-onnx が返す 0 始まりの値をそのまま保持し、表示時にのみ +1 する。話者を決められなかったセグメントは `[話者不明]` と書く | `TranscriptDiarizationMerger.FormatSpeaker` |
 | REQ-TRX-DIA-07 | **話者数を固定値として既定にしない。** 話者数が未知の場合は sherpa-onnx のクラスタリング閾値（`SpeakerClusteringThreshold`、既定 0.5）を使う。設定で話者数（`KnownSpeakerCount`）が 1 以上に指定されている場合に限り `NumClusters` を使う。未指定（`null` または 0 以下）なら閾値を使う | `SpeakerDiarizationOptions` |
 | REQ-TRX-DIA-08 | モデルのパスをコードへ埋め込まない。segmentation モデルと埋め込みモデルのパスは設定（`SpeakerSegmentationModelPath` / `SpeakerEmbeddingModelPath`）で与える。**処理を開始する前に**両ファイルの存在を確認し、無ければどちらのモデルかが分かるエラーを出して処理を中止する。この事前確認は省略できない — sherpa-onnx のネイティブ側はモデルが無いと NULL ハンドルを返すが C# ラッパーがそれを検査しないため、そのまま使うとアクセス違反（0xC0000005）で**プロセスが即死する**（.NET の catch を通らない） | `SpeakerDiarizationService.EnsureLoaded` |
 | REQ-TRX-DIA-09 | Diarization へ渡す音声のサンプリングレートが、読み込んだ segmentation モデルの要求レート（`OfflineSpeakerDiarization.SampleRate`）と一致することを実行前に確認する。**不一致を暗黙に許容しない**（一致しなければエラーとして中止する）。本アプリは REQ-TRX-05 により常に 16kHz モノラルへ正規化しているため、通常は一致する | `SpeakerDiarizationService.Diarize` |
 | REQ-TRX-DIA-10 | 読み込んだモデルはアプリの実行中を通じて使い回し、ファイルごとに読み込み直さない。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`Diarize` の呼び出しは `lock` で直列化する。ネイティブリソースは `SpeakerDiarizationService.Dispose` で確実に解放する | `SpeakerDiarizationService` |
 | REQ-TRX-DIA-11 | Diarization の失敗（モデル未配置・モデル破損・初期化失敗・サンプリングレート不一致・推論失敗）は、どの段階で何が起きたかが分かるメッセージで `Error` イベントに通知する。音声の内容や文字起こし本文はエラーログに出さない。Diarization が失敗した場合は**その旨を通知したうえで文字起こし自体は中止する**（話者欄が黙って欠けた成果物を作らないため）。`SpeakerDiarizationService` が `SpeakerDiarizationException` を送出し、`TranscribeFileAsync` の catch がそれを `Error` イベントへ変換して `false` を返す | `SpeakerDiarizationService`, `TranscriptionService.TranscribeFileAsync` (catch) |
+| REQ-TRX-DIA-13 | 重複長は、**文字起こしセグメントの時間範囲そのものではなく、その中で実際に発話が存在する時間帯の合計**で測る。Whisper のセグメントは、REQ-TRX-08 の最小長パディングで足した無音や、発話が終わった後の余白まで含んで伸びることがあり、その余白が隣の話者の時間帯にかかると誤った話者へ寄る。発話時間帯は Whisper のトークン単位のタイムスタンプ（`WithTokenTimestamps()`。`[_BEG_]` / `[_TT_nnn]` 等の特殊トークンと長さ 0 のトークンは除く）から求め、重なり合うものは 1 つにまとめる。**DTW による整列（`UseDtwTimeStamps`）は使わない** — 有効化にはモデルごとに対応した alignment heads プリセットの指定が要るのに対し、本アプリはモデルパスを設定で差し替えられるため対応付けを保証できない。実測でも DTW なしのトークン時刻で十分な精度が得られている。トークンが 1 つも得られなかった場合はセグメントの時間範囲をそのまま使う（従来動作へ縮退する） | `TranscriptionService.CollectTranscriptSegmentsAsync`, `TranscriptDiarizationMerger.Merge` |
 | REQ-TRX-DIA-12 | キャンセルは Diarization の**開始前と完了後**にのみ評価する。sherpa-onnx の進捗コールバック（`ProcessWithCallback`）は進捗の報告にだけ使い、そこからネイティブ処理を中断させることはしない。ネイティブ処理の強制停止はネイティブリソースの破棄漏れとプロセスクラッシュを招くためである。したがって Diarization 実行中の「中止」操作は、その 1 回の推論が終わるまで反映されない | `SpeakerDiarizationService.Diarize` |
+
+> **割り当ての粒度:** 話者を割り当てる単位は Whisper の**セグメント**である。1 つのセグメントの途中で話者が切り替わる場合、そのセグメント全体が重複の長い 1 人へ寄る。
+> REQ-TRX-DIA-13 は重複の測り方を精密にするだけで、テキストの分割は行わない。
+> テキストを分割できないのは、Whisper の BPE トークンがマルチバイト文字の途中で切れると
+> `WhisperToken.Text` の時点で U+FFFD へ置換され、**元のバイトを復元できない**ためである
+> （実測で 18 セグメント中 9 件が該当。素朴に連結すると半数が文字化けする）。分割の可否は T141 で判断する。
 
 > **話者 ID の有効範囲:** 話者 ID は**その音声ファイルの中でのみ**有効である。
 > 別のファイルの `話者1` が同一人物であることを意味しない。声紋の登録も個人の識別も行っていない。
