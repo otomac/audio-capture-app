@@ -78,6 +78,7 @@
 | REQ-CFG-04 | Whisper モデルパスの既定値は `%APPDATA%\AudioCaptureApp\models\ggml-small.bin` とする | `AppSettings.WhisperModelPath` |
 | REQ-CFG-05 | 保存先フォルダ変更・録音開始・文字起こし設定変更などの操作直後に設定を都度保存する | `MainViewModel.SaveSettings` の各呼び出し箇所 |
 | REQ-CFG-06 | 無音区間分割（REQ-TRX-09）に関する 3 つの設定値 `SilenceRmsThreshold`（既定 0.01）・`SilenceMergeGapSeconds`（既定 2.0）・`VoicedPaddingSeconds`（既定 0.2）を保持する。UI は設けず、`settings.json` を直接手編集して変更する。`MainViewModel.SaveSettings` は保存のたびに `AppSettings` を新規生成するのではなく、読み込み済みのインスタンスを更新して保存する。これにより、UI を持たないこれら 3 つの値も、録音開始などの契機（REQ-CFG-05）で保存し直された際に消えずに残る。`settings.json` は手編集され得るため、読み込み時に各値をクランプする。非有限値（NaN・±∞）は既定値にフォールバックし、それ以外の値は許容範囲（`SilenceRmsThreshold` 0.0〜1.0・`SilenceMergeGapSeconds` 0.0〜20.0・`VoicedPaddingSeconds` 0.0〜5.0）にクランプする。設定キー名とオプション型のプロパティ名の対応は `SilenceRmsThreshold` → `SilenceCutOptions.RmsThreshold`、`SilenceMergeGapSeconds` → `MergeGapSeconds`、`VoicedPaddingSeconds` → `PaddingSeconds` である | `AppSettings`, `SilenceCutOptions`, `MainViewModel.SaveSettings` |
+| REQ-CFG-07 | 文字起こしの言語を**ライブ用・ファイル用の 2 つ**（`LiveTranscriptionLanguage` / `FileTranscriptionLanguage`）として保持する。既定はどちらも `ja`（従来のハードコードと同じ挙動）。`settings.json` は手編集され得るため、読み込み時に必ず正規化する（REQ-TRX-10）。選択を変更した時点で保存する | `AppSettings`, `MainViewModel.SaveSettings` |
 
 ## 7. 文字起こし（共通基盤）
 
@@ -92,6 +93,7 @@
 | REQ-TRX-07 | 文字起こし結果は `[開始時刻 - 終了時刻] [ラベル] テキスト` 形式の行としてテキストファイルに追記する。話者ダイアライゼーションが有効なときに限り、ラベルの直後に話者欄が入り `[開始時刻 - 終了時刻] [ラベル] [話者N] テキスト` となる（REQ-TRX-DIA-06）。無効時の行は従来と 1 文字も変わらない。**ライブ文字起こしでは、チャンクの区間ループがキャンセル・例外で途中終了した場合でも、その時点までに確定していた行を必ず追記する。**確定した行は `SegmentTranscribed` イベントで既に画面へ出ているため、書き出さないと画面と `.txt` が食い違うためである。追記そのものに失敗した場合は `Error` イベントで通知し、ワーカースレッドは継続する。なおファイル文字起こし側は逆に、キャンセル時は出力ファイルごと削除して部分結果を残さない（REQ-TRX-FILE-07）。ライブの `.txt` は録音中に追記され続けるログであるのに対し、ファイル側の `.transcript.txt` は完結した成果物であるという性質の違いによる | `TranscriptionService.ProcessChunk`, `AppendTranscriptLines`, `ProcessFileChunkAsync` |
 | REQ-TRX-08 | Whisper へ渡す区間（チャンク全体を 1 区間とする場合を含む）が 1 秒未満の場合、末尾を無音で埋めて 1 秒に伸ばす。whisper.cpp は 0.2 秒未満の入力に対してセグメントを 1 件も返さないため（実測） | `TranscriptionService.PadToMinimum` |
 | REQ-TRX-09 | チャンクを Whisper に渡す前に有声区間へ分割し、無音区間そのものは渡さない（ハルシネーション防止）。<br>①100ms 窓ごとに RMS が閾値以上かで有声／無音を判定する（REQ-TRX-06）<br>②連続する有声窓をひとつの区間にまとめる<br>③区間同士の間にある無音（パディング前の生の隙間）が `MergeGapSeconds`（既定 2.0 秒）未満であれば区間を結合する<br>④**0.2 秒以上続く有声ラン（③で結合する前の、①②で得た連続有声窓のかたまり）を 1 本も含まない区間を捨てる**。結合後の区間長で判定してはならない。結合後の長さは内部に取り込んだ無音を含むため、0.1 秒の物音が結合幅の中に 2 つあるだけで 0.2 秒を超え、中身の大半が無音の区間が生き残ってしまう。③の結合は「実体のある発話へ、その前後の短い断片を貼り付ける」ための手順であり、貼り付ける先の発話（＝0.2 秒以上続くラン）が無いなら結合結果に残すべきものは無い。結合が起きていない区間ではラン＝区間なので、判定は「区間長が 0.2 秒未満なら捨てる」と一致する<br>⑤各区間の前後を `PaddingSeconds`（既定 0.2 秒）だけ広げ、チャンク範囲でクランプしたうえで、接触した区間はさらに結合する<br>⑥パディング後の区間の合計がチャンク全体の 90% 以上を占める場合は、分割してもほとんど無音を削減できず Whisper 呼び出し回数だけが増えるため、チャンク全体を単一区間として返す。<br>**④（足切り）は⑤（パディング）より必ず先に行う**。順序を逆にすると、0.1 秒（＝窓 1 つ分。窓量子化により、これが存在しうる最短のラン）のクリックノイズが前後 0.2 秒ずつ広がって 0.5 秒のランになり、0.2 秒のカットオフを生き残ってしまうため。落としたいのは「元々短い音」であって「余白を足したら長くなった音」ではない。<br>有声区間が 1 件も無い場合は Whisper を呼ばず、ファイルへの書き込みも行わない。<br>分割された各区間は個別に Whisper へ渡し、区間ごとに自身のチャンク内開始オフセットを保持することでタイムスタンプの整合性を保つ。渡す前に各区間へ REQ-TRX-08 の最小長パディングを適用する。<br>ライブ文字起こし・ファイル文字起こしの両方に適用する | `TranscriptionService.SplitVoicedRegions`, `ProcessChunk`, `ProcessFileChunkAsync` |
+| REQ-TRX-10 | Whisper へ渡す言語を設定から与える。**ライブ文字起こしとファイル文字起こしで独立**に指定でき、ファイル文字起こしの 2 経路（通常経路と話者識別経路）は同じ設定を使う。選択肢は**日本語 (`ja`) / 英語 (`en`)**、ファイル側にはさらに**自動判定 (`auto`)** を加える。Whisper が扱う 99 言語をすべて並べることはしない。**自動判定はファイル側にのみ出す** — ライブ経路は 20 秒チャンク（REQ-TRX-LIVE-10）であり、短い入力では言語検出が誤りやすいと考えられるが、**その誤検出率は実測していない**ため、確かめずに提示しない。実装は自動判定なら `WithLanguageDetection()`、それ以外は `WithLanguage(code)` を呼び分ける。設定値は読み込み時に正規化し、**未知のコード・空・`null` は既定 (`ja`) へ倒す。ライブ側に `auto` が書かれていた場合も `ja` へ倒す**（ライブでは選べないため） | `TranscriptionLanguages`, `TranscriptionService.LiveLanguage` / `TranscribeFileAsync` |
 
 ## 8. ライブ文字起こし（録音中）
 
@@ -110,6 +112,7 @@
 | REQ-TRX-LIVE-07 | 音声の供給が 500ms を超えて途切れた場合、そこまでのバッファを 20 秒未満でも 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。これによりミュート／再生停止をまたいでも時刻が実時刻に追従する | `TranscriptionService.AddSamples`, `ShouldSplitOnGap` |
 | REQ-TRX-LIVE-08 | チャンク先頭の時刻は、バッファ末尾の経過時間からバッファ長を差し引いて求める。末尾を毎パケット実時間へ再アンカーするため、リサンプル誤差が累積しない | `TranscriptionService.ChunkStartElapsed` |
 | REQ-TRX-LIVE-09 | ギャップでチャンクを分割する際、リサンプラとローパスフィルタの状態もリセットする（不連続な音声を地続きとして扱わないため） | `TranscriptionService.AddSamples` |
+| REQ-TRX-LIVE-14 | ライブ文字起こしの言語をメインウィンドウのドロップダウンで選ぶ（REQ-TRX-10）。**変更は次に録音を開始したときから効く** — `WhisperProcessor` は録音開始時の `RegisterSource` で作られるためである。したがって**録音中・停止処理中・ファイル文字起こし中は変更できない**（REQ-REC-09）| `MainWindow.xaml`, `MainViewModel.SelectedLiveLanguage` |
 
 ## 9. ファイルからの文字起こし
 
@@ -128,6 +131,7 @@
 | REQ-TRX-FILE-11 | ダイアログの「開始」を押すと、同じダイアログが進捗表示へ切り替わる（別ウィンドウを開き直さない） | `FileTranscriptionOptionsWindow.xaml` (`IsTranscribingFile` の DataTrigger) |
 | REQ-TRX-FILE-12 | 処理が終わったら（完了・失敗・中止のいずれでも）ダイアログを自動的に閉じる。結果はメインウィンドウのステータスバーに表示する | `FileTranscriptionOptionsWindow.xaml.cs` |
 | REQ-TRX-FILE-13 | 処理中にダイアログを閉じても処理は継続する。メインウィンドウ側の進捗表示と「中止」ボタンが引き継ぐ | `MainWindow.xaml` (既存の進捗行), `MainViewModel.IsTranscribingFile` |
+| REQ-TRX-FILE-16 | ファイル文字起こしの言語をオプション指定ダイアログ（REQ-TRX-FILE-09）のドロップダウンで選ぶ（REQ-TRX-10）。**「開始」を押した時点の選択が使われる。**ライブ側の選択（REQ-TRX-LIVE-14）とは独立であり、一方を変えてももう一方は変わらない。この経路にだけ**自動判定**を置く | `FileTranscriptionOptionsWindow.xaml`, `MainViewModel.SelectedFileLanguage` |
 
 ## 10. GPU 使用切り替え
 

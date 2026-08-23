@@ -55,6 +55,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="72"/>
@@ -106,8 +107,28 @@
             </TextBlock.Style>
         </TextBlock>
 
-        <!-- Row 3: 進捗（処理中のみ） -->
-        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
+        <!-- Row 3: 言語 (REQ-TRX-FILE-16)。ライブ側の選択とは独立 -->
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="言語" VerticalAlignment="Center" Margin="0,0,0,12"/>
+        <TextBlock Grid.Row="3" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,12"/>
+        <ComboBox Grid.Row="3" Grid.Column="2"
+                  ItemsSource="{Binding FileLanguageOptions}"
+                  SelectedItem="{Binding SelectedFileLanguage}"
+                  DisplayMemberPath="DisplayName"
+                  HorizontalAlignment="Left" MinWidth="120" Margin="0,0,0,12">
+            <ComboBox.Style>
+                <Style TargetType="ComboBox">
+                    <Setter Property="IsEnabled" Value="True"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                            <Setter Property="IsEnabled" Value="False"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ComboBox.Style>
+        </ComboBox>
+
+        <!-- Row 4: 進捗（処理中のみ） -->
+        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
                     Style="{StaticResource BusyPanel}" Margin="0,0,0,12">
             <ProgressBar Height="14" Minimum="0" Maximum="100"
                          Value="{Binding FileTranscriptionProgress, Mode=OneWay}"/>
@@ -115,8 +136,8 @@
                        Foreground="#FF555555" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <!-- Row 4: ボタン -->
-        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
+        <!-- Row 5: ボタン -->
+        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
                     Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="開始" Style="{StaticResource IdleButton}"
                     IsEnabled="{Binding CanStartFileTranscription}"

@@ -69,6 +69,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TranscriptionEnabled = _settings.TranscriptionEnabled;
         WhisperModelPath = _settings.WhisperModelPath;
         UseGpuForTranscription = _settings.UseGpuForTranscription;
+
+        // REQ-TRX-10: settings.json は手編集され得るので、必ず正規化してから使う。
+        // 一覧に無いコードや、ライブ側の "auto" は日本語へ倒れる。
+        SelectedLiveLanguage = FindLanguage(
+            TranscriptionLanguages.ForLive,
+            TranscriptionLanguages.NormalizeForLive(_settings.LiveTranscriptionLanguage));
+        SelectedFileLanguage = FindLanguage(
+            TranscriptionLanguages.ForFile,
+            TranscriptionLanguages.NormalizeForFile(_settings.FileTranscriptionLanguage));
+
         _transcriptionService.SilenceCut = new SilenceCutOptions(
             _settings.SilenceRmsThreshold,
             _settings.SilenceMergeGapSeconds,
@@ -490,6 +500,57 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return !string.IsNullOrEmpty(folder) && System.IO.Directory.Exists(folder)
             ? $"\"{folder}\""
             : null;
+    }
+
+    // --- 文字起こしの言語 (T153 / REQ-TRX-10) ---
+
+    /// <summary>ライブ文字起こしの選択肢（REQ-TRX-LIVE-14）。自動判定は含まない。</summary>
+    public IReadOnlyList<TranscriptionLanguage> LiveLanguageOptions { get; } = TranscriptionLanguages.ForLive;
+
+    /// <summary>ファイル文字起こしの選択肢（REQ-TRX-FILE-16）。自動判定を含む。</summary>
+    public IReadOnlyList<TranscriptionLanguage> FileLanguageOptions { get; } = TranscriptionLanguages.ForFile;
+
+    /// <summary>
+    /// ライブ文字起こしの言語。**変更は次に録音を開始したときから効く**
+    /// （<c>WhisperProcessor</c> は録音開始時に作られるため。REQ-TRX-LIVE-14）。
+    /// </summary>
+    [ObservableProperty]
+    private TranscriptionLanguage _selectedLiveLanguage = TranscriptionLanguages.ForLive[0];
+
+    /// <summary>ファイル文字起こしの言語（REQ-TRX-FILE-16）。ライブ用とは独立。</summary>
+    [ObservableProperty]
+    private TranscriptionLanguage _selectedFileLanguage = TranscriptionLanguages.ForFile[0];
+
+    partial void OnSelectedLiveLanguageChanged(TranscriptionLanguage value)
+    {
+        _transcriptionService.LiveLanguage = value.Code;
+        if (!_initializing)
+        {
+            SaveSettings();
+        }
+    }
+
+    partial void OnSelectedFileLanguageChanged(TranscriptionLanguage value)
+    {
+        if (!_initializing)
+        {
+            SaveSettings();
+        }
+    }
+
+    /// <summary>正規化済みのコードから選択肢の実体を引く。見つからなければ先頭（日本語）。</summary>
+    private static TranscriptionLanguage FindLanguage(
+        IReadOnlyList<TranscriptionLanguage> options, string code)
+    {
+        foreach (var option in options)
+        {
+            if (string.Equals(option.Code, code, StringComparison.Ordinal))
+            {
+                return option;
+            }
+        }
+
+        return options[0];
     }
 
     // --- 文字起こし設定 ---
@@ -923,8 +984,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             });
             var token = _fileTranscriptionCts.Token;
             // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
+            // REQ-TRX-FILE-16: 「開始」を押した時点の選択を使う
+            var language = SelectedFileLanguage.Code;
             var ok = await Task.Run(() => _transcriptionService.TranscribeFileAsync(
-                filePath, startOffset, _speakerDiarizationService, progress, token));
+                filePath, startOffset, language, _speakerDiarizationService, progress, token));
             if (ok)
             {
                 var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
@@ -979,6 +1042,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.TranscriptionEnabled = TranscriptionEnabled;
         _settings.WhisperModelPath = WhisperModelPath;
         _settings.UseGpuForTranscription = UseGpuForTranscription;
+        _settings.LiveTranscriptionLanguage = SelectedLiveLanguage.Code;
+        _settings.FileTranscriptionLanguage = SelectedFileLanguage.Code;
         _settingsService.Save(_settings);
     }
 

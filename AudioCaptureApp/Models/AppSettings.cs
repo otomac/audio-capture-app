@@ -17,6 +17,19 @@ public class AppSettings
 
     public bool UseGpuForTranscription { get; set; } = true;
 
+    /// <summary>
+    /// ライブ文字起こしの言語（REQ-CFG-07 / REQ-TRX-LIVE-14）。既定は日本語。
+    /// 未知の値は読み込み時に既定へ倒す（`TranscriptionLanguages.NormalizeForLive`）。
+    /// **ライブでは自動判定 (`auto`) を選べない**ため、書かれていても日本語になる。
+    /// </summary>
+    public string LiveTranscriptionLanguage { get; set; } = "ja";
+
+    /// <summary>
+    /// ファイル文字起こしの言語（REQ-CFG-07 / REQ-TRX-FILE-16）。既定は日本語。
+    /// こちらは自動判定 (`auto`) を選べる。ライブ用とは独立である。
+    /// </summary>
+    public string FileTranscriptionLanguage { get; set; } = "ja";
+
     /// <summary>有声とみなす 100ms 窓の RMS 下限（-40dB 相当）。UI からは変更できない。</summary>
     public double SilenceRmsThreshold { get; set; } = 0.01;
 

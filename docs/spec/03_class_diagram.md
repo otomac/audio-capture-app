@@ -73,6 +73,10 @@ classDiagram
         +string FileTranscriptionStatus
         +string FileTranscriptionFileName
         +string FileTranscriptionStartTime
+        +IReadOnlyList~TranscriptionLanguage~ LiveLanguageOptions
+        +IReadOnlyList~TranscriptionLanguage~ FileLanguageOptions
+        +TranscriptionLanguage SelectedLiveLanguage
+        +TranscriptionLanguage SelectedFileLanguage
         +double FileTranscriptionProgress
         +bool CanStartFileTranscription
         +ObservableCollection~string~ LiveTranscriptLines
@@ -139,11 +143,12 @@ classDiagram
         -Thread _thread
         +bool IsModelLoaded
         +SilenceCutOptions SilenceCut
+        +string LiveLanguage
         +LoadModel(string, bool) ValueTuple~bool,bool~
         +RegisterSource(AudioSourceType, string, int, int)
         +StartSession(string, DateTime)
         +AddSamples(AudioSourceType, float[], int)
-        +TranscribeFileAsync(string, TimeSpan, SpeakerDiarizationService?, IProgress~FileTranscriptionProgress~, CancellationToken) Task~bool~
+        +TranscribeFileAsync(string, TimeSpan, string, SpeakerDiarizationService?, IProgress~FileTranscriptionProgress~, CancellationToken) Task~bool~
         +StopSession()
         +Dispose()
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
@@ -179,6 +184,23 @@ classDiagram
         +string Phase
         +TimeSpan Processed
         +TimeSpan Total
+    }
+
+    class TranscriptionLanguage {
+        <<sealed record>>
+        +string Code
+        +string DisplayName
+    }
+
+    class TranscriptionLanguages {
+        <<static>>
+        +string Japanese$
+        +string English$
+        +string Auto$
+        +IReadOnlyList~TranscriptionLanguage~ ForLive$
+        +IReadOnlyList~TranscriptionLanguage~ ForFile$
+        +NormalizeForLive(string) string$
+        +NormalizeForFile(string) string$
     }
 
     class SpeakerDiarizationService {

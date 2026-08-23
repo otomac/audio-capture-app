@@ -16,6 +16,9 @@ public class AppSettingsTests
         Assert.False(settings.TranscriptionEnabled);
         Assert.Contains("ggml-small.bin", settings.WhisperModelPath, StringComparison.Ordinal);
         Assert.True(settings.UseGpuForTranscription);
+        // 従来のハードコード（WithLanguage("ja")）と同じ挙動を既定にする（REQ-CFG-07）
+        Assert.Equal("ja", settings.LiveTranscriptionLanguage);
+        Assert.Equal("ja", settings.FileTranscriptionLanguage);
         Assert.Equal(0.01, settings.SilenceRmsThreshold);
         Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
         Assert.Equal(0.2, settings.VoicedPaddingSeconds);

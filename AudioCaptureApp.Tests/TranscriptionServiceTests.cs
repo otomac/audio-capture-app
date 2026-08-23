@@ -1043,4 +1043,93 @@ public class TranscriptionServiceTests
     {
         Assert.Equal(expected, TranscriptionService.IsSpecialToken(text));
     }
+
+    // --- 文字起こしの言語 (T153 / REQ-TRX-10) ---
+
+    [Fact]
+    public void Languages_Live_DoesNotOfferAutoDetection()
+    {
+        // ライブ経路は 20 秒チャンクで言語検出が誤りやすいと考えられるが、
+        // その誤検出率を実測していないため選択肢に出さない（T153 D2）
+        Assert.DoesNotContain(
+            TranscriptionLanguages.ForLive,
+            l => string.Equals(l.Code, TranscriptionLanguages.Auto, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Languages_File_OffersAutoDetection()
+    {
+        Assert.Contains(
+            TranscriptionLanguages.ForFile,
+            l => string.Equals(l.Code, TranscriptionLanguages.Auto, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Languages_AllOptions_HaveCodeAndDisplayName()
+    {
+        // 空の項目が紛れ込むと、ドロップダウンに選べない空行が出る
+        foreach (var language in TranscriptionLanguages.ForLive.Concat(TranscriptionLanguages.ForFile))
+        {
+            Assert.False(string.IsNullOrWhiteSpace(language.Code));
+            Assert.False(string.IsNullOrWhiteSpace(language.DisplayName));
+        }
+    }
+
+    [Fact]
+    public void Languages_FirstOption_IsJapanese()
+    {
+        // 既定値・フォールバック先が従来のハードコード（"ja"）と同じであること
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.ForLive[0].Code);
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.ForFile[0].Code);
+    }
+
+    [Theory]
+    [InlineData("fr")]
+    [InlineData("japanese")]
+    [InlineData("!!")]
+    public void NormalizeForLive_UnknownCode_FallsBackToJapanese(string code)
+    {
+        // settings.json は手編集され得る。未知の値で Whisper を呼ぶと実行時まで気付けない
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForLive(code));
+    }
+
+    [Fact]
+    public void NormalizeForLive_Auto_FallsBackToJapanese()
+    {
+        // ライブでは自動判定を選べないため、書かれていても採らない（T153 D5）
+        Assert.Equal(
+            TranscriptionLanguages.Japanese,
+            TranscriptionLanguages.NormalizeForLive(TranscriptionLanguages.Auto));
+    }
+
+    [Fact]
+    public void NormalizeForFile_Auto_IsKept()
+    {
+        Assert.Equal(
+            TranscriptionLanguages.Auto,
+            TranscriptionLanguages.NormalizeForFile(TranscriptionLanguages.Auto));
+    }
+
+    [Fact]
+    public void NormalizeForFile_UnknownCode_FallsBackToJapanese()
+    {
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForFile("zz"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Normalize_NullOrBlank_FallsBackToJapanese(string? code)
+    {
+        // 既存の settings.json にはキーが無い。従来どおり日本語で動くこと
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForLive(code));
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForFile(code));
+    }
+
+    [Fact]
+    public void Normalize_MixedCaseAndPadding_IsAccepted()
+    {
+        Assert.Equal(TranscriptionLanguages.English, TranscriptionLanguages.NormalizeForLive(" EN "));
+    }
 }
