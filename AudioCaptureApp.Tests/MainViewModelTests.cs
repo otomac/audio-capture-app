@@ -325,4 +325,72 @@ public class MainViewModelTests
 
         Assert.Equal(["既存 1", "既存 2"], lines);
     }
+
+    // --- 話者識別の状態表示 (T152 / REQ-TRX-DIA-15) ---
+
+    [Fact]
+    public void DiarizationAvailabilityFor_Disabled_IsDisabled()
+    {
+        // 設定が無効なら、モデルが揃っていても「無効」
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.Disabled,
+            MainViewModel.DiarizationAvailabilityFor(enabled: false, modelFilesExist: true));
+    }
+
+    [Fact]
+    public void DiarizationAvailabilityFor_EnabledWithoutModels_IsModelMissing()
+    {
+        // 「有効にしたのに話者欄が出ない」の主因。無効と区別できることが要点
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.ModelMissing,
+            MainViewModel.DiarizationAvailabilityFor(enabled: true, modelFilesExist: false));
+    }
+
+    [Fact]
+    public void DiarizationAvailabilityFor_EnabledWithModels_IsAvailable()
+    {
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.Available,
+            MainViewModel.DiarizationAvailabilityFor(enabled: true, modelFilesExist: true));
+    }
+
+    [Fact]
+    public void DiarizationStatusTextFor_AllStates_AreDistinctAndNonEmpty()
+    {
+        var texts = new[]
+        {
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.Available),
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.ModelMissing),
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.Disabled)
+        };
+
+        Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
+        Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void DiarizationTooltipFor_AllStates_AreDistinctAndNonEmpty()
+    {
+        var texts = new[]
+        {
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.Available),
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.ModelMissing),
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.Disabled)
+        };
+
+        Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
+        Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void IsSpeakerDiarizationReadyFor_OnlyAvailable_IsTrue()
+    {
+        // チェックが入るのは実際に使える見込みのときだけ。モデル未配置で入れてはならない
+        Assert.True(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Available));
+        Assert.False(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.ModelMissing));
+        Assert.False(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Disabled));
+    }
 }

@@ -74,16 +74,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.SilenceMergeGapSeconds,
             _settings.VoicedPaddingSeconds);
 
+        var diarizationOptions = new SpeakerDiarizationOptions(
+            _settings.SpeakerSegmentationModelPath,
+            _settings.SpeakerEmbeddingModelPath,
+            _settings.SpeakerClusteringThreshold,
+            _settings.KnownSpeakerCount,
+            _settings.SpeakerDiarizationThreads);
+
+        // REQ-TRX-DIA-15: 起動時に 1 度だけ状態を判定する。**読み込みはしない**
+        // （存在検査だけ。ADR-0003 N2 の遅延読み込みを維持する）。
+        var availability = DiarizationAvailabilityFor(
+            _settings.SpeakerDiarizationEnabled,
+            SpeakerDiarizationService.ModelFilesExist(diarizationOptions));
+        SpeakerDiarizationStatus = DiarizationStatusTextFor(availability);
+        IsSpeakerDiarizationReady = IsSpeakerDiarizationReadyFor(availability);
+        SpeakerDiarizationTooltip = DiarizationTooltipFor(availability);
+
         // 有効なときだけ生成する。モデルの読み込みは初回の実行まで遅らせるため、
         // ここで生成してもモデルが未配置なら起動を妨げない（エラーは実行時に出る）。
         if (_settings.SpeakerDiarizationEnabled)
         {
-            _speakerDiarizationService = new SpeakerDiarizationService(new SpeakerDiarizationOptions(
-                _settings.SpeakerSegmentationModelPath,
-                _settings.SpeakerEmbeddingModelPath,
-                _settings.SpeakerClusteringThreshold,
-                _settings.KnownSpeakerCount,
-                _settings.SpeakerDiarizationThreads));
+            _speakerDiarizationService = new SpeakerDiarizationService(diarizationOptions);
         }
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
@@ -491,6 +502,80 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ? $"\"{folder}\""
             : null;
     }
+
+    // --- 話者識別の状態表示 (T152 / REQ-TRX-DIA-15) ---
+
+    /// <summary>話者ダイアライゼーションが使える状態か。</summary>
+    internal enum DiarizationAvailability
+    {
+        /// <summary>設定で無効（<c>SpeakerDiarizationEnabled = false</c>）。</summary>
+        Disabled,
+
+        /// <summary>有効だがモデルファイルが揃っていない。</summary>
+        ModelMissing,
+
+        /// <summary>有効で、モデル 2 ファイルが揃っている。</summary>
+        Available
+    }
+
+    /// <summary>
+    /// ステータスバーに常時出す話者識別の状態（REQ-TRX-DIA-15）。
+    /// <see cref="StatusMessage"/> とは別の欄に出す。あちらは起動直後に
+    /// Whisper のランタイム情報で上書きされるため、ここに書くと消えてしまう。
+    /// </summary>
+    [ObservableProperty]
+    private string _speakerDiarizationStatus = "";
+
+    /// <summary>
+    /// 「話者識別」チェックボックス（編集不可）の状態。使える状態のときだけ true。
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSpeakerDiarizationReady;
+
+    /// <summary>「話者識別」チェックボックスのツールチップ（REQ-TRX-DIA-15）。</summary>
+    [ObservableProperty]
+    private string _speakerDiarizationTooltip = "";
+
+    /// <summary>
+    /// 3 状態を決める（REQ-TRX-DIA-15）。<paramref name="modelFilesExist"/> は
+    /// **存在検査の結果**であって、読み込めることの保証ではない。
+    /// </summary>
+    internal static DiarizationAvailability DiarizationAvailabilityFor(bool enabled, bool modelFilesExist)
+    {
+        if (!enabled)
+        {
+            return DiarizationAvailability.Disabled;
+        }
+
+        return modelFilesExist ? DiarizationAvailability.Available : DiarizationAvailability.ModelMissing;
+    }
+
+    /// <summary>
+    /// 状態を利用者向けの文言にする（REQ-TRX-DIA-15）。
+    /// 「有効」は<b>モデルが置いてある</b>ことまでしか言えないため、断定しすぎない語にする。
+    /// </summary>
+    internal static string DiarizationStatusTextFor(DiarizationAvailability availability) => availability switch
+    {
+        DiarizationAvailability.Available => "話者識別: 有効",
+        DiarizationAvailability.ModelMissing => "話者識別: モデル未配置",
+        _ => "話者識別: 無効"
+    };
+
+    /// <summary>チェックが入るのは「有効」のときだけ（REQ-TRX-DIA-15）。</summary>
+    internal static bool IsSpeakerDiarizationReadyFor(DiarizationAvailability availability)
+        => availability == DiarizationAvailability.Available;
+
+    /// <summary>チェックボックスのツールチップ。状態ごとに次の一手が分かるようにする。</summary>
+    internal static string DiarizationTooltipFor(DiarizationAvailability availability) => availability switch
+    {
+        DiarizationAvailability.Available =>
+            "ファイル文字起こしの結果に [話者N] が付きます（モデルの配置を確認した結果であり、"
+            + "読み込みに成功するかは実行時に分かります）。",
+        DiarizationAvailability.ModelMissing =>
+            "有効に設定されていますが、モデルファイルが見つかりません。"
+            + "settings.json の SpeakerSegmentationModelPath / SpeakerEmbeddingModelPath を確認してください。",
+        _ => "settings.json の SpeakerDiarizationEnabled を true にすると有効になります。"
+    };
 
     // --- 文字起こし設定 ---
     [ObservableProperty]

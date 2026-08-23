@@ -77,6 +77,9 @@ classDiagram
         +bool CanStartFileTranscription
         +ObservableCollection~string~ LiveTranscriptLines
         +string LastResultPath
+        +string SpeakerDiarizationStatus
+        +bool IsSpeakerDiarizationReady
+        +string SpeakerDiarizationTooltip
         +StartRecording()
         +StopRecordingAsync() Task
         +SelectOutputFolder()
@@ -89,6 +92,10 @@ classDiagram
         +ShowLiveTranscript()
         +OpenResultFolder()
         +PeakToDb(float) double
+        +DiarizationAvailabilityFor(bool, bool) DiarizationAvailability$
+        +DiarizationStatusTextFor(DiarizationAvailability) string$
+        +IsSpeakerDiarizationReadyFor(DiarizationAvailability) bool$
+        +DiarizationTooltipFor(DiarizationAvailability) string$
         +BuildExplorerArguments(string) string
         +TryParseStartTime(string, out TimeSpan) bool
         +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double
@@ -188,6 +195,7 @@ classDiagram
         -Lock _gate
         +int RequiredSampleRate$
         +Diarize(float[], IProgress~double~, CancellationToken) IReadOnlyList~SpeakerSegment~
+        +ModelFilesExist(SpeakerDiarizationOptions) bool$
         +Dispose()
     }
 

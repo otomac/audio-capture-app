@@ -259,6 +259,24 @@ public sealed class SpeakerDiarizationService : IDisposable
         return _diarization;
     }
 
+    /// <summary>
+    /// モデル 2 ファイルが揃っているかを調べる（REQ-TRX-DIA-15 の起動時判定）。
+    /// </summary>
+    /// <remarks>
+    /// **読み込みはしない。** モデルの読み込みは初回の実行まで遅らせる（ADR-0003 N2）方針を
+    /// 変えないための、存在検査だけの軽い確認である。したがって
+    /// **「ファイルはあるが壊れている」モデルは真を返す**（実行時に REQ-TRX-DIA-11 で失敗する）。
+    /// </remarks>
+    internal static bool ModelFilesExist(SpeakerDiarizationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return ModelFileExists(options.SegmentationModelPath)
+            && ModelFileExists(options.EmbeddingModelPath);
+    }
+
+    private static bool ModelFileExists(string path)
+        => !string.IsNullOrWhiteSpace(path) && File.Exists(path);
+
     private static void EnsureModelFileExists(string path, string role)
     {
         if (string.IsNullOrWhiteSpace(path))
