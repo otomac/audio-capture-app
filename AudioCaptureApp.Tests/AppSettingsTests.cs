@@ -26,7 +26,9 @@ public class AppSettingsTests
         Assert.Equal(0.5, settings.SpeakerClusteringThreshold);
         // 話者数は既定で未指定。固定値を既定にしてはならない（REQ-TRX-DIA-07）。
         Assert.Null(settings.KnownSpeakerCount);
-        Assert.Equal(1, settings.SpeakerDiarizationThreads);
+        // 推論スレッド数の既定は環境依存（REQ-TRX-DIA-14）。結果は変わらず速度だけが変わる設定なので、
+        // 論理コア数の少ない環境で 4 を強制しないよう min を取る。
+        Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
     }
 
     [Fact]
@@ -92,6 +94,6 @@ public class AppSettingsTests
         // 既定が無効であること（勝手に有効化されないこと）を固定する。
         Assert.False(settings.SpeakerDiarizationEnabled);
         Assert.Equal(0.5, settings.SpeakerClusteringThreshold);
-        Assert.Equal(1, settings.SpeakerDiarizationThreads);
+        Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
     }
 }

@@ -59,6 +59,10 @@ public class AppSettings
     /// </summary>
     public int? KnownSpeakerCount { get; set; }
 
-    /// <summary>話者ダイアライゼーションの推論スレッド数。</summary>
-    public int SpeakerDiarizationThreads { get; set; } = 1;
+    /// <summary>
+    /// 話者ダイアライゼーションの推論スレッド数（REQ-TRX-DIA-14）。
+    /// スレッド数を変えても**話者区間の結果は変わらない**（速度だけの設定である）。
+    /// 上限を 4 に置くのは実測で 4 を超えても速くならず、8 を超えると遅くなるためである。
+    /// </summary>
+    public int SpeakerDiarizationThreads { get; set; } = Math.Min(4, Environment.ProcessorCount);
 }
