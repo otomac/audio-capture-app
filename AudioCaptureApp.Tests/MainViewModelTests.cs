@@ -325,4 +325,23 @@ public class MainViewModelTests
 
         Assert.Equal(["既存 1", "既存 2"], lines);
     }
+
+    // --- ダイアログを閉じるときの確認 (T151 / REQ-TRX-FILE-13) ---
+
+    [Fact]
+    public void FileTranscriptionCloseConfirmation_Idle_ReturnsNull()
+    {
+        // 開始前・完了後は確認せずに閉じる（キャンセルボタン・自動クローズの経路）
+        Assert.Null(MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: false));
+    }
+
+    [Fact]
+    public void FileTranscriptionCloseConfirmation_Transcribing_AsksToCancel()
+    {
+        // 処理中に閉じる操作は中止と同義になる。Esc でも閉じうるため、黙って捨てない
+        var message = MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: true);
+
+        Assert.NotNull(message);
+        Assert.Contains("中止して閉じますか", message, StringComparison.Ordinal);
+    }
 }
