@@ -255,4 +255,74 @@ public class MainViewModelTests
 
         Assert.Equal(["1", "2", "3"], lines);
     }
+
+    // --- まとめて届いた行の間引き (T135 / REQ-LIVEVIEW-09) ---
+
+    [Fact]
+    public void AppendLiveTranscriptLines_OverLimit_AddsOnlyTheNewest()
+    {
+        // 本タスクの核心。上限を超えるぶんは「追加してから捨てる」のではなく
+        // 最初から追加しない。追加すると 1 行ごとにレイアウトが走るためである。
+        var lines = new List<string>();
+        var batch = Enumerable.Range(0, 250).Select(i => $"行 {i}").ToList();
+
+        MainViewModel.AppendLiveTranscriptLines(lines, batch, maxLines: 100);
+
+        Assert.Equal(100, lines.Count);
+        Assert.Equal("行 150", lines[0]);
+        Assert.Equal("行 249", lines[^1]);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLines_SameResultAsOneByOne()
+    {
+        // 間引いても最終状態が 1 行ずつ追加した場合と一致すること。
+        // ここが崩れると「見えるものが変わる」最適化になってしまう。
+        var oneByOne = new List<string> { "既存 1", "既存 2" };
+        var batched = new List<string> { "既存 1", "既存 2" };
+        var batch = Enumerable.Range(0, 250).Select(i => $"行 {i}").ToList();
+
+        foreach (var line in batch)
+        {
+            MainViewModel.AppendLiveTranscriptLine(oneByOne, line, maxLines: 100);
+        }
+
+        MainViewModel.AppendLiveTranscriptLines(batched, batch, maxLines: 100);
+
+        Assert.Equal(oneByOne, batched);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLines_UnderLimit_KeepsExistingAndTrims()
+    {
+        // 上限より短いバッチでは 1 行も捨てず、既存の行と合わせて上限で切ること
+        var lines = new List<string> { "既存 1", "既存 2", "既存 3" };
+
+        MainViewModel.AppendLiveTranscriptLines(lines, ["新 1", "新 2"], maxLines: 4);
+
+        Assert.Equal(["既存 2", "既存 3", "新 1", "新 2"], lines);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLines_SingleLine_BehavesLikeAppendLiveTranscriptLine()
+    {
+        // ライブ文字起こしは 1 行ずつ届く。その経路の挙動が変わらないことを固定する
+        var lines = new List<string> { "既存" };
+
+        MainViewModel.AppendLiveTranscriptLines(lines, ["新"], maxLines: 10);
+
+        Assert.Equal(["既存", "新"], lines);
+    }
+
+    [Fact]
+    public void AppendLiveTranscriptLines_EmptyBatch_ChangesNothing()
+    {
+        // 引き取りが空振りすることがある（旗を取り出しより先に下ろすため）。
+        // そのとき既存の表示を壊さないこと
+        var lines = new List<string> { "既存 1", "既存 2" };
+
+        MainViewModel.AppendLiveTranscriptLines(lines, [], maxLines: 10);
+
+        Assert.Equal(["既存 1", "既存 2"], lines);
+    }
 }
