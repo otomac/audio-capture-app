@@ -608,8 +608,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// 実行中の停止処理（REQ-REC-11）。終了確認の「はい」で完了を待つために保持する。
+    /// </summary>
+    private Task? _stopRecordingTask;
+
+    /// <summary>
+    /// 実行中のファイル文字起こし（REQ-TRX-FILE-14）。同じく完了を待つために保持する。
+    /// </summary>
+    private Task? _fileTranscriptionTask;
+
+    // 停止処理そのものは Core 側にある。ここを薄いラッパーにしているのは、
+    // 走っている Task を掴んでおかないと終了確認（REQ-REC-11）が完了を待てないためである。
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
-    private async Task StopRecordingAsync()
+    private Task StopRecordingAsync()
+    {
+        _stopRecordingTask = StopRecordingCoreAsync();
+        return _stopRecordingTask;
+    }
+
+    private async Task StopRecordingCoreAsync()
     {
         _clockTimer.Stop();
         IsStopping = true;
@@ -887,14 +905,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// ダイアログの「開始」から呼ばれる。開始時刻を解析して本処理へ渡す。
     /// </summary>
-    public async Task StartFileTranscriptionAsync()
+    public Task StartFileTranscriptionAsync()
     {
         if (!TryParseStartTime(FileTranscriptionStartTime, out var startOffset))
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        await RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
+        // 走っている Task を掴んでおく。終了確認（REQ-TRX-FILE-14）で
+        // 中止処理の完了を待つために要る。
+        _fileTranscriptionTask = RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
+        return _fileTranscriptionTask;
     }
 
     internal static bool IsSupportedAudioExtension(string filePath)
@@ -967,6 +988,70 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _fileTranscriptionCts?.Cancel();
         FileTranscriptionStatus = "中止中...";
+    }
+
+    // --- 終了時の確認と後始末 (T149) ---
+
+    /// <summary>
+    /// ウィンドウを閉じる前に見せる確認文言（REQ-REC-11 / REQ-TRX-FILE-14）。
+    /// 進行中の作業が無ければ <c>null</c> を返し、確認せずに閉じてよいことを表す。
+    /// </summary>
+    /// <remarks>
+    /// 停止処理中は <see cref="IsRecording"/> も <c>true</c> のままなので、
+    /// **停止処理中の判定を先に置く**こと。逆にすると停止を待つ場面で
+    /// 「録音を停止しますか」と聞くことになる。
+    /// 録音とファイル文字起こしは排他（互いの <c>CanExecute</c> が相手を除外する）なので、
+    /// どちらか一方しか成り立たない。
+    /// </remarks>
+    internal static string? CloseConfirmationMessage(
+        bool isRecording, bool isStopping, bool isTranscribingFile)
+    {
+        if (isStopping)
+        {
+            return "録音の停止処理中です。完了を待って終了しますか？";
+        }
+        if (isRecording)
+        {
+            return "録音中ですが終了しますか？\n録音を停止し、ファイルを保存してから終了します。";
+        }
+        if (isTranscribingFile)
+        {
+            return "文字起こし中ですが中止して終了しますか？\n作成中の出力ファイルは削除されます。";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 進行中の作業を畳んでから戻る（REQ-REC-11 / REQ-TRX-FILE-14）。
+    /// 呼び出し元（<c>MainWindow.MainWindow_Closing</c>）はこれを待ってから <c>Close()</c> を呼び直す。
+    /// </summary>
+    /// <remarks>
+    /// 停止・中止のいずれも内部で全例外を <see cref="StatusMessage"/> へ変換するため、
+    /// ここから例外は出ない（決定 D7: 失敗しても終了は続行する）。
+    /// </remarks>
+    public async Task ShutdownAsync()
+    {
+        if (IsTranscribingFile)
+        {
+            CancelFileTranscription();
+            if (_fileTranscriptionTask is { } fileTask)
+            {
+                await fileTask;
+            }
+        }
+
+        if (IsStopping)
+        {
+            // 既に停止処理が走っている。二重に止めず、走っているものの完了を待つ。
+            if (_stopRecordingTask is { } stopTask)
+            {
+                await stopTask;
+            }
+        }
+        else if (IsRecording)
+        {
+            await StopRecordingAsync();
+        }
     }
 
     private void SaveSettings()

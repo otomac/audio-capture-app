@@ -15,6 +15,7 @@ classDiagram
         -TranscriptionGroup_DragOver(object, DragEventArgs)
         -TranscriptionGroup_DragLeave(object, DragEventArgs)
         -TranscriptionGroup_Drop(object, DragEventArgs)
+        -MainWindow_Closing(object, CancelEventArgs)
         +Dispose()
     }
 
@@ -79,6 +80,7 @@ classDiagram
         +string LastResultPath
         +StartRecording()
         +StopRecordingAsync() Task
+        +ShutdownAsync() Task
         +SelectOutputFolder()
         +RefreshDevices()
         +SelectWhisperModel()
@@ -92,6 +94,7 @@ classDiagram
         +BuildExplorerArguments(string) string
         +TryParseStartTime(string, out TimeSpan) bool
         +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double
+        +CloseConfirmationMessage(bool, bool, bool) string$
         +AppendLiveTranscriptLine(IList~string~, string, int)$
         +AppendLiveTranscriptLines(IList~string~, IReadOnlyList~string~, int)$
         +Dispose()
