@@ -55,6 +55,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="72"/>
@@ -90,8 +91,24 @@
                        VerticalAlignment="Center" Foreground="#FF555555" Margin="8,0,0,0"/>
         </StackPanel>
 
-        <!-- Row 2: 書式エラー -->
-        <TextBlock Grid.Row="2" Grid.Column="2" Margin="0,0,0,12"
+        <!-- Row 2: 自動入力の根拠（REQ-TRX-FILE-15） -->
+        <TextBlock Grid.Row="2" Grid.Column="2" Margin="0,0,0,4"
+                   Text="{Binding FileTranscriptionStartTimeHint}"
+                   TextWrapping="Wrap" Foreground="#FF1E88E5">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding FileTranscriptionStartTimeHint}" Value="">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+
+        <!-- Row 3: 書式エラー -->
+        <TextBlock Grid.Row="3" Grid.Column="2" Margin="0,0,0,12"
                    Text="24 時間表記の hh:mm で入力してください（例: 9:05 / 14:30）"
                    Foreground="#FFCC0000">
             <TextBlock.Style>
@@ -106,8 +123,8 @@
             </TextBlock.Style>
         </TextBlock>
 
-        <!-- Row 3: 進捗（処理中のみ） -->
-        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
+        <!-- Row 4: 進捗（処理中のみ） -->
+        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
                     Style="{StaticResource BusyPanel}" Margin="0,0,0,12">
             <ProgressBar Height="14" Minimum="0" Maximum="100"
                          Value="{Binding FileTranscriptionProgress, Mode=OneWay}"/>
@@ -115,8 +132,8 @@
                        Foreground="#FF555555" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <!-- Row 4: ボタン -->
-        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
+        <!-- Row 5: ボタン -->
+        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
                     Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="開始" Style="{StaticResource IdleButton}"
                     IsEnabled="{Binding CanStartFileTranscription}"

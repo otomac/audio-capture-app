@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
@@ -11,6 +12,21 @@ public partial class MainWindow : Window, IDisposable
     private LiveTranscriptWindow? _liveTranscriptWindow;
     private bool _disposed;
 
+    /// <summary>終了確認（REQ-REC-11 / REQ-TRX-FILE-14）の進み具合。</summary>
+    private enum CloseStage
+    {
+        /// <summary>まだ確認していない。</summary>
+        NotAsked,
+
+        /// <summary>「はい」の後、停止・中止の完了を待っている。</summary>
+        ShuttingDown,
+
+        /// <summary>後始末が済み、自分で <c>Close()</c> を呼び直した。</summary>
+        Confirmed
+    }
+
+    private CloseStage _closeStage;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -18,7 +34,56 @@ public partial class MainWindow : Window, IDisposable
         // 補助ウィンドウの生成は View 層の責務（ADR-0002）。ViewModel はイベントで要求だけを上げる。
         _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
         _viewModel.LiveTranscriptRequested += ShowLiveTranscript;
+        Closing += MainWindow_Closing;
         Closed += (_, _) => Dispose();
+    }
+
+    /// <summary>
+    /// 進行中の作業があれば確認してから閉じる（REQ-REC-11 / REQ-TRX-FILE-14）。
+    /// </summary>
+    /// <remarks>
+    /// <c>Closing</c> は <c>await</c> できないため、いったん <see cref="CancelEventArgs.Cancel"/> で
+    /// 閉じるのを取り消し、停止・中止が終わってから自分で <see cref="Window.Close"/> を呼び直す。
+    /// 呼び直した <c>Close()</c> はこのハンドラーをもう一度通るので、
+    /// <see cref="_closeStage"/> で素通しさせる。
+    /// <para>
+    /// async void はイベントハンドラーのみ許可（20-architecture-standards.md §3-4）。
+    /// <see cref="MainViewModel.ShutdownAsync"/> は内部で全例外を握るため、ここまで例外は伝播しない。
+    /// </para>
+    /// </remarks>
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_closeStage == CloseStage.Confirmed)
+        {
+            return;
+        }
+
+        if (_closeStage == CloseStage.ShuttingDown)
+        {
+            // 後始末の最中に × を押し直された。二重に走らせず、閉じるのだけを止める。
+            e.Cancel = true;
+            return;
+        }
+
+        var message = MainViewModel.CloseConfirmationMessage(
+            _viewModel.IsRecording, _viewModel.IsStopping, _viewModel.IsTranscribingFile);
+        if (message == null)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        var answer = MessageBox.Show(
+            this, message, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _closeStage = CloseStage.ShuttingDown;
+        await _viewModel.ShutdownAsync();
+        _closeStage = CloseStage.Confirmed;
+        Close();
     }
 
     /// <summary>
