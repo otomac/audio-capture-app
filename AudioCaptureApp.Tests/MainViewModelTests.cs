@@ -327,6 +327,61 @@ public class MainViewModelTests
         Assert.Equal(["既存 1", "既存 2"], lines);
     }
 
+    // --- 終了時の確認 (T149 / REQ-REC-11 / REQ-TRX-FILE-14) ---
+
+    [Fact]
+    public void CloseConfirmationMessage_Idle_ReturnsNull()
+    {
+        // 何も進行していなければ確認を挟まずに閉じる（従来どおりの挙動）
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: false, isTranscribingFile: false);
+
+        Assert.Null(message);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_Recording_AsksToStop()
+    {
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: true, isStopping: false, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("録音中ですが終了しますか", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_Stopping_AsksToWait()
+    {
+        // 停止処理中は「これから止める」のではなく「完了を待つ」ことを聞く
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: true, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("完了を待って", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_StoppingTakesPrecedenceOverRecording()
+    {
+        // StopRecordingAsync の実装上、停止処理中は IsRecording も true のままである。
+        // 判定の順序を逆にすると、この状態で「録音を停止しますか」と聞いてしまう
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: true, isStopping: true, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("完了を待って", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_TranscribingFile_AsksToCancel()
+    {
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: false, isTranscribingFile: true);
+
+        Assert.NotNull(message);
+        Assert.Contains("中止して終了しますか", message, StringComparison.Ordinal);
+    }
+
     // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
 
     /// <summary>③に落ちないはずの場面で音声長が読まれたら分かるようにする。</summary>

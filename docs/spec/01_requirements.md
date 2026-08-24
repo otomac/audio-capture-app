@@ -31,6 +31,7 @@
 | REQ-REC-08 | 録音停止操作はバックグラウンドスレッドで実行し、UI スレッドをブロックしない | `MainViewModel.StopRecordingAsync` (`Task.Run`) |
 | REQ-REC-09 | 録音・録音停止処理中・ファイル文字起こし中は、デバイス選択／更新／保存先変更／モデル選択などの操作を無効化する（排他制御） | `MainViewModel` 各 `CanExecute` |
 | REQ-REC-10 | 録音処理中に例外が発生した場合、録音を安全に停止しエラーメッセージを UI に表示する | `AudioCaptureService.RecordingError` イベント, `MainViewModel.OnRecordingError` |
+| REQ-REC-11 | 録音中または停止処理中にメインウィンドウを閉じようとした場合、閉じる前に確認する。録音中は「録音を停止して終了するか」、停止処理中は「停止の完了を待って終了するか」を問い、**いいえならウィンドウを閉じない**。はいの場合は通常の停止処理（MP3 の確定・ライブ文字起こしの `.txt` 追記）を**最後まで通してから**終了する。`Closing` は `await` できないため、いったん `e.Cancel` で閉じるのを取り消し、停止の完了後に `Close()` を呼び直す。停止処理が失敗しても終了は続行する（閉じられないアプリにしないため）。**`Closing` が発生しない終了経路（プロセス強制終了・OS のログオフ）は対象外**であり、従来どおり `Dispose` に委ねる | `MainWindow.MainWindow_Closing`, `MainViewModel.CloseConfirmationMessage` / `ShutdownAsync` |
 
 ## 3. 音声ミキシング・エンコード
 
@@ -128,6 +129,7 @@
 | REQ-TRX-FILE-11 | ダイアログの「開始」を押すと、同じダイアログが進捗表示へ切り替わる（別ウィンドウを開き直さない） | `FileTranscriptionOptionsWindow.xaml` (`IsTranscribingFile` の DataTrigger) |
 | REQ-TRX-FILE-12 | 処理が終わったら（完了・失敗・中止のいずれでも）ダイアログを自動的に閉じる。結果はメインウィンドウのステータスバーに表示する | `FileTranscriptionOptionsWindow.xaml.cs` |
 | REQ-TRX-FILE-13 | 処理中にダイアログを閉じても処理は継続する。メインウィンドウ側の進捗表示と「中止」ボタンが引き継ぐ | `MainWindow.xaml` (既存の進捗行), `MainViewModel.IsTranscribingFile` |
+| REQ-TRX-FILE-14 | ファイル文字起こし中にメインウィンドウを閉じようとした場合、閉じる前に「中止して終了するか」を確認する。**いいえならウィンドウを閉じない**。はいの場合は中止処理（REQ-TRX-FILE-07 = 生成中の出力ファイルの削除）を**完了させてから**終了する。中止は sherpa-onnx の推論境界でしか効かないため（REQ-TRX-DIA-12）、話者ダイアライゼーション有効時は実行中の推論が終わるまで待つ | `MainWindow.MainWindow_Closing`, `MainViewModel.CloseConfirmationMessage` / `ShutdownAsync` |
 | REQ-TRX-FILE-15 | 開始時刻（REQ-TRX-FILE-10）の初期値を対象ファイルから推定して入力欄に入れる。取得元は **①ファイル名（本アプリが録音した `yyyyMMdd_HHmmss` 形式。拡張子を除いた名前全体が一致する場合のみ）→ ②ファイルの作成日時 → ③最終更新日時 − 音声の長さ** の順に試し、最初に取れたものを採る。ただし **`作成日時 > 最終更新日時` のときは②を採らず③へ落とす** — この逆転はファイルがコピー・移動され、作成日時が「コピーした日時」に書き換わったことを示すためである。③の音声長は**無音カット後ではなくファイル全長**を使い、**③に落ちたときだけ読む**（`AudioFileReader` は MP3 のフレーム表を作るためにファイル全体を走査するため）。値は入力欄の書式に合わせて `HH:mm` へ**分単位で切り捨てる**。いずれの取得元も**推定にすぎない**ため、どれを使ったかをダイアログ上に 1 行で表示し、利用者がそのまま消せるようにする（空欄＝未指定は従来どおり有効）。入力欄が編集されたらその表示は消す。推定できなかった場合はエラーとせず空欄のままにする | `MainViewModel.InferStartTime` / `TryParseRecordedFileNameTime` / `FileTranscriptionStartTimeHint`, `TranscriptionService.TryGetAudioDuration`, `FileTranscriptionOptionsWindow.xaml` |
 
 ## 10. GPU 使用切り替え
