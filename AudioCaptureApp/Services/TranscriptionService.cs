@@ -57,6 +57,69 @@ public sealed record SilenceCutOptions
 /// <summary>チャンク内の有声区間。Start はチャンク先頭からのサンプル位置。</summary>
 public readonly record struct VoicedRegion(int Start, int Length);
 
+/// <summary>文字起こしの言語の選択肢 1 件（REQ-TRX-10）。</summary>
+/// <param name="Code">Whisper へ渡す言語コード。<c>auto</c> は自動判定を表す。</param>
+/// <param name="DisplayName">ドロップダウンに出す表示名。</param>
+public sealed record TranscriptionLanguage(string Code, string DisplayName);
+
+/// <summary>
+/// 文字起こしの言語の一覧と正規化（REQ-TRX-10）。
+/// </summary>
+/// <remarks>
+/// Whisper が扱う 99 言語をすべて並べることはしない。
+/// **自動判定はファイル側にのみ置く** — ライブ経路は 20 秒チャンク（REQ-TRX-LIVE-10）で
+/// 言語検出が誤りやすいと考えられるが、その誤検出率を実測していないためである。
+/// 設定値は手編集され得るので、`SilenceCutOptions` などと同じく必ず正規化して使う。
+/// </remarks>
+public static class TranscriptionLanguages
+{
+    public const string Japanese = "ja";
+    public const string English = "en";
+
+    /// <summary>自動判定。Whisper へは言語コードではなく検出の有効化として渡す。</summary>
+    public const string Auto = "auto";
+
+    /// <summary>ライブ文字起こしの選択肢（REQ-TRX-LIVE-14）。自動判定は含めない。</summary>
+    public static IReadOnlyList<TranscriptionLanguage> ForLive { get; } =
+    [
+        new(Japanese, "日本語"),
+        new(English, "英語")
+    ];
+
+    /// <summary>ファイル文字起こしの選択肢（REQ-TRX-FILE-16）。自動判定を含む。</summary>
+    public static IReadOnlyList<TranscriptionLanguage> ForFile { get; } =
+    [
+        new(Japanese, "日本語"),
+        new(English, "英語"),
+        new(Auto, "自動判定")
+    ];
+
+    /// <summary>ライブ用に正規化する。未知のコードと <c>auto</c> は日本語へ倒す。</summary>
+    public static string NormalizeForLive(string? code) => Normalize(code, ForLive);
+
+    /// <summary>ファイル用に正規化する。未知のコードは日本語へ倒す。</summary>
+    public static string NormalizeForFile(string? code) => Normalize(code, ForFile);
+
+    private static string Normalize(string? code, IReadOnlyList<TranscriptionLanguage> allowed)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return Japanese;
+        }
+
+        var trimmed = code.Trim();
+        foreach (var language in allowed)
+        {
+            if (string.Equals(language.Code, trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                return language.Code;
+            }
+        }
+
+        return Japanese;
+    }
+}
+
 /// <summary>
 /// ファイル文字起こしの進捗（REQ-TRX-FILE-06）。
 /// </summary>
@@ -194,6 +257,22 @@ public class TranscriptionService : IDisposable
 
     /// <summary>無音カットの調整値。MainViewModel が設定から反映する。</summary>
     public SilenceCutOptions SilenceCut { get; set; } = SilenceCutOptions.Default;
+
+    /// <summary>
+    /// ライブ文字起こしの言語（REQ-TRX-LIVE-14）。MainViewModel が設定から反映する。
+    /// **読まれるのは録音開始時の <see cref="RegisterSource"/> だけ**なので、
+    /// 変更は次に録音を開始したときから効く。
+    /// </summary>
+    public string LiveLanguage { get; set; } = TranscriptionLanguages.Japanese;
+
+    /// <summary>
+    /// 言語の指定を <see cref="WhisperProcessorBuilder"/> へ載せる（REQ-TRX-10）。
+    /// 自動判定は言語コードではなく専用の API で有効化する。
+    /// </summary>
+    private static WhisperProcessorBuilder WithLanguageOption(WhisperProcessorBuilder builder, string language)
+        => string.Equals(language, TranscriptionLanguages.Auto, StringComparison.OrdinalIgnoreCase)
+            ? builder.WithLanguageDetection()
+            : builder.WithLanguage(language);
 
     // GPU優先順（CUDA > Vulkan > CoreML > OpenVino > CPU）
     private static readonly List<RuntimeLibrary> GpuPreferredOrder = new()
@@ -386,7 +465,7 @@ public class TranscriptionService : IDisposable
             SourceRate = sourceRate,
             SourceChannels = sourceChannels,
             Label = label,
-            Processor = _factory!.CreateBuilder().WithLanguage("ja").Build(),
+            Processor = WithLanguageOption(_factory!.CreateBuilder(), LiveLanguage).Build(),
             LpfAlpha = alpha
         };
     }
@@ -553,6 +632,10 @@ public class TranscriptionService : IDisposable
     /// 出力行のタイムスタンプの起点（REQ-TRX-FILE-10）。ファイル先頭がこの時刻に録音されたものとして扱う。
     /// 未指定なら <see cref="TimeSpan.Zero"/> を渡す（＝ファイル先頭からの経過時間になる）。
     /// </param>
+    /// <param name="language">
+    /// Whisper へ渡す言語（REQ-TRX-FILE-16）。<c>auto</c> なら自動判定。
+    /// 話者識別の有無にかかわらず同じ値を使う。
+    /// </param>
     /// <remarks>
     /// <paramref name="startOffset"/> は進捗（<paramref name="progress"/>）には足さない。
     /// 進捗は残りの目安であって時刻ではないため、常にファイル先頭基準で報告する。
@@ -560,6 +643,7 @@ public class TranscriptionService : IDisposable
     public async Task<bool> TranscribeFileAsync(
         string audioFilePath,
         TimeSpan startOffset,
+        string language,
         SpeakerDiarizationService? diarization,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
@@ -576,9 +660,9 @@ public class TranscriptionService : IDisposable
             // diarization が null なら従来どおりストリーミングで処理する（REQ-TRX-DIA-03）。
             // 非 null のときだけ、音声全体をメモリへ載せる経路へ分岐する（NFR-07）。
             var work = diarization == null
-                ? TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, progress, ct)
+                ? TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, language, progress, ct)
                 : TranscribeFileWithDiarizationAsync(
-                    audioFilePath, outputPath, startOffset, diarization, progress, ct);
+                    audioFilePath, outputPath, startOffset, language, diarization, progress, ct);
             return await work.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -612,6 +696,7 @@ public class TranscriptionService : IDisposable
         string audioFilePath,
         string outputPath,
         TimeSpan startOffset,
+        string language,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
@@ -622,7 +707,7 @@ public class TranscriptionService : IDisposable
         float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
 
         await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
-        await using var processor = _factory!.CreateBuilder().WithLanguage("ja").Build();
+        await using var processor = WithLanguageOption(_factory!.CreateBuilder(), language).Build();
 
         // ファイル読み込みバッファ（約1秒分）
         var readBuffer = new float[sourceRate * channels];
@@ -703,6 +788,7 @@ public class TranscriptionService : IDisposable
         string audioFilePath,
         string outputPath,
         TimeSpan startOffset,
+        string language,
         SpeakerDiarizationService diarization,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
@@ -720,7 +806,7 @@ public class TranscriptionService : IDisposable
 
         // ② Whisper は同じ音声を独立に解析する。Diarization の結果で音声を切り分けない
         //    （切り分けると Whisper の認識コンテキストが失われる）。
-        var transcriptSegments = await CollectTranscriptSegmentsAsync(pcm, totalTime, progress, ct)
+        var transcriptSegments = await CollectTranscriptSegmentsAsync(pcm, totalTime, language, progress, ct)
             .ConfigureAwait(false);
 
         // ③ タイムラインを突き合わせる。ここは純粋関数で、推論も I/O も行わない。
@@ -781,6 +867,7 @@ public class TranscriptionService : IDisposable
     private async Task<List<TranscriptSegment>> CollectTranscriptSegmentsAsync(
         float[] pcm,
         TimeSpan totalTime,
+        string language,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
@@ -792,8 +879,7 @@ public class TranscriptionService : IDisposable
         // 挙動を変えないため。DTW（UseDtwTimeStamps）は使わない — 有効化にはモデルごとの
         // alignment heads プリセットが要るが、本アプリはモデルパスを設定で差し替えられるため
         // 対応付けを保証できない。実測では DTW なしのトークン時刻で足りている。
-        await using var processor = _factory!.CreateBuilder()
-            .WithLanguage("ja")
+        await using var processor = WithLanguageOption(_factory!.CreateBuilder(), language)
             .WithTokenTimestamps()
             .Build();
 

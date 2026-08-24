@@ -204,6 +204,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="90"/>
@@ -224,8 +225,19 @@
                 <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Text="{Binding TranscriptionStatus}"
                            VerticalAlignment="Center" Foreground="#FF555555" Margin="0,0,0,12"/>
 
+                <!-- ライブ文字起こしの言語 (REQ-TRX-LIVE-14)。変更は次の録音開始から効く -->
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="ライブ言語" VerticalAlignment="Center" Margin="0,0,0,12"/>
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="：" VerticalAlignment="Center" Margin="0,0,8,12"/>
+                <ComboBox Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2"
+                          ItemsSource="{Binding LiveLanguageOptions}"
+                          SelectedItem="{Binding SelectedLiveLanguage}"
+                          DisplayMemberPath="DisplayName"
+                          IsEnabled="{Binding IsNotBusy}"
+                          HorizontalAlignment="Left" MinWidth="120" Margin="0,0,0,12"
+                          ToolTip="録音中のライブ文字起こしに使う言語です。変更は次に録音を開始したときから効きます。"/>
+
                 <!-- ファイルから文字起こし（進捗・中止はダイアログ側。REQ-TRX-FILE-06 / 07） -->
-                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4"
+                <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4"
                             Orientation="Horizontal" Margin="0,0,0,8">
                     <Button Content="音声ファイルから文字起こし"
                             Command="{Binding TranscribeFromFileCommand}"
