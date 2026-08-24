@@ -74,6 +74,7 @@ classDiagram
         +string FileTranscriptionStatus
         +string FileTranscriptionFileName
         +string FileTranscriptionStartTime
+        +string FileTranscriptionStartTimeHint
         +double FileTranscriptionProgress
         +bool CanStartFileTranscription
         +ObservableCollection~string~ LiveTranscriptLines
@@ -93,6 +94,8 @@ classDiagram
         +PeakToDb(float) double
         +BuildExplorerArguments(string) string
         +TryParseStartTime(string, out TimeSpan) bool
+        +TryParseRecordedFileNameTime(string, out DateTime) bool$
+        +InferStartTime(string, DateTime?, DateTime?, Func~TimeSpan?~) StartTimeEstimate$
         +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double
         +CloseConfirmationMessage(bool, bool, bool) string$
         +AppendLiveTranscriptLine(IList~string~, string, int)$
@@ -152,6 +155,7 @@ classDiagram
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
         +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
+        +TryGetAudioDuration(string, out TimeSpan) bool$
         event Error
         event SegmentTranscribed
         event RuntimeInfo
@@ -321,6 +325,6 @@ classDiagram
     SettingsService ..> AppSettings : 生成 / 読み書き
 ```
 
-> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath`（`TranscriptionService`）、`Merge` / `FormatSpeaker`（`TranscriptDiarizationMerger`。クラス自体が `internal static`）、`PeakToDb` / `TryParseStartTime` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine` / `AppendLiveTranscriptLines`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
+> `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath` / `TryGetAudioDuration`（`TranscriptionService`）、`Merge` / `FormatSpeaker`（`TranscriptDiarizationMerger`。クラス自体が `internal static`）、`PeakToDb` / `TryParseStartTime` / `TryParseRecordedFileNameTime` / `InferStartTime` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine` / `AppendLiveTranscriptLines`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
 >
 > `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。両ウィンドウの生成は `MainWindow` のコードビハインドが行い、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested`）で要求を上げるだけである。
