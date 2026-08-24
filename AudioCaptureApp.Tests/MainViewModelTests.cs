@@ -1,3 +1,4 @@
+using System.Globalization;
 using AudioCaptureApp.ViewModels;
 
 namespace AudioCaptureApp.Tests;
@@ -324,5 +325,315 @@ public class MainViewModelTests
         MainViewModel.AppendLiveTranscriptLines(lines, [], maxLines: 10);
 
         Assert.Equal(["既存 1", "既存 2"], lines);
+    }
+
+    // --- 終了時の確認 (T149 / REQ-REC-11 / REQ-TRX-FILE-14) ---
+
+    [Fact]
+    public void CloseConfirmationMessage_Idle_ReturnsNull()
+    {
+        // 何も進行していなければ確認を挟まずに閉じる（従来どおりの挙動）
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: false, isTranscribingFile: false);
+
+        Assert.Null(message);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_Recording_AsksToStop()
+    {
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: true, isStopping: false, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("録音中ですが終了しますか", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_Stopping_AsksToWait()
+    {
+        // 停止処理中は「これから止める」のではなく「完了を待つ」ことを聞く
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: true, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("完了を待って", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_StoppingTakesPrecedenceOverRecording()
+    {
+        // StopRecordingAsync の実装上、停止処理中は IsRecording も true のままである。
+        // 判定の順序を逆にすると、この状態で「録音を停止しますか」と聞いてしまう
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: true, isStopping: true, isTranscribingFile: false);
+
+        Assert.NotNull(message);
+        Assert.Contains("完了を待って", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CloseConfirmationMessage_TranscribingFile_AsksToCancel()
+    {
+        var message = MainViewModel.CloseConfirmationMessage(
+            isRecording: false, isStopping: false, isTranscribingFile: true);
+
+        Assert.NotNull(message);
+        Assert.Contains("中止して終了しますか", message, StringComparison.Ordinal);
+    }
+
+    // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
+
+    /// <summary>③に落ちないはずの場面で音声長が読まれたら分かるようにする。</summary>
+    private static Func<TimeSpan?> NeverCalled()
+        => () => throw new InvalidOperationException("音声長を読んではいけない場面で読まれた");
+
+    [Fact]
+    public void TryParseRecordedFileNameTime_RecordedName_Parses()
+    {
+        var ok = MainViewModel.TryParseRecordedFileNameTime("20260823_140530.mp3", out var startTime);
+
+        Assert.True(ok);
+        Assert.Equal(new DateTime(2026, 8, 23, 14, 5, 30), startTime);
+    }
+
+    [Fact]
+    public void TryParseRecordedFileNameTime_NameWithSuffix_Rejects()
+    {
+        // 名前全体が一致しない限り採らない。無関係な数字を時刻と誤読するより空欄が良い
+        Assert.False(MainViewModel.TryParseRecordedFileNameTime("会議_20260823_140530.mp3", out _));
+        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20260823_140530_edited.mp3", out _));
+    }
+
+    [Fact]
+    public void TryParseRecordedFileNameTime_InvalidDate_Rejects()
+    {
+        // 13 月・25 時は存在しない
+        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20261332_140530.mp3", out _));
+        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20260823_250000.mp3", out _));
+    }
+
+    [Fact]
+    public void InferStartTime_RecordedFileName_UsesFileName()
+    {
+        // ①が取れたら②③は見ない（作成日時が食い違っていても①を優先する）
+        var estimate = MainViewModel.InferStartTime(
+            "20260823_140530.mp3",
+            creationTime: new DateTime(2026, 8, 24, 9, 0, 0),
+            lastWriteTime: new DateTime(2026, 8, 24, 10, 0, 0),
+            NeverCalled());
+
+        Assert.Equal("14:05", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.FileName, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_FullPath_UsesFileNamePart()
+    {
+        // 呼び出し側はフルパスを渡す（RequestFileTranscription）。パスが付いても①が効くこと
+        var estimate = MainViewModel.InferStartTime(
+            Path.Combine("C:", "rec", "20260823_140530.mp3"),
+            creationTime: null,
+            lastWriteTime: null,
+            NeverCalled());
+
+        Assert.Equal("14:05", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.FileName, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_PlainName_UsesCreationTime()
+    {
+        // ①が無く、作成日時 <= 更新日時（＝コピーの形跡が無い）なら②
+        var estimate = MainViewModel.InferStartTime(
+            "interview.wav",
+            creationTime: new DateTime(2026, 8, 23, 9, 5, 0),
+            lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
+            NeverCalled());
+
+        Assert.Equal("09:05", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.CreationTime, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_CopiedFile_UsesLastWriteMinusDuration()
+    {
+        // 作成日時 > 更新日時 は「コピーした日時」に書き換わった証拠。②を捨てて③へ落とす
+        var estimate = MainViewModel.InferStartTime(
+            "interview.wav",
+            creationTime: new DateTime(2026, 8, 24, 18, 0, 0),
+            lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
+            () => TimeSpan.FromMinutes(90));
+
+        Assert.Equal("09:00", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_CopiedFileWithoutDuration_ReturnsEmpty()
+    {
+        // ③の材料（音声長）も取れなければ空欄。エラーにはしない
+        var estimate = MainViewModel.InferStartTime(
+            "broken.mp3",
+            creationTime: new DateTime(2026, 8, 24, 18, 0, 0),
+            lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
+            () => null);
+
+        Assert.Equal("", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.None, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_LastWriteMinusDurationCrossesMidnight_WrapsToPreviousDay()
+    {
+        // 日付をまたいでも時刻だけを採る（00:30 の 2 時間前は前日の 22:30）
+        var estimate = MainViewModel.InferStartTime(
+            "night.wav",
+            creationTime: new DateTime(2026, 8, 25, 12, 0, 0),
+            lastWriteTime: new DateTime(2026, 8, 24, 0, 30, 0),
+            () => TimeSpan.FromHours(2));
+
+        Assert.Equal("22:30", estimate.Text);
+    }
+
+    [Fact]
+    public void InferStartTime_NoFileTimes_ReturnsEmpty()
+    {
+        // 日時がまったく取れない（ファイルへアクセスできない）場合は空欄のまま
+        var estimate = MainViewModel.InferStartTime(
+            "interview.wav", creationTime: null, lastWriteTime: null, () => TimeSpan.FromMinutes(10));
+
+        Assert.Equal("", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.None, estimate.Source);
+    }
+
+    [Fact]
+    public void InferStartTime_NoCreationTime_FallsBackToLastWriteMinusDuration()
+    {
+        // 作成日時だけ取れない場合も③で救う
+        var estimate = MainViewModel.InferStartTime(
+            "interview.wav",
+            creationTime: null,
+            lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
+            () => TimeSpan.FromMinutes(30));
+
+        Assert.Equal("10:00", estimate.Text);
+        Assert.Equal(MainViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
+    }
+
+    [Theory]
+    [InlineData("20260823_140530.mp3", null, null)]
+    [InlineData("interview.wav", "2026-08-23T09:05:00", "2026-08-23T10:30:00")]
+    [InlineData("interview.wav", "2026-08-25T18:00:00", "2026-08-23T00:30:00")]
+    public void InferStartTime_Result_IsAcceptedByTryParseStartTime(
+        string fileName, string? creation, string? lastWrite)
+    {
+        // 自動入力した値は、必ず入力欄の書式（REQ-TRX-FILE-10）として受理されなければならない。
+        // ここが崩れると「開始」が押せないダイアログが出る
+        var estimate = MainViewModel.InferStartTime(
+            fileName,
+            creation == null ? null : DateTime.Parse(creation, CultureInfo.InvariantCulture),
+            lastWrite == null ? null : DateTime.Parse(lastWrite, CultureInfo.InvariantCulture),
+            () => TimeSpan.FromMinutes(90));
+
+        Assert.True(MainViewModel.TryParseStartTime(estimate.Text, out _));
+    }
+
+    [Fact]
+    public void StartTimeHintFor_None_IsEmpty()
+    {
+        // 推定していないときに注意書きだけ残らないこと
+        Assert.Equal("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.None));
+        Assert.NotEqual("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.FileName));
+        Assert.NotEqual("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.CreationTime));
+        Assert.NotEqual(
+            "", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.LastWriteMinusDuration));
+    }
+
+    // --- ダイアログを閉じるときの確認 (T151 / REQ-TRX-FILE-13) ---
+
+    [Fact]
+    public void FileTranscriptionCloseConfirmation_Idle_ReturnsNull()
+    {
+        // 開始前・完了後は確認せずに閉じる（キャンセルボタン・自動クローズの経路）
+        Assert.Null(MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: false));
+    }
+
+    [Fact]
+    public void FileTranscriptionCloseConfirmation_Transcribing_AsksToCancel()
+    {
+        // 処理中に閉じる操作は中止と同義になる。Esc でも閉じうるため、黙って捨てない
+        var message = MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: true);
+
+        Assert.NotNull(message);
+        Assert.Contains("中止して閉じますか", message, StringComparison.Ordinal);
+    }
+
+    // --- 話者識別の状態表示 (T152 / REQ-TRX-DIA-15) ---
+
+    [Fact]
+    public void DiarizationAvailabilityFor_Disabled_IsDisabled()
+    {
+        // 設定が無効なら、モデルが揃っていても「無効」
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.Disabled,
+            MainViewModel.DiarizationAvailabilityFor(enabled: false, modelFilesExist: true));
+    }
+
+    [Fact]
+    public void DiarizationAvailabilityFor_EnabledWithoutModels_IsModelMissing()
+    {
+        // 「有効にしたのに話者欄が出ない」の主因。無効と区別できることが要点
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.ModelMissing,
+            MainViewModel.DiarizationAvailabilityFor(enabled: true, modelFilesExist: false));
+    }
+
+    [Fact]
+    public void DiarizationAvailabilityFor_EnabledWithModels_IsAvailable()
+    {
+        Assert.Equal(
+            MainViewModel.DiarizationAvailability.Available,
+            MainViewModel.DiarizationAvailabilityFor(enabled: true, modelFilesExist: true));
+    }
+
+    [Fact]
+    public void DiarizationStatusTextFor_AllStates_AreDistinctAndNonEmpty()
+    {
+        var texts = new[]
+        {
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.Available),
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.ModelMissing),
+            MainViewModel.DiarizationStatusTextFor(MainViewModel.DiarizationAvailability.Disabled)
+        };
+
+        Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
+        Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void DiarizationTooltipFor_AllStates_AreDistinctAndNonEmpty()
+    {
+        var texts = new[]
+        {
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.Available),
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.ModelMissing),
+            MainViewModel.DiarizationTooltipFor(MainViewModel.DiarizationAvailability.Disabled)
+        };
+
+        Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
+        Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void IsSpeakerDiarizationReadyFor_OnlyAvailable_IsTrue()
+    {
+        // チェックが入るのは実際に使える見込みのときだけ。モデル未配置で入れてはならない
+        Assert.True(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Available));
+        Assert.False(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.ModelMissing));
+        Assert.False(
+            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Disabled));
     }
 }

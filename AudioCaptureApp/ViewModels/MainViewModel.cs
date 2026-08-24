@@ -84,16 +84,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.SilenceMergeGapSeconds,
             _settings.VoicedPaddingSeconds);
 
+        var diarizationOptions = new SpeakerDiarizationOptions(
+            _settings.SpeakerSegmentationModelPath,
+            _settings.SpeakerEmbeddingModelPath,
+            _settings.SpeakerClusteringThreshold,
+            _settings.KnownSpeakerCount,
+            _settings.SpeakerDiarizationThreads);
+
+        // REQ-TRX-DIA-15: 起動時に 1 度だけ状態を判定する。**読み込みはしない**
+        // （存在検査だけ。ADR-0003 N2 の遅延読み込みを維持する）。
+        var availability = DiarizationAvailabilityFor(
+            _settings.SpeakerDiarizationEnabled,
+            SpeakerDiarizationService.ModelFilesExist(diarizationOptions));
+        SpeakerDiarizationStatus = DiarizationStatusTextFor(availability);
+        IsSpeakerDiarizationReady = IsSpeakerDiarizationReadyFor(availability);
+        SpeakerDiarizationTooltip = DiarizationTooltipFor(availability);
+
         // 有効なときだけ生成する。モデルの読み込みは初回の実行まで遅らせるため、
         // ここで生成してもモデルが未配置なら起動を妨げない（エラーは実行時に出る）。
         if (_settings.SpeakerDiarizationEnabled)
         {
-            _speakerDiarizationService = new SpeakerDiarizationService(new SpeakerDiarizationOptions(
-                _settings.SpeakerSegmentationModelPath,
-                _settings.SpeakerEmbeddingModelPath,
-                _settings.SpeakerClusteringThreshold,
-                _settings.KnownSpeakerCount,
-                _settings.SpeakerDiarizationThreads));
+            _speakerDiarizationService = new SpeakerDiarizationService(diarizationOptions);
         }
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
@@ -239,6 +250,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(HasFileTranscriptionStartTimeError))]
     private string _fileTranscriptionStartTime = "";
 
+    /// <summary>
+    /// 開始時刻を自動入力した根拠（REQ-TRX-FILE-15）。空文字列なら何も表示しない。
+    /// </summary>
+    [ObservableProperty]
+    private string _fileTranscriptionStartTimeHint = "";
+
+    partial void OnFileTranscriptionStartTimeChanged(string value)
+    {
+        // 利用者が触ったらもう「自動入力した値」ではない。
+        // 自動入力そのものは、この後に Hint を入れ直すので消えない（RequestFileTranscription の順序）。
+        FileTranscriptionStartTimeHint = "";
+    }
+
     /// <summary>進捗の百分率（0〜100）。ダイアログの <c>ProgressBar</c> 用。</summary>
     [ObservableProperty]
     private double _fileTranscriptionProgress;
@@ -275,6 +299,142 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return TimeSpan.TryParseExact(
             text.Trim(), [@"h\:mm", @"hh\:mm"], CultureInfo.InvariantCulture, out startTime);
     }
+
+    // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
+
+    /// <summary>開始時刻をどこから推定したか。</summary>
+    internal enum StartTimeSource
+    {
+        /// <summary>推定できなかった（入力欄は空欄のまま）。</summary>
+        None,
+
+        /// <summary>ファイル名（本アプリが録音した <c>yyyyMMdd_HHmmss</c> 形式）。</summary>
+        FileName,
+
+        /// <summary>ファイルの作成日時。</summary>
+        CreationTime,
+
+        /// <summary>最終更新日時 − 音声の長さ（録音終了時刻からの逆算）。</summary>
+        LastWriteMinusDuration
+    }
+
+    /// <summary>推定した開始時刻と、その根拠。</summary>
+    /// <param name="Text">入力欄へ入れる文字列（<c>HH:mm</c>）。推定できなければ空文字列。</param>
+    /// <param name="Source">どこから取ったか。</param>
+    internal readonly record struct StartTimeEstimate(string Text, StartTimeSource Source);
+
+    /// <summary>
+    /// 本アプリが録音したファイル名（<c>yyyyMMdd_HHmmss.mp3</c>、REQ-REC-04）から
+    /// 録音開始時刻を取り出す（REQ-TRX-FILE-15 の①）。
+    /// </summary>
+    /// <remarks>
+    /// **拡張子を除いた名前全体が一致する場合だけ受理する。** 前後に何か付いた名前から
+    /// 数字列を拾いに行くと、無関係な数字を時刻と誤読して誤った既定値を入れてしまう。
+    /// 空欄のほうが害が小さい。
+    /// </remarks>
+    internal static bool TryParseRecordedFileNameTime(string fileName, out DateTime startTime)
+    {
+        startTime = default;
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
+        return DateTime.TryParseExact(
+            stem, "yyyyMMdd_HHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out startTime);
+    }
+
+    /// <summary>
+    /// 開始時刻の初期値を推定する（REQ-TRX-FILE-15）。
+    /// ①ファイル名 → ②作成日時 → ③最終更新日時 − 音声の長さ の順に試す。
+    /// </summary>
+    /// <param name="fileName">対象ファイル名（パスを含んでいてもよい）。</param>
+    /// <param name="creationTime">作成日時。取れなければ <c>null</c>。</param>
+    /// <param name="lastWriteTime">最終更新日時。取れなければ <c>null</c>。</param>
+    /// <param name="durationProvider">
+    /// 音声全長の取得。**③に落ちたときにしか呼ばれない**（読み取りが重いため）。
+    /// </param>
+    /// <remarks>
+    /// ②を素直に使うと、ファイルが存在する限り常に値が取れて③へ届かない。
+    /// **作成日時が最終更新日時より後になっている場合だけ②を捨てる** — コピー・移動された
+    /// ファイルは作成日時が「コピーした日時」に書き換わるため、この逆転が
+    /// 「作成日時が当てにならない」ことの機械的に検出できる唯一の兆候である。
+    /// </remarks>
+    internal static StartTimeEstimate InferStartTime(
+        string fileName,
+        DateTime? creationTime,
+        DateTime? lastWriteTime,
+        Func<TimeSpan?> durationProvider)
+    {
+        ArgumentNullException.ThrowIfNull(durationProvider);
+
+        if (TryParseRecordedFileNameTime(fileName, out var fromName))
+        {
+            return new StartTimeEstimate(FormatStartTime(fromName), StartTimeSource.FileName);
+        }
+
+        // 逆転していなければ作成日時を信じる。
+        if (creationTime is { } created && (lastWriteTime is not { } written || created <= written))
+        {
+            return new StartTimeEstimate(FormatStartTime(created), StartTimeSource.CreationTime);
+        }
+
+        if (lastWriteTime is { } end && durationProvider() is { } duration)
+        {
+            return new StartTimeEstimate(
+                FormatStartTime(end - duration), StartTimeSource.LastWriteMinusDuration);
+        }
+
+        return new StartTimeEstimate(string.Empty, StartTimeSource.None);
+    }
+
+    /// <summary>
+    /// 入力欄の書式（REQ-TRX-FILE-10 の <c>hh:mm</c>）へ落とす。秒は切り捨てる。
+    /// </summary>
+    private static string FormatStartTime(DateTime value)
+        => value.ToString("HH\\:mm", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// 実ファイルから材料を集めて <see cref="InferStartTime"/> に渡す（REQ-TRX-FILE-15）。
+    /// ファイルに触るのは Service 層の責務なので、読み取りは
+    /// <see cref="TranscriptionService"/> の静的ヘルパーへ委ねる。
+    /// </summary>
+    private static StartTimeEstimate EstimateStartTime(string filePath)
+    {
+        bool hasTimes = TranscriptionService.TryGetAudioFileTimes(filePath, out var created, out var written);
+        return InferStartTime(
+            filePath,
+            hasTimes ? created : null,
+            hasTimes ? written : null,
+            // ③に落ちたときだけ呼ばれる（読み取りが重いため）
+            () => TranscriptionService.TryGetAudioDuration(filePath, out var duration) ? duration : null);
+    }
+
+    /// <summary>
+    /// 推定の根拠を利用者へ見せる 1 行（REQ-TRX-FILE-15）。推定していなければ空文字列。
+    /// </summary>
+    internal static string StartTimeHintFor(StartTimeSource source) => source switch
+    {
+        StartTimeSource.FileName => "ファイル名から自動入力しました（推定値です。不要なら消してください）",
+        StartTimeSource.CreationTime => "ファイルの作成日時から自動入力しました（推定値です。不要なら消してください）",
+        StartTimeSource.LastWriteMinusDuration =>
+            "最終更新日時と音声の長さから逆算しました（推定値です。不要なら消してください）",
+        _ => string.Empty
+    };
+
+    /// <summary>
+    /// オプション指定ダイアログを閉じる前に見せる確認文言（REQ-TRX-FILE-13）。
+    /// 処理中でなければ <c>null</c> を返し、確認せずに閉じてよいことを表す。
+    /// </summary>
+    /// <remarks>
+    /// 確認を挟むのは、「キャンセル」ボタンが <c>IsCancel</c> であるため **Esc でも閉じうる**ためである。
+    /// 確認が無いと、長時間の文字起こしが誤操作で黙って捨てられる。
+    /// </remarks>
+    internal static string? FileTranscriptionCloseConfirmation(bool isTranscribingFile)
+        => isTranscribingFile
+            ? "文字起こしを中止して閉じますか？\n作成中の出力ファイルは削除されます。"
+            : null;
 
     /// <summary>進捗を百分率（0〜100）に直す。総時間が 0 なら 0。</summary>
     internal static double FileTranscriptionProgressFor(TimeSpan processed, TimeSpan total)
@@ -502,6 +662,80 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : null;
     }
 
+    // --- 話者識別の状態表示 (T152 / REQ-TRX-DIA-15) ---
+
+    /// <summary>話者ダイアライゼーションが使える状態か。</summary>
+    internal enum DiarizationAvailability
+    {
+        /// <summary>設定で無効（<c>SpeakerDiarizationEnabled = false</c>）。</summary>
+        Disabled,
+
+        /// <summary>有効だがモデルファイルが揃っていない。</summary>
+        ModelMissing,
+
+        /// <summary>有効で、モデル 2 ファイルが揃っている。</summary>
+        Available
+    }
+
+    /// <summary>
+    /// ステータスバーに常時出す話者識別の状態（REQ-TRX-DIA-15）。
+    /// <see cref="StatusMessage"/> とは別の欄に出す。あちらは起動直後に
+    /// Whisper のランタイム情報で上書きされるため、ここに書くと消えてしまう。
+    /// </summary>
+    [ObservableProperty]
+    private string _speakerDiarizationStatus = "";
+
+    /// <summary>
+    /// 「話者識別」チェックボックス（編集不可）の状態。使える状態のときだけ true。
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSpeakerDiarizationReady;
+
+    /// <summary>「話者識別」チェックボックスのツールチップ（REQ-TRX-DIA-15）。</summary>
+    [ObservableProperty]
+    private string _speakerDiarizationTooltip = "";
+
+    /// <summary>
+    /// 3 状態を決める（REQ-TRX-DIA-15）。<paramref name="modelFilesExist"/> は
+    /// **存在検査の結果**であって、読み込めることの保証ではない。
+    /// </summary>
+    internal static DiarizationAvailability DiarizationAvailabilityFor(bool enabled, bool modelFilesExist)
+    {
+        if (!enabled)
+        {
+            return DiarizationAvailability.Disabled;
+        }
+
+        return modelFilesExist ? DiarizationAvailability.Available : DiarizationAvailability.ModelMissing;
+    }
+
+    /// <summary>
+    /// 状態を利用者向けの文言にする（REQ-TRX-DIA-15）。
+    /// 「有効」は<b>モデルが置いてある</b>ことまでしか言えないため、断定しすぎない語にする。
+    /// </summary>
+    internal static string DiarizationStatusTextFor(DiarizationAvailability availability) => availability switch
+    {
+        DiarizationAvailability.Available => "話者識別: 有効",
+        DiarizationAvailability.ModelMissing => "話者識別: モデル未配置",
+        _ => "話者識別: 無効"
+    };
+
+    /// <summary>チェックが入るのは「有効」のときだけ（REQ-TRX-DIA-15）。</summary>
+    internal static bool IsSpeakerDiarizationReadyFor(DiarizationAvailability availability)
+        => availability == DiarizationAvailability.Available;
+
+    /// <summary>チェックボックスのツールチップ。状態ごとに次の一手が分かるようにする。</summary>
+    internal static string DiarizationTooltipFor(DiarizationAvailability availability) => availability switch
+    {
+        DiarizationAvailability.Available =>
+            "ファイル文字起こしの結果に [話者N] が付きます（モデルの配置を確認した結果であり、"
+            + "読み込みに成功するかは実行時に分かります）。",
+        DiarizationAvailability.ModelMissing =>
+            "有効に設定されていますが、モデルファイルが見つかりません。"
+            + "settings.json の SpeakerSegmentationModelPath / SpeakerEmbeddingModelPath を確認してください。",
+        _ => "settings.json の SpeakerDiarizationEnabled を true にすると有効になります。"
+    };
+
     // --- 文字起こしの言語 (T153 / REQ-TRX-10) ---
 
     /// <summary>ライブ文字起こしの選択肢（REQ-TRX-LIVE-14）。自動判定は含まない。</summary>
@@ -669,8 +903,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// 実行中の停止処理（REQ-REC-11）。終了確認の「はい」で完了を待つために保持する。
+    /// </summary>
+    private Task? _stopRecordingTask;
+
+    /// <summary>
+    /// 実行中のファイル文字起こし（REQ-TRX-FILE-14）。同じく完了を待つために保持する。
+    /// </summary>
+    private Task? _fileTranscriptionTask;
+
+    // 停止処理そのものは Core 側にある。ここを薄いラッパーにしているのは、
+    // 走っている Task を掴んでおかないと終了確認（REQ-REC-11）が完了を待てないためである。
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
-    private async Task StopRecordingAsync()
+    private Task StopRecordingAsync()
+    {
+        _stopRecordingTask = StopRecordingCoreAsync();
+        return _stopRecordingTask;
+    }
+
+    private async Task StopRecordingCoreAsync()
     {
         _clockTimer.Stop();
         IsStopping = true;
@@ -939,7 +1191,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _pendingTranscriptionFilePath = filePath;
         FileTranscriptionFileName = System.IO.Path.GetFileName(filePath);
-        FileTranscriptionStartTime = "";
+
+        // REQ-TRX-FILE-15: 開始時刻の初期値を推定する。
+        // Hint は StartTime より**後**に入れること。StartTime の変更ハンドラーが Hint を消すため。
+        var estimate = EstimateStartTime(filePath);
+        FileTranscriptionStartTime = estimate.Text;
+        FileTranscriptionStartTimeHint = StartTimeHintFor(estimate.Source);
+
         FileTranscriptionStatus = "";
         FileTranscriptionProgress = 0;
         FileTranscriptionRequested?.Invoke();
@@ -948,14 +1206,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// ダイアログの「開始」から呼ばれる。開始時刻を解析して本処理へ渡す。
     /// </summary>
-    public async Task StartFileTranscriptionAsync()
+    public Task StartFileTranscriptionAsync()
     {
         if (!TryParseStartTime(FileTranscriptionStartTime, out var startOffset))
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        await RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
+        // 走っている Task を掴んでおく。終了確認（REQ-TRX-FILE-14）で
+        // 中止処理の完了を待つために要る。
+        _fileTranscriptionTask = RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
+        return _fileTranscriptionTask;
     }
 
     internal static bool IsSupportedAudioExtension(string filePath)
@@ -1030,6 +1291,70 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _fileTranscriptionCts?.Cancel();
         FileTranscriptionStatus = "中止中...";
+    }
+
+    // --- 終了時の確認と後始末 (T149) ---
+
+    /// <summary>
+    /// ウィンドウを閉じる前に見せる確認文言（REQ-REC-11 / REQ-TRX-FILE-14）。
+    /// 進行中の作業が無ければ <c>null</c> を返し、確認せずに閉じてよいことを表す。
+    /// </summary>
+    /// <remarks>
+    /// 停止処理中は <see cref="IsRecording"/> も <c>true</c> のままなので、
+    /// **停止処理中の判定を先に置く**こと。逆にすると停止を待つ場面で
+    /// 「録音を停止しますか」と聞くことになる。
+    /// 録音とファイル文字起こしは排他（互いの <c>CanExecute</c> が相手を除外する）なので、
+    /// どちらか一方しか成り立たない。
+    /// </remarks>
+    internal static string? CloseConfirmationMessage(
+        bool isRecording, bool isStopping, bool isTranscribingFile)
+    {
+        if (isStopping)
+        {
+            return "録音の停止処理中です。完了を待って終了しますか？";
+        }
+        if (isRecording)
+        {
+            return "録音中ですが終了しますか？\n録音を停止し、ファイルを保存してから終了します。";
+        }
+        if (isTranscribingFile)
+        {
+            return "文字起こし中ですが中止して終了しますか？\n作成中の出力ファイルは削除されます。";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 進行中の作業を畳んでから戻る（REQ-REC-11 / REQ-TRX-FILE-14）。
+    /// 呼び出し元（<c>MainWindow.MainWindow_Closing</c>）はこれを待ってから <c>Close()</c> を呼び直す。
+    /// </summary>
+    /// <remarks>
+    /// 停止・中止のいずれも内部で全例外を <see cref="StatusMessage"/> へ変換するため、
+    /// ここから例外は出ない（決定 D7: 失敗しても終了は続行する）。
+    /// </remarks>
+    public async Task ShutdownAsync()
+    {
+        if (IsTranscribingFile)
+        {
+            CancelFileTranscription();
+            if (_fileTranscriptionTask is { } fileTask)
+            {
+                await fileTask;
+            }
+        }
+
+        if (IsStopping)
+        {
+            // 既に停止処理が走っている。二重に止めず、走っているものの完了を待つ。
+            if (_stopRecordingTask is { } stopTask)
+            {
+                await stopTask;
+            }
+        }
+        else if (IsRecording)
+        {
+            await StopRecordingAsync();
+        }
     }
 
     private void SaveSettings()

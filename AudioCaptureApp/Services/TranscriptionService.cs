@@ -1075,6 +1075,61 @@ public class TranscriptionService : IDisposable
     }
 
     /// <summary>
+    /// 音声ファイルの作成日時・最終更新日時を読む（REQ-TRX-FILE-15 の②③）。
+    /// </summary>
+    /// <returns>読めたら <c>true</c>。ファイルが無い・アクセスできない場合は <c>false</c>。</returns>
+    internal static bool TryGetAudioFileTimes(
+        string audioFilePath, out DateTime creationTime, out DateTime lastWriteTime)
+    {
+        creationTime = default;
+        lastWriteTime = default;
+        try
+        {
+            var info = new FileInfo(audioFilePath);
+            if (!info.Exists)
+            {
+                return false;
+            }
+            creationTime = info.CreationTime;
+            lastWriteTime = info.LastWriteTime;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 音声ファイルの長さ（全長）を読む。開始時刻の推定（REQ-TRX-FILE-15 の③）で使う。
+    /// </summary>
+    /// <returns>読めたら <c>true</c>。開けない・壊れている場合は <c>false</c>（例外は投げない）。</returns>
+    /// <remarks>
+    /// **呼ぶのは③に落ちたときだけにすること。** <see cref="AudioFileReader"/> は MP3 の
+    /// フレーム表を作るためにファイル全体を走査するため、長いファイルでは無視できない時間がかかる。
+    /// 返すのは**無音カット前のファイル全長**である（録音終了時刻からの逆算に使うため）。
+    /// </remarks>
+    internal static bool TryGetAudioDuration(string audioFilePath, out TimeSpan duration)
+    {
+        duration = TimeSpan.Zero;
+        try
+        {
+            using var reader = new AudioFileReader(audioFilePath);
+            duration = reader.TotalTime;
+            return duration > TimeSpan.Zero;
+        }
+        // CA1031: 対象は利用者が選んだ任意のファイルで、NAudio は形式ごとに異なる例外を投げる。
+        //         ここは「推定できたら入れる」だけの補助機能なので、失敗は静かに諦める
+        //         （REQ-TRX-FILE-15: 推定できなくてもエラーにしない）。
+#pragma warning disable CA1031
+        catch (Exception)
+        {
+            return false;
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>
     /// 中止時に、この実行が作りかけた出力ファイルだけを消す（REQ-TRX-FILE-07）。
     /// </summary>
     /// <remarks>

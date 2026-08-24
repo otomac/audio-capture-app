@@ -205,7 +205,6 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="90"/>
@@ -237,59 +236,23 @@
                           HorizontalAlignment="Left" MinWidth="120" Margin="0,0,0,12"
                           ToolTip="録音中のライブ文字起こしに使う言語です。変更は次に録音を開始したときから効きます。"/>
 
-                <!-- ファイルから文字起こし: 開始/中止ボタン -->
+                <!-- ファイルから文字起こし（進捗・中止はダイアログ側。REQ-TRX-FILE-06 / 07） -->
                 <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4"
                             Orientation="Horizontal" Margin="0,0,0,8">
                     <Button Content="音声ファイルから文字起こし"
                             Command="{Binding TranscribeFromFileCommand}"
-                            Padding="12,2" Margin="0,0,8,0">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                <Setter Property="Visibility" Value="Visible"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
+                            Padding="12,2" Margin="0,0,8,0"/>
                     <CheckBox Content="文字起こしにGPUを使用する" IsChecked="{Binding UseGpuForTranscription}"
                               IsEnabled="{Binding CanToggleGpu}"
                               VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <Button Content="中止"
-                            Command="{Binding CancelFileTranscriptionCommand}"
-                            Padding="12,2" Background="#FFCC0000" Foreground="White">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
+                    <!-- REQ-TRX-DIA-15: 状態表示専用。settings.json でしか切り替えられないため編集不可 -->
+                    <CheckBox Content="話者識別" IsChecked="{Binding IsSpeakerDiarizationReady, Mode=OneWay}"
+                              IsEnabled="False"
+                              ToolTip="{Binding SpeakerDiarizationTooltip}"
+                              ToolTipService.ShowOnDisabled="True"
+                              VerticalAlignment="Center" Margin="0,0,8,0"/>
                 </StackPanel>
 
-                <!-- 進捗表示 -->
-                <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4"
-                            Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <ProgressBar IsIndeterminate="True" Width="180" Height="12" Margin="0,0,8,0"/>
-                    <TextBlock Text="{Binding FileTranscriptionStatus}"
-                               VerticalAlignment="Center" Foreground="#FF555555"/>
-                </StackPanel>
             </Grid>
 
                 <!-- ドラッグ＆ドロップ用オーバーレイ -->
@@ -309,10 +272,15 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
                            Foreground="#FF555555" VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="保存先を開く"
+                <!-- REQ-TRX-DIA-15: StatusMessage とは別の欄に常時出す（あちらは上書きされるため） -->
+                <TextBlock Grid.Column="1" Text="{Binding SpeakerDiarizationStatus}"
+                           ToolTip="{Binding SpeakerDiarizationTooltip}"
+                           Foreground="#FF555555" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <Button Grid.Column="2" Content="保存先を開く"
                         Command="{Binding OpenResultFolderCommand}"
                         Height="22" Padding="10,0" Margin="8,0,0,0"/>
             </Grid>
