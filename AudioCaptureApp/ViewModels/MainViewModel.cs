@@ -402,6 +402,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ => string.Empty
     };
 
+    /// <summary>
+    /// オプション指定ダイアログを閉じる前に見せる確認文言（REQ-TRX-FILE-13）。
+    /// 処理中でなければ <c>null</c> を返し、確認せずに閉じてよいことを表す。
+    /// </summary>
+    /// <remarks>
+    /// 確認を挟むのは、「キャンセル」ボタンが <c>IsCancel</c> であるため **Esc でも閉じうる**ためである。
+    /// 確認が無いと、長時間の文字起こしが誤操作で黙って捨てられる。
+    /// </remarks>
+    internal static string? FileTranscriptionCloseConfirmation(bool isTranscribingFile)
+        => isTranscribingFile
+            ? "文字起こしを中止して閉じますか？\n作成中の出力ファイルは削除されます。"
+            : null;
+
     /// <summary>進捗を百分率（0〜100）に直す。総時間が 0 なら 0。</summary>
     internal static double FileTranscriptionProgressFor(TimeSpan processed, TimeSpan total)
         => total <= TimeSpan.Zero
