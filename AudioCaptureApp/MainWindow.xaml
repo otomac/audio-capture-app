@@ -233,6 +233,12 @@
                     <CheckBox Content="文字起こしにGPUを使用する" IsChecked="{Binding UseGpuForTranscription}"
                               IsEnabled="{Binding CanToggleGpu}"
                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <!-- REQ-TRX-DIA-15: 状態表示専用。settings.json でしか切り替えられないため編集不可 -->
+                    <CheckBox Content="話者識別" IsChecked="{Binding IsSpeakerDiarizationReady, Mode=OneWay}"
+                              IsEnabled="False"
+                              ToolTip="{Binding SpeakerDiarizationTooltip}"
+                              ToolTipService.ShowOnDisabled="True"
+                              VerticalAlignment="Center" Margin="0,0,8,0"/>
                 </StackPanel>
 
             </Grid>
@@ -254,10 +260,15 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" TextTrimming="CharacterEllipsis"
                            Foreground="#FF555555" VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="保存先を開く"
+                <!-- REQ-TRX-DIA-15: StatusMessage とは別の欄に常時出す（あちらは上書きされるため） -->
+                <TextBlock Grid.Column="1" Text="{Binding SpeakerDiarizationStatus}"
+                           ToolTip="{Binding SpeakerDiarizationTooltip}"
+                           Foreground="#FF555555" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <Button Grid.Column="2" Content="保存先を開く"
                         Command="{Binding OpenResultFolderCommand}"
                         Height="22" Padding="10,0" Margin="8,0,0,0"/>
             </Grid>
