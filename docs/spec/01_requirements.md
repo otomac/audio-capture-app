@@ -7,7 +7,7 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-DEV-01 | 起動時および「更新」操作時に、有効な録音（Capture）デバイスと再生（Render）デバイスの一覧を取得できる | `AudioCaptureService.RefreshDevices`, `EnumerateDevices` |
+| REQ-DEV-01 | 起動時および「更新」操作時に、有効な録音（Capture）デバイスと再生（Render）デバイスの一覧を取得できる。**「更新」の導線は設定ウィンドウに置く**（REQ-SETWIN-03）。デバイスを差し替えたときにだけ使う操作であり、録音のたびに触るものではないためである。**デバイスの選択そのものはメインウィンドウに残す** | `AudioCaptureService.RefreshDevices`, `EnumerateDevices` |
 | REQ-DEV-02 | デバイス一覧取得時、それぞれの既定デバイス（マイクは Communications ロール、スピーカーは Multimedia ロール）を判定し `IsDefault` としてマークする | `AudioCaptureService.EnumerateDevices` |
 | REQ-DEV-03 | マイクデバイスを選択すると、録音の有無に関わらず常時モニタリング（キャプチャ）を開始する | `AudioCaptureService.StartMicMonitor`, `MainViewModel.OnSelectedCaptureDeviceChanged` |
 | REQ-DEV-04 | マイクデバイスの選択を解除すると常時モニタリングを停止する | `AudioCaptureService.StopMicMonitor` |
@@ -27,7 +27,7 @@
 | REQ-REC-04 | 録音開始時にファイル名 `yyyyMMdd_HHmmss.mp3` を自動生成し、保存先フォルダに出力する。フォルダが存在しない場合は自動作成する | `AudioCaptureService.StartRecording` |
 | REQ-REC-05 | 録音開始時、マイク**およびスピーカー**の常時モニタバッファをクリアし、録音開始時点以降の音声のみを含める | `AudioCaptureService.StartRecording` (`_micBuffer?.ClearBuffer()`, `_loopbackBuffer?.ClearBuffer()`) |
 | REQ-REC-06 | 録音停止時、実際に音声データが一度も書き込まれなかった場合は生成した MP3 ファイルを削除する | `AudioCaptureService.StopRecording` (`_hasWrittenData`) |
-| REQ-REC-07 | 録音の開始・停止に伴い UI に録音状態（停止中／録音中／停止処理中）と経過時間（1 秒更新）を表示する | `MainViewModel.IsRecording/IsStopping/ElapsedTime`, `_clockTimer` |
+| REQ-REC-07 | 録音の開始・停止に伴い UI に録音状態（停止中／録音中／停止処理中）と経過時間（1 秒更新）を表示する。**状態の文言は 3〜5 文字と長さが変わるため、経過時間と横に並べず別の行に置き、固定幅の枠に入れる**（NFR-09）。横に並べると停止操作のたびに経過時間が左右へずれる | `MainViewModel.IsRecording/IsStopping/ElapsedTime`, `_clockTimer` |
 | REQ-REC-08 | 録音停止操作はバックグラウンドスレッドで実行し、UI スレッドをブロックしない | `MainViewModel.StopRecordingAsync` (`Task.Run`) |
 | REQ-REC-09 | 録音・録音停止処理中・ファイル文字起こし中は、デバイス選択／更新／保存先変更／モデル選択などの操作を無効化する（排他制御） | `MainViewModel` 各 `CanExecute` |
 | REQ-REC-10 | 録音処理中に例外が発生した場合、録音を安全に停止しエラーメッセージを UI に表示する | `AudioCaptureService.RecordingError` イベント, `MainViewModel.OnRecordingError` |
@@ -68,6 +68,7 @@
 | REQ-LVL-04 | マイク・スピーカーの**いずれのレベルメーターも、録音の有無に関わらず**デバイスが選択されている間は動作する。録音停止によってメーターを停止・リセットしない | `AudioCaptureService.StartMicMonitor` / `StartLoopbackMonitor` |
 | REQ-LVL-05 | ループバックキャプチャは再生中の音声が無いとキャプチャコールバック自体が発生しない（WASAPI の仕様）。最後にデータを受け取ってから一定時間（200ms）が経過した場合、スピーカーのピークレベルを 0 として扱い、メーターが直前の値で固着することを防ぐ | `AudioCaptureService.LoopbackPeakLevel`, `ApplySilenceTimeout` |
 | REQ-LVL-06 | デバイスの選択が解除された場合、対応するピークレベルを 0 にリセットする | `AudioCaptureService.StopMicMonitor` / `StopLoopbackMonitor` |
+| REQ-LVL-07 | メーターは表示範囲（-60〜+3dB）を **-60〜-3dB＝緑／-3〜0dB＝黄／0〜+3dB＝赤** の 3 ゾーンに塗り分け、点灯していない部分を右から覆って表す。**寸法を変える場合もこの 3 ゾーンの色分けは保つ** — 色そのものが「クリップが近い」ことを伝えており、単色にすると情報が落ちるためである。メーターは対応するデバイスのコンボボックスの直下に置き、どのデバイスのレベルかを位置で示す | `Controls/LevelMeterControl.xaml` |
 
 ## 6. 設定の永続化
 
@@ -113,16 +114,16 @@
 | REQ-TRX-LIVE-07 | 音声の供給が 500ms を超えて途切れた場合、そこまでのバッファを 20 秒未満でも 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。これによりミュート／再生停止をまたいでも時刻が実時刻に追従する | `TranscriptionService.AddSamples`, `ShouldSplitOnGap` |
 | REQ-TRX-LIVE-08 | チャンク先頭の時刻は、バッファ末尾の経過時間からバッファ長を差し引いて求める。末尾を毎パケット実時間へ再アンカーするため、リサンプル誤差が累積しない | `TranscriptionService.ChunkStartElapsed` |
 | REQ-TRX-LIVE-09 | ギャップでチャンクを分割する際、リサンプラとローパスフィルタの状態もリセットする（不連続な音声を地続きとして扱わないため） | `TranscriptionService.AddSamples` |
-| REQ-TRX-LIVE-14 | ライブ文字起こしの言語をメインウィンドウのドロップダウンで選ぶ（REQ-TRX-10）。**変更は次に録音を開始したときから効く** — `WhisperProcessor` は録音開始時の `RegisterSource` で作られるためである。したがって**録音中・停止処理中・ファイル文字起こし中は変更できない**（REQ-REC-09）| `MainWindow.xaml`, `MainViewModel.SelectedLiveLanguage` |
+| REQ-TRX-LIVE-14 | ライブ文字起こしの言語を**設定ウィンドウ**（REQ-SETWIN-01）のドロップダウンで選ぶ（REQ-TRX-10）。**変更は次に録音を開始したときから効く** — `WhisperProcessor` は録音開始時の `RegisterSource` で作られるためである。したがって**録音中・停止処理中・ファイル文字起こし中は変更できない**（REQ-REC-09）| `SettingsWindow.xaml`, `MainViewModel.SelectedLiveLanguage` |
 
 ## 9. ファイルからの文字起こし
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選べる。選択後は直ちに処理を始めず、オプション指定ダイアログ（REQ-TRX-FILE-09）を表示する | `MainViewModel.TranscribeFromFile` |
-| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルをウィンドウ上の文字起こしグループへドラッグ＆ドロップして文字起こしを開始できる。この経路でもオプション指定ダイアログ（REQ-TRX-FILE-09）を経由する | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFile` |
+| REQ-TRX-FILE-01 | モデルロード済みの場合、ファイル選択ダイアログ（`*.wav;*.mp3`）から音声ファイルを選べる。選択後は直ちに処理を始めず、オプション指定ダイアログ（REQ-TRX-FILE-09）を表示する。**導線は「音声ファイルから文字起こし」ボタンであり、これは REQ-TRX-FILE-02 のドロップ領域と同一の部品である** — クリックすればファイル選択、ファイルを落とせばその経路に入る 1 つのコントロールとし、同じ入口が 2 か所に分かれないようにする | `MainWindow.xaml`, `MainViewModel.TranscribeFromFile` |
+| REQ-TRX-FILE-02 | 対応拡張子（.wav / .mp3）のファイルを**メインウィンドウのどこへでも**ドラッグ＆ドロップして文字起こしを開始できる。この経路でもオプション指定ダイアログ（REQ-TRX-FILE-09）を経由する。**受け口をウィンドウ全体にするのは、REQ-TRX-FILE-01 との合体で「見える的」が 1 つのボタン程度の大きさに縮むためである。**破線枠のボタンは入口を示す表示であって、そこにしか落とせないわけではない | `MainWindow.xaml.cs` (`Drop` イベント), `MainViewModel.TranscribeDroppedFile` |
 | REQ-TRX-FILE-03 | 非対応の拡張子がドロップされた場合はエラーメッセージを表示し処理しない | `MainViewModel.TranscribeDroppedFile`, `IsSupportedAudioExtension` |
-| REQ-TRX-FILE-04 | ドラッグオーバー中、ドロップ可能かどうかに応じてオーバーレイ表示を切り替える | `MainWindow.xaml.cs` (`DragOver`/`DragLeave`) |
+| REQ-TRX-FILE-04 | ドラッグオーバー中、ドロップ可能かどうかに応じてオーバーレイ表示を切り替える。オーバーレイは**メインウィンドウ全体を覆う**（REQ-TRX-FILE-02 の受け口と一致させる）。表示・非表示で下の部品を動かさない重ね置きとする（NFR-09） | `MainWindow.xaml.cs` (`DragOver`/`DragLeave`) |
 | REQ-TRX-FILE-05 | 出力ファイルは `{入力ファイル名}.transcript.txt`（録音時生成の `.txt` と名前衝突しない命名）として同フォルダに保存する | `TranscriptionService.BuildTranscriptPath` |
 | REQ-TRX-FILE-06 | 処理中の進捗（フェーズ名・処理済み時間／総時間・百分率の進捗バー）は**オプション指定ダイアログ（REQ-TRX-FILE-09）にのみ表示する。** メインウィンドウには進捗表示を置かない — 同じ内容が 2 か所に出るのを避けるためである（処理中はダイアログがモーダルで開いており、閉じれば処理は中止される。REQ-TRX-FILE-13）。メインウィンドウ側に残るのはステータスバーの 1 行（開始・完了・失敗・中止）だけである。進捗は常に**ファイル先頭を基準**とし、REQ-TRX-FILE-10 の開始時刻を足さない（残り時間の目安であって時刻ではないため）。話者ダイアライゼーションが有効なときは処理が「話者識別中」→「処理中」の 2 フェーズになり、進捗はフェーズごとに 0% から進む。どちらのフェーズでも「処理済み時間」はそのフェーズが実際に読み終えたファイル内の位置であり、フェーズ名とセットで表示することで意味を保つ。無効時はフェーズが「処理中」1 つだけである | `MainViewModel.RunFileTranscriptionAsync`, `FileTranscriptionProgressFor`, `IProgress<FileTranscriptionProgress>`, `FileTranscriptionOptionsWindow.xaml` |
 | REQ-TRX-FILE-07 | 処理中に「中止」操作でキャンセルできる。キャンセル時は生成中の出力ファイルを削除し、部分結果を残さない。**削除してよいのはその実行が作りかけたファイルだけである。**話者ダイアライゼーション有効時はマージが終わるまで出力ファイルを開かないため、中止時点では未作成であり削除しない（無条件に削除すると前回成功したときの `.transcript.txt` を巻き添えにする）。また有効時の書き出しは推論がすべて終わった後の確定処理なので途中でキャンセルせず、全行書くか一行も書かないかのどちらかにする。**「中止」はオプション指定ダイアログにのみ置く。** メインウィンドウには置かない — ダイアログはモーダルで、処理中にメインウィンドウを操作できる場面が無いためである（ダイアログを閉じた場合は REQ-TRX-FILE-13 によりその時点で中止される） | `MainViewModel.CancelFileTranscription`, `TranscriptionService.TranscribeFileAsync` (catch `OperationCanceledException`) |
@@ -141,7 +142,7 @@
 | ID | 要件 | 実装箇所 |
 |---|---|---|
 | REQ-GPU-01 | 「文字起こしに GPU を使用する」設定を保持し、既定値は ON（true）とする | `AppSettings.UseGpuForTranscription` |
-| REQ-GPU-02 | モデル読み込みの結果、GPU が利用不可（REQ-TRX-02 の判定）と判明した場合は設定を強制的に OFF にし、UI 上でも操作不可（無効化）にする。判定はユーザー設定の ON/OFF に依存しないため、GPU 使用 OFF の状態で起動しても正しく再判定される | `MainViewModel.TryLoadWhisperModel`, `GpuAvailable`, `CanToggleGpu` |
+| REQ-GPU-02 | モデル読み込みの結果、GPU が利用不可（REQ-TRX-02 の判定）と判明した場合は設定を強制的に OFF にし、UI 上でも操作不可（無効化）にする。判定はユーザー設定の ON/OFF に依存しないため、GPU 使用 OFF の状態で起動しても正しく再判定される。**チェックボックスの置き場は設定ウィンドウとする**（REQ-SETWIN-03）| `MainViewModel.TryLoadWhisperModel`, `GpuAvailable`, `CanToggleGpu` |
 | REQ-GPU-03 | GPU 使用設定を切り替えると、現在のモデルを破棄し、新しい `UseGpu` 値（REQ-TRX-03）でファクトリを作り直す | `MainViewModel.OnUseGpuForTranscriptionChanged` → `TryLoadWhisperModel` |
 | REQ-GPU-04 | 録音中・録音停止処理中・ファイル文字起こし中は GPU 使用設定の切り替えを禁止する | `MainViewModel.CanToggleGpu` (`IsNotBusy && GpuAvailable`) |
 | REQ-GPU-05 | 実際の実行先をステータスメッセージとして通知する。GPU 実行時はランタイム種別を併記して `GPU (Vulkan)` のように、CPU 実行時は `CPU` とする。実行先は**モデルの重みが実際に載ったバックエンド**（ネイティブログの `whisper_model_load: <X> total size` の `<X>`）から決める。`RuntimeOptions.LoadedLibrary` は読み込んだランタイム DLL の種別、`UseGpu` は要求にすぎず、どちらも実行先を表さないため単独で使ってはならない | `TranscriptionService.RuntimeInfo` イベント |
@@ -163,7 +164,7 @@
 
 | ID | 要件 | 実装箇所 |
 |---|---|---|
-| REQ-LIVEVIEW-01 | 文字起こしされた行を時刻順に表示するサブウィンドウを開ける。導線は文字起こし設定グループのヘッダーに置いたボタン「表示」とし、録音中・処理中でも押せる（見るための窓のため無効化しない） | `MainWindow.xaml`, `MainViewModel.ShowLiveTranscript`, `LiveTranscriptWindow` |
+| REQ-LIVEVIEW-01 | 文字起こしされた行を時刻順に表示するサブウィンドウを開ける。導線は文字起こしカードのヘッダーに置いたボタン「表示」とし、録音中・処理中でも押せる（見るための窓のため無効化しない） | `MainWindow.xaml`, `MainViewModel.ShowLiveTranscript`, `LiveTranscriptWindow` |
 | REQ-LIVEVIEW-02 | 初期サイズは 480x240 でリサイズ可能。文字サイズは 9pt とする | `LiveTranscriptWindow.xaml` |
 | REQ-LIVEVIEW-03 | 表示するのは `TranscriptionService.SegmentTranscribed` が通知した行であり、**ライブ文字起こしとファイル文字起こしの両方**を含む。行頭のラベル（`[マイク]` / `[スピーカー]` / `[ファイル]`）で区別できる。イベントは文字起こしワーカースレッドから発火するため、`Dispatcher.BeginInvoke` を経由して UI スレッドで追加する（NFR-01） | `MainViewModel` コンストラクタ, `LiveTranscriptLines` |
 | REQ-LIVEVIEW-04 | 表示行数の上限は 100 行とし、超えたら**古い行から**捨てる。捨てられるのは表示のみで、テキストファイルには全行が残る | `MainViewModel.AppendLiveTranscriptLine`, `MaxLiveTranscriptLines` |
@@ -197,7 +198,7 @@
 | REQ-TRX-DIA-13 | 重複長は、**文字起こしセグメントの時間範囲そのものではなく、その中で実際に発話が存在する時間帯の合計**で測る。Whisper のセグメントは、REQ-TRX-08 の最小長パディングで足した無音や、発話が終わった後の余白まで含んで伸びることがあり、その余白が隣の話者の時間帯にかかると誤った話者へ寄る。発話時間帯は Whisper のトークン単位のタイムスタンプ（`WithTokenTimestamps()`。`[_BEG_]` / `[_TT_nnn]` 等の特殊トークンと長さ 0 のトークンは除く）から求め、重なり合うものは 1 つにまとめる。**DTW による整列（`UseDtwTimeStamps`）は使わない** — 有効化にはモデルごとに対応した alignment heads プリセットの指定が要るのに対し、本アプリはモデルパスを設定で差し替えられるため対応付けを保証できない。実測でも DTW なしのトークン時刻で十分な精度が得られている。トークンが 1 つも得られなかった場合はセグメントの時間範囲をそのまま使う（従来動作へ縮退する） | `TranscriptionService.CollectTranscriptSegmentsAsync`, `TranscriptDiarizationMerger.Merge` |
 | REQ-TRX-DIA-12 | キャンセルは Diarization の**開始前と完了後**にのみ評価する。sherpa-onnx の進捗コールバック（`ProcessWithCallback`）は進捗の報告にだけ使い、そこからネイティブ処理を中断させることはしない。ネイティブ処理の強制停止はネイティブリソースの破棄漏れとプロセスクラッシュを招くためである。したがって Diarization 実行中の「中止」操作は、その 1 回の推論が終わるまで反映されない | `SpeakerDiarizationService.Diarize` |
 | REQ-TRX-DIA-14 | 推論スレッド数（`SpeakerDiarizationThreads`）の既定は **論理コア数と 4 の小さいほう**（`min(4, Environment.ProcessorCount)`）とする。スレッド数は**結果を変えない** — 実測で 1〜20 スレッドのすべてが話者区間 38 本を開始・終了・ID まで完全に一致させた（速度だけの設定である）。上限を 4 に置くのは実測で 4 を超えても速くならず、8 を超えると遅くなるためである（2 分 42 秒の音声で 1→4 スレッドは 28.3→22.3 秒、20 スレッドでは 38.4 秒）。効果が大きいのは他の処理と CPU を奪い合うときで、16 スレッド分の負荷の下では 1 スレッド 85 秒に対し 4 スレッド 47 秒だった。設定で 1〜16 に上書きできる。**既存の `settings.json` に書かれている値は書き換えない**（既定値の変更は新規の設定ファイルにのみ効く） | `AppSettings`, `SpeakerDiarizationOptions` |
-| REQ-TRX-DIA-15 | 話者ダイアライゼーションが使える状態かを**起動時に判定し、メインウィンドウに表示する。**状態は **①有効（`SpeakerDiarizationEnabled` が true で、モデル 2 ファイルが両方存在する）／②モデル未配置（true だがどちらかのファイルが無い）／③無効（false）** の 3 つを区別する。表示は 2 か所 — ステータスバーの専用欄（`StatusMessage` を上書きしない。あちらは起動直後にWhisper ランタイム情報で上書きされるため）と、「音声ファイルから文字起こし」ボタンの隣に置く**編集不可のチェックボックス「話者識別」**（①のときだけチェックが入る）。**判定はモデル 2 ファイルの存在検査だけで行い、起動時にモデルを読み込まない** — 読み込むとADR-0003 N2（モデル未配置でも起動を妨げない）の判断を覆すためである。したがって**「ファイルはあるが壊れている」モデルは①と表示される**（実行時に REQ-TRX-DIA-11 のエラーになる）。判定は起動時に 1 度だけ行い、以後更新しない — 設定もモデルパスも UI から変更できないため、実行中に変わる契機が無い。**この表示から話者識別を切り替えることはできない**（REQ-TRX-DIA-03 のとおり有効化は `settings.json` で行う） | `SpeakerDiarizationService.ModelFilesExist`, `MainViewModel.DiarizationAvailabilityFor` / `DiarizationStatusTextFor` / `IsSpeakerDiarizationReady`, `MainWindow.xaml` |
+| REQ-TRX-DIA-15 | 話者ダイアライゼーションが使える状態かを**起動時に判定し、メインウィンドウに表示する。**状態は **①有効（`SpeakerDiarizationEnabled` が true で、モデル 2 ファイルが両方存在する）／②モデル未配置（true だがどちらかのファイルが無い）／③無効（false）** の 3 つを区別する。表示は**ステータスバーの専用欄 1 か所**とする（`StatusMessage` を上書きしない。あちらは起動直後に Whisper ランタイム情報で上書きされるため）。**「音声ファイルから文字起こし」の隣に編集不可のチェックボックスを置くことはしない** — 同じ内容が 2 か所に出るうえ、押せないチェックボックスは操作できるように見えて誤解を招くためである（T154 で削除した）。**判定はモデル 2 ファイルの存在検査だけで行い、起動時にモデルを読み込まない** — 読み込むとADR-0003 N2（モデル未配置でも起動を妨げない）の判断を覆すためである。したがって**「ファイルはあるが壊れている」モデルは①と表示される**（実行時に REQ-TRX-DIA-11 のエラーになる）。判定は起動時に 1 度だけ行い、以後更新しない — 設定もモデルパスも UI から変更できないため、実行中に変わる契機が無い。**この表示から話者識別を切り替えることはできない**（REQ-TRX-DIA-03 のとおり有効化は `settings.json` で行う） | `SpeakerDiarizationService.ModelFilesExist`, `MainViewModel.DiarizationAvailabilityFor` / `DiarizationStatusTextFor` / `SpeakerDiarizationTooltip`, `MainWindow.xaml` |
 
 > **割り当ての粒度:** 話者を割り当てる単位は Whisper の**セグメント**である。1 つのセグメントの途中で話者が切り替わる場合、そのセグメント全体が重複の長い 1 人へ寄る。
 > REQ-TRX-DIA-13 は重複の測り方を精密にするだけで、テキストの分割は行わない。
@@ -262,6 +263,20 @@
 > **話者 ID の有効範囲:** 話者 ID は**その音声ファイルの中でのみ**有効である。
 > 別のファイルの `話者1` が同一人物であることを意味しない。声紋の登録も個人の識別も行っていない。
 
+## 14. 設定ウィンドウ
+
+| ID | 要件 | 実装箇所 |
+|---|---|---|
+| REQ-SETWIN-01 | メインウィンドウは**録音するための操作面**に絞り、常時表示しなくてよい設定は設定ウィンドウへ置く。メインウィンドウに残すのは、録音のたびに触るもの — **入力デバイスの選択（REQ-DEV-03 / 06）・ミュート・レベルメーター・録音の開始／停止・経過時間・ライブ文字起こしの ON/OFF・「表示」（REQ-LIVEVIEW-01）・「音声ファイルから文字起こし」（REQ-TRX-FILE-01）・ステータスバー** に限る | `MainWindow.xaml`, `SettingsWindow.xaml` |
+| REQ-SETWIN-02 | 設定ウィンドウを開く導線は**ステータスバーの「設定…」ボタン**とし、**モーダル**（`ShowDialog`）で開く | `MainWindow.xaml`, `MainWindow.xaml.cs`, `MainViewModel.ShowSettingsCommand` / `SettingsRequested` |
+| REQ-SETWIN-03 | 設定ウィンドウに置くのは **①保存先フォルダ（表示と選択。REQ-CFG-03）／②デバイス一覧の「更新」（REQ-DEV-01）／③Whisper モデルのパスと選択（REQ-TRX-01）／④ライブ文字起こしの言語（REQ-TRX-LIVE-14）／⑤文字起こしに GPU を使用する（REQ-GPU-02）** の 5 つと、**⑥話者ダイアライゼーションの状態**（REQ-TRX-DIA-15 の詳細。ステータスバーの短い表示を補う読み取り専用の説明であり、切り替えはできない） | `SettingsWindow.xaml` |
+| REQ-SETWIN-04 | 設定ウィンドウは自前の状態を持たず、`MainWindow` と**同じ `MainViewModel` インスタンス**を `DataContext` として共有する。生成・表示は `MainWindow` のコードビハインドが行い、ViewModel は「開いてほしい」を**イベントで通知するだけ**とする（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。`LiveTranscriptWindow` / `FileTranscriptionOptionsWindow` と同じ形） | `SettingsWindow.xaml.cs`, `MainWindow.xaml.cs`, `MainViewModel.SettingsRequested` |
+| REQ-SETWIN-05 | **録音中・録音停止処理中・ファイル文字起こし中は「設定…」を無効化する。** 設定ウィンドウの項目はいずれも REQ-REC-09 でその間は操作できず、開いても何もできない。一方でモーダルであるため、開いている間は**録音の停止操作が塞がれる**。得るものが無く塞ぐものがある以上、開かせない | `MainViewModel.CanShowSettings`（`IsNotBusy`） |
+| REQ-SETWIN-06 | 設定ウィンドウを閉じても、変更は閉じた時点ではなく**変更した時点で**保存済みである（REQ-CFG-05）。したがって「OK / キャンセル」ではなく「閉じる」だけを置き、取り消しの手段は設けない | `SettingsWindow.xaml`, `MainViewModel.SaveSettings` |
+
+> ライブ文字起こしの言語だけは、変更しても**次に録音を開始したときから**効く（REQ-TRX-LIVE-14）。
+> 設定ウィンドウ上にその旨を 1 行で書く。
+
 ## 非機能要件
 
 | ID | 要件 | 補足 |
@@ -274,3 +289,4 @@
 | NFR-06 | 長時間録音時もメモリを蓄積しないよう、MP3 エンコード・書き込みはストリーミング方式とする | `LameMP3FileWriter` へのチャンク単位書き込み |
 | NFR-07 | 話者ダイアライゼーションが**有効な場合に限り**、ファイル文字起こしはデコード済みの 16kHz モノラル PCM をファイル全体ぶんメモリに保持する（**約 230 MB/時間**）。sherpa-onnx の Diarization API が音声全体を 1 つの配列で要求するため回避できない。無効時は従来どおりストリーミング処理でありメモリは増えない | `TranscriptionService.DecodeToMono16k` |
 | NFR-08 | `SpeakerDiarizationService` は `IDisposable` を実装し、sherpa-onnx のネイティブリソースを確実に解放する。ネイティブ API が NULL ハンドルを返しうる箇所では、ラッパーの検査に頼らず呼び出し側で事前条件を検証する（REQ-TRX-DIA-08） | `SpeakerDiarizationService.Dispose` |
+| NFR-09 | **状態の変化で UI 部品の寸法・位置を変えない。** 状態によって文言が伸び縮みする部品（ミュートトグルの「ミュート」／「ミュート中」、録音状態の「停止中」／「録音中」／「停止処理中」、話者識別の状態表示など）は、**最長の状態に合わせた固定寸法**とし、状態で変えてよいのは色と文字だけとする。可変長のテキスト（ステータスメッセージ・デバイス名）は割り当てた幅の中で省略する。文字数の違いで隣の部品が押されて動くのは、利用者にとって意味のない変化だからである | `MainWindow.xaml` の各固定幅指定, `TextTrimming="CharacterEllipsis"` |

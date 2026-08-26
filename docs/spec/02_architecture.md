@@ -23,7 +23,10 @@ graph TB
         MW["MainWindow.xaml / .xaml.cs"]
         FTW["FileTranscriptionOptionsWindow"]
         LTW["LiveTranscriptWindow"]
+        SW["SettingsWindow"]
         LMC["LevelMeterControl"]
+        STY["Styles/Theme.xaml
+Styles/Controls.xaml"]
     end
 
     subgraph ViewModel["ViewModel層"]
@@ -56,8 +59,10 @@ graph TB
     MW -->|"DataContext"| MVM
     MW -->|"生成・表示 (ShowDialog)"| FTW
     MW -->|"生成・表示 (Show, Owner=MainWindow)"| LTW
+    MW -->|"生成・表示 (ShowDialog)"| SW
     FTW -->|"DataContext (同一インスタンス)"| MVM
     LTW -->|"DataContext (同一インスタンス)"| MVM
+    SW -->|"DataContext (同一インスタンス)"| MVM
     MW --> LMC
     LMC -->|"Level (dB) バインド"| MVM
 
@@ -81,9 +86,10 @@ graph TB
 
 ### 各層の責務
 
-- **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `Controls/LevelMeterControl`）
+- **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `SettingsWindow`, `Controls/LevelMeterControl`, `Styles/`）
   UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、`MainViewModel` へのバインディングのみを持ち、業務ロジックは持たない。
-  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
+  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
+  `Styles/` は `App.xaml` の `MergedDictionaries` から読み込む `ResourceDictionary` で、コントロールの `Style` と `ControlTemplate` だけを持つ。UI ライブラリは導入していない（`CLAUDE.md`「ライブラリ追加は個別承認制」）。
 - **ViewModel層**（`ViewModels/MainViewModel`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
 - **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`）
