@@ -15,7 +15,7 @@
 
 ## 2. レイヤー構成
 
-[CLAUDE.md](../../CLAUDE.md) の方針に従い、Models / ViewModels / Services の 3 層構成を採用する。ViewModel は `MainViewModel.cs` 1 ファイルに集約している（シンプル優先）。
+[CLAUDE.md](../../CLAUDE.md) の方針に従い、Models / ViewModels / Services の 3 層構成を採用する。ViewModel は `MainViewModel` **1 クラス**に集約している。ファイルは機能単位で `partial` に割っている（[ADR-0005](../adr/0005-mainviewmodel-split.md)。シンプル優先）。
 
 ```mermaid
 graph TB
@@ -27,7 +27,8 @@ graph TB
     end
 
     subgraph ViewModel["ViewModel層"]
-        MVM["MainViewModel"]
+        MVM["MainViewModel
+(partial・6 ファイル)"]
     end
 
     subgraph Service["Service層"]
@@ -84,8 +85,23 @@ graph TB
 - **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `Controls/LevelMeterControl`）
   UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、`MainViewModel` へのバインディングのみを持ち、業務ロジックは持たない。
   補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
-- **ViewModel層**（`ViewModels/MainViewModel`）
+- **ViewModel層**（`ViewModels/MainViewModel*.cs`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
+  **クラスもインスタンスも `MainViewModel` 1 つで、ファイルだけを機能単位に `partial` で割っている**（[ADR-0005](../adr/0005-mainviewmodel-split.md) 案 D）。
+  したがってファイル間で状態を同期する仕組みは存在しない — 同じオブジェクトだからである。
+
+  | ファイル | 担当 |
+  |---|---|
+  | `MainViewModel.cs` | Service の保持、コンストラクター、`IsRecording` / `IsStopping` / `IsTranscribingFile` と `IsNotBusy`、`StatusMessage`、`LastResultPath`、保存先フォルダ、成果物フォルダを開く、設定の保存、`Dispose` |
+  | `MainViewModel.Devices.cs` | デバイスの一覧・選択・モニタリング、ミュート、レベルメーター |
+  | `MainViewModel.Recording.cs` | 録音の開始／停止、録音状態の表示、終了時の確認と後始末 |
+  | `MainViewModel.Transcription.cs` | Whisper モデルの読み込み、GPU 切り替え、言語の選択、話者識別の状態表示 |
+  | `MainViewModel.FileTranscription.cs` | 音声ファイルからの文字起こし（オプション指定ダイアログ・開始時刻の推定を含む） |
+  | `MainViewModel.LiveTranscript.cs` | 文字起こし表示ウィンドウへ流す行の蓄積と反映 |
+
+  **`ViewModels/` に `MainViewModel` 以外のクラスは置かない**（ADR-0005 の規則 3）。
+  ウィンドウ単位の ViewModel へ分ける案は、①全ファイル合計が 1,500 行を超えたとき、
+  ②5 枚目のウィンドウを足すとき に再評価する。
 - **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`）
   NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
 - **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
