@@ -75,7 +75,9 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 背景は [ADR-0001](docs/adr/0001-baseline-architecture.md)。
 
 - Models / ViewModels / Services の 3 層構成
-- ViewModel は `MainViewModel.cs` 1 ファイルに集約（シンプル優先）
+- ViewModel は **`MainViewModel` 1 クラス**に集約（シンプル優先）。ファイルは機能単位で
+  `partial` に割ってよい（1 ファイル 500 行が目安。[ADR-0005](docs/adr/0005-mainviewmodel-split.md)）。
+  **`ViewModels/` に `MainViewModel` 以外のクラスを置かない** — 置きたくなったら ADR を書く
 - **DI コンテナ・Service のインターフェース抽象は意図的に不使用**（ADR-0001）。導入したくなったら ADR を書く
 - NAudio を直接使用する（独自抽象化レイヤーを作らない）
 - **UI スレッド以外からバインドプロパティを更新しない。** 必ず
