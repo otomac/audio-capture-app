@@ -1,6 +1,6 @@
 # T154 — メインウィンドウの UI 改良
 
-> **状態:** 進行中（中断中 — [T155](./T155-viewmodel-split-adr.md) の ADR 承認待ち）— 2026-08-26
+> **状態:** 進行中 — 2026-08-26（[T155](./T155-viewmodel-split-adr.md) の ADR 承認により 2026-08-27 に再開）
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 > **設計レビュー:** モックアップと合意の記録（利用者へ提示・2026-08-26 承認）
 
@@ -97,39 +97,43 @@
 - [x] `02_architecture.md` — View 一覧・レイヤー図・責務の記述に `SettingsWindow` と `Styles/` を追加
 - [x] `03_class_diagram.md` — `SettingsRequested` / `ShowSettings` 追加、`IsSpeakerDiarizationReady` / `IsSpeakerDiarizationReadyFor` 削除を反映
 
-> **REQ-SETWIN-04（`MainViewModel` を `DataContext` として共有する）だけは
-> [T155](./T155-viewmodel-split-adr.md) の結論待ちである。** 他の要件は結論に依存しない。
+> **REQ-SETWIN-04 は [ADR-0005](../adr/0005-mainviewmodel-split.md) の承認（2026-08-27）により確定した。**
+> 書き直しは不要で、§4 の仕様書修正はこれで全項目そろっている。
 
 ## 5. アーキテクチャへの影響
 
-**ADR: 必要。T155 の結論を待つ（本タスクはそこで中断中）。**
+**ADR は [ADR-0005](../adr/0005-mainviewmodel-split.md) として起票し、2026-08-27 に承認された。**
+本タスクへの影響は **無し**（`SettingsWindow` は当初の設計どおりでよい）。
 
-当初「ADR-0002 に 4 枚目として乗るだけなので不要」と書いたが、**誤りだった。**
-ADR-0002 は「結果」の節で、自ら再評価の契機を指定している。
+当初このタスク票には「ADR 不要」と書いていたが、**誤りだった。**
+ADR-0002 は「結果」の節で、ウィンドウが 4 枚目に増えるならこの ADR を置換して案 A を
+選び直す、と自ら再評価の契機を指定している。`SettingsWindow` はその 4 枚目にあたる。
+そこで [T155](./T155-viewmodel-split-adr.md) を起こして再評価し、本タスクは中断した。
 
-> `MainViewModel` が太る。実測で 767 行 → **788 行**（T113 / T114 の追加後）。
-> 分割の閾値 1,500 行にはまだ距離があるが、**ウィンドウが 4 枚目・5 枚目と増えるなら、
-> この ADR を置換して案 A を選び直すことになる。**
+**結論（ADR-0005 案 D）:** `MainViewModel` は **1 クラスのまま**とし、ファイルだけを
+機能単位に `partial` で割る。ウィンドウごとの ViewModel（案 A）は採らない。
+決め手は、各ウィンドウのバインド集合が**完全に素**（重複 0）である一方、
+`IsNotBusy` / `StatusMessage` / `LastResultPath` / `LiveTranscriptLines` は
+**書き手が画面をまたいでいる**ため、分割すると現在 1 本も無い「子 → 親の通知配線」が
+必要になることだった。
 
-`SettingsWindow` は **4 枚目**にあたる。あわせて実測すると、
+したがって **REQ-SETWIN-04 は書いたとおりで確定**である —
+`SettingsWindow` は `MainViewModel` を `DataContext` として共有する状態レス View とし、
+生成・表示は `MainWindow` のコードビハインドが行い、ViewModel はイベントで通知する
+（ADR-0002 の規則 1〜5 はすべて有効）。
 
-| 項目 | ADR-0002 記述時 | 2026-08-26 現在 |
-|---|---|---|
-| `MainViewModel.cs` の行数 | 788 | **1,396** |
-| 分割の閾値（[20-architecture-standards.md §6](../harness/20-architecture-standards.md)） | 1,500 | 1,500 |
-| ウィンドウ枚数 | 3 | 3（T154 で 4） |
+分割そのものは [T156](./T156-mainviewmodel-partial-split.md) で実施済み（2026-08-27 完了）。
+**本タスクが `MainViewModel` へ足す `SettingsRequested` / `ShowSettings` / `CanShowSettings` は
+`MainViewModel.cs`（共有状態と導線を持つファイル）へ置く。**
+`IsSpeakerDiarizationReady` / `IsSpeakerDiarizationReadyFor` の削除（D9）は
+`MainViewModel.Transcription.cs` が対象になる。
 
-T154 が増やすのは概算 +10 行（`SettingsRequested` / `ShowSettings` / `CanShowSettings` の追加と
-`IsSpeakerDiarizationReady` 系の削除の差引）で約 1,406 行。閾値は超えないが**残りは約 100 行**である。
+3 層構成と依存方向は不変。
 
-したがって **ViewModel 分割の是非を先に決める**（利用者の判断・2026-08-26）。
-起票は **[T155](./T155-viewmodel-split-adr.md)**。T154 は T155 の ADR が承認されるまで中断する。
-
-- 3 層構成と依存方向そのものは、どちらの結論でも不変。View → ViewModel の一方向を保つため、
-  `SettingsWindow` の生成は `MainWindow.xaml.cs` が行い、ViewModel からはイベントで通知する。
-- **T155 の結論によって変わるのは「どの ViewModel を `DataContext` にするか」だけ**であり、
-  §3 の D1〜D12（画面の見た目とレイアウト）には影響しない。したがって §4 の仕様書修正のうち
-  **REQ-SETWIN-04（`MainViewModel` を共有する）だけが結論待ち**で、他は先に確定してよい。
+> **注意（T156 からの引き継ぎ）:** `partial` 化で定型行が 6 セットに増えたため、
+> `MainViewModel` の全ファイル合計は **1,443 行**（ADR-0005 の再評価契機① 1,500 行まで 57 行）。
+> 本タスクの概算 +10 行で約 1,453 行になる。**閾値は超えないが、数え方の見直しは別途要判断**
+> であり、本タスクでは触らない。
 
 ## 6. 変更ファイル一覧
 
@@ -158,10 +162,10 @@ T154 が増やすのは概算 +10 行（`SettingsRequested` / `ShowSettings` / `
       **§14「設定ウィンドウ」（REQ-SETWIN-01〜06）と NFR-09（レイアウトの安定）を新設** (`01_requirements.md`)
 - [x] **A2** View 一覧へ `SettingsWindow` と `Styles/` を追加 (`02_architecture.md`)
 - [x] **A3** `MainViewModel` の増減を反映 (`03_class_diagram.md`)
-- [ ] **A4** ADR の扱い → **[T155](./T155-viewmodel-split-adr.md) へ分離。** 結論が出たら
-      REQ-SETWIN-04 と本タスク §5 を確定させる
+- [x] **A4** ADR の扱い → **[T155](./T155-viewmodel-split-adr.md) へ分離し、[ADR-0005](../adr/0005-mainviewmodel-split.md) として承認された**（2026-08-27）。
+      REQ-SETWIN-04 と本タスク §5 を確定させた。分割の実施は [T156](./T156-mainviewmodel-partial-split.md)（完了済み）
 
-> **ここで中断中。** グループ B 以降は T155 の ADR が承認されてから着手する。
+> **2026-08-27 に再開。** グループ B から着手する。
 
 ### グループ B — スタイル基盤
 - [ ] **B1** `Styles/Theme.xaml` を作る（色・寸法・書体）
@@ -217,9 +221,8 @@ T154 が増やすのは概算 +10 行（`SettingsRequested` / `ShowSettings` / `
 
 **画面については無い**（D1〜D13 で確定。すべて 2026-08-26 に利用者の合意を得ている）。
 
-**残る 1 件は ViewModel の構造** — `SettingsWindow` の `DataContext` を `MainViewModel` にするか、
-専用の ViewModel にするか。[T155](./T155-viewmodel-split-adr.md) の ADR で決める。
-本タスクはそこで中断している。
+**ViewModel の構造も決着した** — [ADR-0005](../adr/0005-mainviewmodel-split.md)（承認済み・2026-08-27）により、
+`SettingsWindow` の `DataContext` は `MainViewModel` を共有する。専用 ViewModel は作らない。
 
 ## 10. 前提
 
