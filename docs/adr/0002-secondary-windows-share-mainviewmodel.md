@@ -1,6 +1,6 @@
 # ADR-0002 — 補助ウィンドウは MainViewModel を共有する View として追加する
 
-> **状態:** 承認済み
+> **状態:** 承認済み（規則 1〜5 は有効。「4 枚目で再評価」条項は [ADR-0005](./0005-mainviewmodel-split.md) で処理済み）
 > **日付:** 2026-08-20
 > **関連タスク:** [T113](../tasks/T113-file-transcription-options-dialog.md) / [T114](../tasks/T114-live-transcript-window.md)
 
