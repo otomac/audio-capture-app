@@ -624,16 +624,4 @@ public class MainViewModelTests
         Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
         Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
     }
-
-    [Fact]
-    public void IsSpeakerDiarizationReadyFor_OnlyAvailable_IsTrue()
-    {
-        // チェックが入るのは実際に使える見込みのときだけ。モデル未配置で入れてはならない
-        Assert.True(
-            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Available));
-        Assert.False(
-            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.ModelMissing));
-        Assert.False(
-            MainViewModel.IsSpeakerDiarizationReadyFor(MainViewModel.DiarizationAvailability.Disabled));
-    }
 }

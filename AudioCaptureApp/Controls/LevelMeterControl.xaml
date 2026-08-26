@@ -1,7 +1,7 @@
-<UserControl x:Class="AudioCaptureApp.Controls.LevelMeterControl"
+﻿<UserControl x:Class="AudioCaptureApp.Controls.LevelMeterControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             Height="16">
+             Height="4">
     <Grid x:Name="MeterGrid" ClipToBounds="True">
         <!-- Background segments: green | yellow | red -->
         <Grid>
@@ -19,6 +19,6 @@
         </Grid>
 
         <!-- Dark overlay that masks the unlit portion (slides from right) -->
-        <Rectangle x:Name="OverlayRect" Fill="#FF2D2D2D" HorizontalAlignment="Right" Width="0"/>
+        <Rectangle x:Name="OverlayRect" Fill="#FFE3E6EB" HorizontalAlignment="Right" Width="0"/>
     </Grid>
 </UserControl>

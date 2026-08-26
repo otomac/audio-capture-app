@@ -1,6 +1,6 @@
 # T154 — メインウィンドウの UI 改良
 
-> **状態:** 進行中 — 2026-08-26（[T155](./T155-viewmodel-split-adr.md) の ADR 承認により 2026-08-27 に再開）
+> **状態:** 完了 — 2026-08-27
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 > **設計レビュー:** モックアップと合意の記録（利用者へ提示・2026-08-26 承認）
 
@@ -168,52 +168,62 @@ ADR-0002 は「結果」の節で、ウィンドウが 4 枚目に増えるな�
 > **2026-08-27 に再開。** グループ B から着手する。
 
 ### グループ B — スタイル基盤
-- [ ] **B1** `Styles/Theme.xaml` を作る（色・寸法・書体）
-- [ ] **B2** `Styles/Controls.xaml` を作る（各コントロールの `Style` / `ControlTemplate`）
-- [ ] **B3** `App.xaml` から両者をマージする
-- [ ] **B4** この時点で既存 3 ウィンドウが崩れていないことを目視確認する
+- [x] **B1** `Styles/Theme.xaml` を作った（色・角丸・書体・**固定寸法**）
+- [x] **B2** `Styles/Controls.xaml` を作った（Window / TextBlock / Button / ToggleButton / TextBox / CheckBox / ComboBox / ProgressBar ＋ カード・ステータスバー・ピル・ドロップ部品）
+- [x] **B3** `App.xaml` から `Controls.xaml` をマージした（`Controls.xaml` が `Theme.xaml` を取り込む）
+- [~] **B4** 既存ウィンドウの目視確認 → **利用者に依頼中**（`FileTranscriptionOptionsWindow` と `LiveTranscriptWindow` は暗黙スタイルの影響を受けるため）
 
 ### グループ C — ViewModel
-- [ ] **C1** `SettingsRequested` イベントと `ShowSettingsCommand` を追加
-- [ ] **C2** `IsSpeakerDiarizationReady` / `IsSpeakerDiarizationReadyFor` を削除（D9）
+- [x] **C1** `SettingsRequested` / `ShowSettingsCommand` / `CanShowSettings`（`IsNotBusy`）を追加
+- [x] **C2** `IsSpeakerDiarizationReady` / `IsSpeakerDiarizationReadyFor` を削除（D9）
 
 ### グループ D — 設定ウィンドウ
-- [ ] **D1** `SettingsWindow.xaml(.cs)` を新規作成（保存先 / 一覧更新 / モデル / ライブ言語 / GPU / 話者識別の状態）
-- [ ] **D2** `MainWindow.xaml.cs` で `SettingsRequested` を購読し `ShowDialog` で開く
+- [x] **D1** `SettingsWindow.xaml(.cs)` を新規作成（保存先 / 一覧更新 / モデル / ライブ言語 / GPU / 話者識別の状態）
+- [x] **D2** `MainWindow.xaml.cs` で `SettingsRequested` を購読し `ShowDialog` で開く
 
 ### グループ E — メインウィンドウ
-- [ ] **E1** カード 2 枚＋ステータスバーへ再構成し、幅 480・高さ固定にする
-- [ ] **E2** 入力デバイスを 1 デバイス＝1 行にまとめる（D3）
-- [ ] **E3** 録音ステータスを経過時間の上の行へ移し、固定幅にする（D10）
-- [ ] **E4** ミュートトグルを固定幅にする（D10）
-- [ ] **E5** ファイル文字起こしのボタンとドロップ領域を合体させる（D5）
-- [ ] **E6** D&D のハンドラーをウィンドウへ移し、オーバーレイをウィンドウいっぱいに出す（D6）
-- [ ] **E7** 話者識別チェックボックスを削除する（D9）
+- [x] **E1** カード 2 枚＋ステータスバーへ再構成。**幅 480 × 高さ 374 に固定**（`SizeToContent` を外し、実測値を入れた）
+- [x] **E2** 1 デバイス＝1 行。メーターはコンボ直下、ミュートは同じ行の右端
+- [x] **E3** 録音ステータスを経過時間の上の行へ移し、幅 72 に固定（D10）
+- [x] **E4** ミュートトグルを幅 78 に固定（`MinWidth` をやめた。D10）
+- [x] **E5** ボタンとドロップ領域を 1 部品に合体（破線は `Rectangle` の `StrokeDashArray`。`Border` では引けないため）
+- [x] **E6** D&D を `Window` の `AllowDrop` へ移し、オーバーレイを全行にまたがる重ね置きにした（D6）
+- [x] **E7** 話者識別チェックボックスを削除。状態はステータスバーのピル 1 か所（D9）
 
 ### グループ F — コントロール
-- [ ] **F1** `LevelMeterControl.xaml` を高さ 4・角丸にする。3 ゾーンは維持（D4）
+- [x] **F1** `LevelMeterControl.xaml` を高さ 16 → 4 に。**3 ゾーンの色分けは維持**し、未点灯部分の色だけ新パレットへ（D4）
 
 ### グループ Z — 検証
-- [ ] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件
-- [ ] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功
-- [ ] **Z4** 起動して手動確認（§8 の「テストで守れない範囲」）
-- [ ] **Z5** 仕様書（§4）の更新反映を読み直す
+- [x] **Z1** `dotnet build` — 警告 0 件 / エラー 0 件
+- [x] **Z2** `dotnet format --verify-no-changes` — 差分なし（終了コード 0）
+- [x] **Z3** `dotnet test` — 240 件成功 / 0 件失敗（241 件から D9 で 1 件削除）
+- [~] **Z4** 起動・正常終了と**全バインドの解決**は自動で確認した。**見た目と対話操作は利用者に依頼中**
+- [x] **Z5** 仕様書（§4）の更新反映を読み直した
 
 ## 8. テスト一覧
 
-本タスクの変更はほぼ XAML であり、ユニットテストで守れる範囲は狭い。
+**追加なし。削除 1 件。**
 
-- **`ShowSettings_RaisesSettingsRequested`** — `ShowSettingsCommand` を実行すると
-  `SettingsRequested` が 1 回発火する（`LiveTranscriptRequested` の既存テストと同じ形）
-- **削除**: `IsSpeakerDiarizationReadyFor_OnlyAvailable_IsTrue` — 対象プロパティを消すため（D9）
+- **削除**: `IsSpeakerDiarizationReadyFor_OnlyAvailable_IsTrue` — D9 で
+  `IsSpeakerDiarizationReadyFor` ごと消えるため。241 件 → **240 件**。
 
-> **テストで守れない範囲（Z4 で目視確認する）:**
+**当初この欄に書いた `ShowSettings_RaisesSettingsRequested` は書けなかった。**
+このテストは `MainViewModel` のインスタンスを必要とするが、コンストラクターは
+`RefreshDevicesInternal()` で WASAPI のデバイス列挙を行い、Whisper モデルの読み込みも試みる。
+[20-architecture-standards.md §7](../harness/20-architecture-standards.md) は
+**「オーディオデバイス・Whisper モデルの実体を要求するテストは書かない」**と定めており、
+既存 54 件のテストも 1 つとして `MainViewModel` を `new` していない。
+`ShowSettings` は `SettingsRequested?.Invoke()` の 1 行、`CanShowSettings` は `IsNotBusy` そのもので、
+純粋関数として切り出す価値のあるロジックも無い。**したがって本タスクは
+ユニットテストで守れる範囲を持たない。** 検証は Z1〜Z4 と手動確認で行う。
+
+> **テストで守れない範囲（手動で確認する）:**
 > ① 幅 480 で最長のデバイス名・最長のステータス文言がはみ出さないこと。
-> **日本語の字幅はフォント設定で変わりうるため、実際に最長の状態を出して確かめる。**
+> **日本語の字幅はフォント設定と DPI で変わりうるため、実機で最長の状態を出して確かめる。**
+> **高さは 374 に固定した**ので、環境によっては下端が切れうる点も併せて見る。
 > ② ミュートの ON/OFF と録音の開始/停止でレイアウトが動かないこと（D10 の本体）。
 > ③ ウィンドウのどこへドロップしても文字起こしが始まること、オーバーレイが出ること。
-> ④ 設定ウィンドウがモーダルで開き、閉じると設定が効いていること。
+> ④ 設定ウィンドウがモーダルで開き、閉じると設定が効いていること。録音中は「設定…」が押せないこと。
 > ⑤ `LiveTranscriptWindow` と `FileTranscriptionOptionsWindow` が共通スタイルで崩れていないこと。
 > ⑥ レベルメーターが高さ 4 でも黄・赤ゾーンが判別できること。
 
@@ -235,6 +245,69 @@ ADR-0002 は「結果」の節で、ウィンドウが 4 枚目に増えるな�
 
 ---
 
-## 実行結果
+## 実行結果 (2026-08-27)
 
-（未実施）
+- `dotnet build` : 警告 0 件 / エラー 0 件
+- `dotnet format`: 差分なし（終了コード 0）
+- `dotnet test`  : **240 件成功 / 0 件失敗 / 0 件スキップ**（241 件から D9 で 1 件削除）
+- 起動確認: ウィンドウが出て `exit=0` で閉じる。**リソースディクショナリの解決も
+  これで確認できている**（`pack://` の指定を誤ると起動時に例外になるため）
+- バインド検査: `MainWindow` / `SettingsWindow` / 既存 2 ウィンドウの `{Binding ...}` を
+  全て `MainViewModel` のメンバーと突き合わせ、**未解決 0 件**。
+  WPF のバインド誤りは無言で失敗するため、機械的に照合した
+
+### 寸法
+
+`SizeToContent="Height"` のまま一度起動して実測し（`GetWindowRect` で 480 × 374、DPI 100%）、
+その値を `Height="374"` として固定した（D2）。現状は 520 × 可変。
+
+### 計画からの逸脱
+
+1. **`Button.DropTarget` の破線を `Rectangle` で描いた。** `Border` は `StrokeDashArray` を
+   持たないため、`ControlTemplate` の外枠を `Rectangle`（`RadiusX/Y=6`）にした。
+2. **`StoppedBrush` を純黒 `#000000` から `#26303F` に変えた。** 新しいパレットの
+   「本文には純黒を使わない」に合わせたもので、`MainViewModel.Recording.cs` の 1 行。
+   スコープ境界の「機能を足さない・削らない」には触れないが、ViewModel を触った点は記録しておく。
+3. **§8 のテストが書けなかった**（上記）。起票時の見積もりが誤っていた。
+4. **改行コードで G2 が 2 回落ちた。** 新規ファイルを LF ＋末尾改行ありで作ってしまい、
+   `.editorconfig` の `end_of_line = crlf` / `insert_final_newline = false` に反した。
+   CRLF ＋末尾改行なしへ揃えて解消。
+
+### 利用者レビュー 1 回目の指摘と対応 (2026-08-27)
+
+| # | 指摘 | 対応 |
+|---|---|---|
+| 1 | 赤い「録音開始」ボタンの文字が黒くて見づらい | **原因は暗黙の `TextBlock` スタイルだった。** `ContentPresenter` が文字列コンテンツから作る `TextBlock` にも暗黙スタイルが当たるため、そこで `Foreground` を設定すると `Button` 側の白文字を上書きしてしまう。暗黙スタイルから `Foreground` を外し、文字色は `Window` から継承させるようにした（同じ理由で指摘 5 も直った） |
+| 2 | サブウィンドウのデザインをメインに合わせる | `FileTranscriptionOptionsWindow` と `LiveTranscriptWindow` から**地色の直書き**（`#FFE0E0E0`）と**ローカルの `Button` スタイル**を外し、共通スタイルに任せた。ダイアログはカード構成へ組み直し、直書きの色（`#FF555555` / `#FF1E88E5` / `#FFCC0000`）を `Text.Label` / `Text.Hint` / `Text.Error` に置き換えた。`ListBox` / `ListBoxItem` のスタイルも追加 |
+| 3 | 「（推定値です。不要なら消してください）」が不要 | `StartTimeHintFor` の 3 文言から削除。**REQ-TRX-FILE-15 が求めるのは「どれを使ったか」の表示**であり、そこは残っているので仕様の変更にはあたらない |
+| 4 | 「中止」ボタンが赤である必要はない | `Background="#FFCC0000"` / `Foreground="White"` の直書きを外し、通常配色にした |
+| 5 | 設定ウィンドウの青いボタンの文字が黒い | 指摘 1 と同一原因のため同時に解消 |
+
+あわせて、指摘 2 の組み直しで使われなくなった `BusyPanel` スタイルを削除した。
+
+**再実行:** build 警告 0 / format 差分なし / test 240 件成功 0 件失敗。バインド未解決 0 件。
+
+### 利用者レビュー 2 回目の指摘と対応 (2026-08-27)
+
+| # | 指摘 | 対応 |
+|---|---|---|
+| 6 | 言語の選択に `TranscriptionLanguage { Code = ja, ... }` と出る | **自前の `ComboBox` テンプレートが `DisplayMemberPath` を反映していなかった。** デバイス側は `AudioDevice.ToString()` が `FriendlyName` を返すため偶然まともに見えており、気付けていなかった。**4 か所すべて**（メインのマイク／スピーカー、設定のライブ言語、ダイアログのファイル言語）を `ItemTemplate` の明示へ変え、`DisplayMemberPath` はコードベースから無くした |
+
+> **教訓:** 既定のテンプレートを自前に差し替えると、`DisplayMemberPath` のように
+> **テンプレート側が読み取る前提のプロパティが黙って効かなくなる。**
+> `AudioDevice` が `ToString()` を上書きしていたせいで症状が片方だけ隠れており、
+> 起動確認とバインド検査のどちらでも検出できなかった。
+
+### B4 / Z4（目視確認）の結果
+
+利用者が 2 回のレビューで確認し、指摘 1〜6 をすべて解消した。
+**ただし指摘 6 の修正（`ItemTemplate` 化）は、修正後の表示を誰も目で見ていない。**
+コンボボックス 4 か所の表示は次に起動したときに確認すること。
+
+### 発見した別件
+
+**話者識別の実行中に「中止」を押しても、押せたことが利用者に伝わらない。**
+止まらないこと自体は REQ-TRX-DIA-12 のとおりの仕様（キャンセルは推論の開始前と完了後でしか
+評価しない）であり、本タスクでは直さない。**[T157](./backlog.md) として起票した** —
+「中止」を押した直後にボタンを無効化し、「中止を要求しました（話者識別完了までお待ちください）」
+を表示する。中止の判定ロジックそのものは変えない。

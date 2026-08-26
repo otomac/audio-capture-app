@@ -1,4 +1,4 @@
-using AudioCaptureApp.Services;
+﻿using AudioCaptureApp.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -31,13 +31,7 @@ public partial class MainViewModel
     [ObservableProperty]
     private string _speakerDiarizationStatus = "";
 
-    /// <summary>
-    /// 「話者識別」チェックボックス（編集不可）の状態。使える状態のときだけ true。
-    /// </summary>
-    [ObservableProperty]
-    private bool _isSpeakerDiarizationReady;
-
-    /// <summary>「話者識別」チェックボックスのツールチップ（REQ-TRX-DIA-15）。</summary>
+    /// <summary>話者識別の状態表示のツールチップ（REQ-TRX-DIA-15）。</summary>
     [ObservableProperty]
     private string _speakerDiarizationTooltip = "";
 
@@ -66,11 +60,7 @@ public partial class MainViewModel
         _ => "話者識別: 無効"
     };
 
-    /// <summary>チェックが入るのは「有効」のときだけ（REQ-TRX-DIA-15）。</summary>
-    internal static bool IsSpeakerDiarizationReadyFor(DiarizationAvailability availability)
-        => availability == DiarizationAvailability.Available;
-
-    /// <summary>チェックボックスのツールチップ。状態ごとに次の一手が分かるようにする。</summary>
+    /// <summary>状態表示のツールチップ。状態ごとに次の一手が分かるようにする。</summary>
     internal static string DiarizationTooltipFor(DiarizationAvailability availability) => availability switch
     {
         DiarizationAvailability.Available =>
