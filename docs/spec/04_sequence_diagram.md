@@ -232,9 +232,11 @@ sequenceDiagram
         VM->>VM: FileTranscriptionStatus / FileTranscriptionProgress 更新
     end
 
-    alt ユーザーが「中止」をクリック（ダイアログまたはメインウィンドウ）
+    alt ユーザーが「中止」をクリック（オプション指定ダイアログのみ。REQ-TRX-FILE-07）
         User->>VM: CancelFileTranscription()
+        VM->>VM: IsFileTranscriptionCancelRequested = true（「中止」を無効化し、注記を出す。REQ-TRX-FILE-07）
         VM->>TS: CancellationTokenSource.Cancel()
+        Note over VM,TS: 実際に止まるのは推論の境界（REQ-TRX-DIA-12）。<br/>それまで進捗の報告は続き、注記は別の行なので消えない。
         TS->>TS: OperationCanceledException 捕捉 → 出力ファイル削除
         TS-->>VM: throw OperationCanceledException
         VM->>VM: FileTranscriptionStatus = "中止しました"
@@ -247,7 +249,7 @@ sequenceDiagram
     VM-->>OW: StartFileTranscriptionAsync() の await が完了
     OW->>OW: Close()（完了・失敗・中止のいずれでも自動で閉じる。REQ-TRX-FILE-12）
 
-    Note over MW,OW: 処理中にダイアログを ✕ で閉じても処理は続き、<br/>メインウィンドウの進捗表示と「中止」が引き継ぐ（REQ-TRX-FILE-13）
+    Note over MW,OW: 処理中にダイアログを ✕ で閉じようとしたら「中止して閉じるか」を確認する。<br/>はいならその時点で中止し、完了は待たずに閉じる（REQ-TRX-FILE-13）。<br/>メインウィンドウに進捗表示と「中止」は無い（T151 で削除。REQ-TRX-FILE-06 / 07）。<br/>閉じたあと中止が完了するまでの経過はステータスバーの 1 行で分かる
 ```
 
 ### 6.1 話者ダイアライゼーション有効時（REQ-TRX-DIA-*）

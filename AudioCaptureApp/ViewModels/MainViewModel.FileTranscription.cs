@@ -56,6 +56,59 @@ public partial class MainViewModel
     [ObservableProperty]
     private double _fileTranscriptionProgress;
 
+    /// <summary>「中止」を要求済みか（REQ-TRX-FILE-07）。</summary>
+    /// <remarks>
+    /// 中止が実際に効くのは推論の境界だけであり（REQ-TRX-DIA-12）、押してから止まるまで
+    /// 話者ダイアライゼーション有効時は数十秒〜数分かかる。その間も進捗は進み続けるため、
+    /// 「押した」ことをこのフラグに残して「中止」の無効化と注記の表示に使う。
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
+    private bool _isFileTranscriptionCancelRequested;
+
+    /// <summary>
+    /// 「中止」を押したあとにダイアログへ出す注記（REQ-TRX-FILE-07）。
+    /// </summary>
+    /// <remarks>
+    /// **押した時点のフェーズで決まる**ため、値は実行中に変わりうる。押した後に書き換えないのは、
+    /// 話者識別中に押せばその完了直後の境界で中止が効き、Whisper のフェーズへ進まないためである。
+    /// </remarks>
+    [ObservableProperty]
+    private string _fileTranscriptionCancelNotice = "";
+
+    /// <summary>
+    /// いま話者識別のフェーズにいるか。中止の注記をどちらにするかだけに使う。
+    /// </summary>
+    /// <remarks>
+    /// 書くのは進捗のハンドラー、読むのは <c>CancelFileTranscription</c> で、どちらも
+    /// UI スレッドで走る（<see cref="Progress{T}"/> は UI スレッドで生成している）。
+    /// したがって同期は要らない。
+    /// </remarks>
+    private bool _isDiarizingFile;
+
+    /// <summary>
+    /// 進捗のフェーズ名（REQ-TRX-FILE-06）が話者識別かどうか。
+    /// </summary>
+    /// <remarks>
+    /// 表示名の写しを ViewModel 側に持たない。持つと、フェーズ名を変えたときに
+    /// 一致しなくなったことに誰も気づけない。
+    /// </remarks>
+    internal static bool IsDiarizationPhase(string phase) =>
+        string.Equals(phase, TranscriptionService.DiarizePhase, StringComparison.Ordinal);
+
+    /// <summary>中止を要求したときの注記の文言（REQ-TRX-FILE-07）。</summary>
+    /// <param name="waitingForDiarization">押した時点で話者識別のフェーズにいたか。</param>
+    /// <remarks>
+    /// 待たされる理由も長さもフェーズで違うため、文言を分ける。話者識別は推論の境界でしか
+    /// 止まらず数十秒〜数分かかるが（REQ-TRX-DIA-12）、Whisper はチャンクと有声区間の
+    /// 境目ごとにキャンセルを見るので数秒で止まる。**「話者識別が有効か」で決めてはならない** —
+    /// 有効時も Whisper のフェーズを通るためである（T160）。
+    /// </remarks>
+    internal static string FileTranscriptionCancelNoticeFor(bool waitingForDiarization) =>
+        waitingForDiarization
+            ? "中止を要求しました（話者識別が終わるまでお待ちください）"
+            : "中止を要求しました（処理の切れ目までお待ちください）";
+
     /// <summary>
     /// ダイアログの「開始」が押せるか。書式が不正な間は押させない（REQ-TRX-FILE-10）。
     /// </summary>
@@ -288,6 +341,9 @@ public partial class MainViewModel
 
         FileTranscriptionStatus = "";
         FileTranscriptionProgress = 0;
+        IsFileTranscriptionCancelRequested = false;
+        FileTranscriptionCancelNotice = "";
+        _isDiarizingFile = false;
         FileTranscriptionRequested?.Invoke();
     }
 
@@ -318,6 +374,10 @@ public partial class MainViewModel
     {
         _fileTranscriptionCts = new CancellationTokenSource();
         IsTranscribingFile = true;
+        IsFileTranscriptionCancelRequested = false;
+        FileTranscriptionCancelNotice = "";
+        // 最初の進捗が届くまでは話者識別のフェーズではない（走るのはデコードで、ct で素早く止まる）
+        _isDiarizingFile = false;
         FileTranscriptionStatus = "準備中...";
         FileTranscriptionProgress = 0;
         StatusMessage = "音声ファイルから文字起こし中...";
@@ -327,6 +387,8 @@ public partial class MainViewModel
             // フェーズ名を出さないと、進捗バーが 2 度 0% に戻る理由が分からない（REQ-TRX-FILE-06）。
             var progress = new Progress<Services.FileTranscriptionProgress>(v =>
             {
+                // 中止の注記をどちらにするかは、押した時点のフェーズで決まる（REQ-TRX-FILE-07）
+                _isDiarizingFile = IsDiarizationPhase(v.Phase);
                 FileTranscriptionStatus =
                     $"{v.Phase}: {v.Processed:hh\\:mm\\:ss} / {v.Total:hh\\:mm\\:ss}";
                 FileTranscriptionProgress = FileTranscriptionProgressFor(v.Processed, v.Total);
@@ -372,12 +434,17 @@ public partial class MainViewModel
         }
     }
 
-    private bool CanCancelFileTranscription => IsTranscribingFile;
+    // 2 度押しても意味が無い（REQ-TRX-DIA-12 により中止の判定は推論の境界でしか起きない）。
+    // 押せたことを見せるために、要求した時点で無効化する（REQ-TRX-FILE-07）。
+    private bool CanCancelFileTranscription => IsTranscribingFile && !IsFileTranscriptionCancelRequested;
 
     [RelayCommand(CanExecute = nameof(CanCancelFileTranscription))]
     private void CancelFileTranscription()
     {
+        // 押したことは FileTranscriptionStatus ではなくフラグに残す。進捗行へ書いても
+        // 直後の progress.Report が上書きしてしまい、画面上は何も起きていないように見える。
+        FileTranscriptionCancelNotice = FileTranscriptionCancelNoticeFor(_isDiarizingFile);
+        IsFileTranscriptionCancelRequested = true;
         _fileTranscriptionCts?.Cancel();
-        FileTranscriptionStatus = "中止中...";
     }
 }

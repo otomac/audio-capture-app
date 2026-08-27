@@ -82,6 +82,8 @@ classDiagram
         +TranscriptionLanguage SelectedFileLanguage
         +double FileTranscriptionProgress
         +bool CanStartFileTranscription
+        +bool IsFileTranscriptionCancelRequested
+        +string FileTranscriptionCancelNotice
         +ObservableCollection~string~ LiveTranscriptLines
         +string LastResultPath
         +string SpeakerDiarizationStatus
