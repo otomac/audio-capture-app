@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
@@ -34,6 +34,7 @@ public partial class MainWindow : Window, IDisposable
         // 補助ウィンドウの生成は View 層の責務（ADR-0002）。ViewModel はイベントで要求だけを上げる。
         _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
         _viewModel.LiveTranscriptRequested += ShowLiveTranscript;
+        _viewModel.SettingsRequested += ShowSettings;
         Closing += MainWindow_Closing;
         Closed += (_, _) => Dispose();
     }
@@ -96,6 +97,17 @@ public partial class MainWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// 設定ウィンドウをモーダルで開く（REQ-SETWIN-02）。
+    /// 録音中・停止処理中・ファイル文字起こし中は <c>ShowSettingsCommand</c> 側が無効なので
+    /// ここへは来ない（REQ-SETWIN-05）。
+    /// </summary>
+    private void ShowSettings()
+    {
+        var dialog = new SettingsWindow(_viewModel) { Owner = this };
+        dialog.ShowDialog();
+    }
+
+    /// <summary>
     /// 文字起こし表示ウィンドウを開く。同時に 1 つだけ持ち、既に開いていれば手前に出す
     /// （REQ-LIVEVIEW-06）。<c>Owner</c> の設定により、メインウィンドウを閉じると
     /// 一緒に閉じる（REQ-LIVEVIEW-05）。
@@ -127,7 +139,7 @@ public partial class MainWindow : Window, IDisposable
         return true;
     }
 
-    private void TranscriptionGroup_DragOver(object sender, DragEventArgs e)
+    private void Window_DragOver(object sender, DragEventArgs e)
     {
         bool accept = TryGetSingleDroppedFile(e, out _) && _viewModel.CanAcceptFileDrop;
         e.Effects = accept ? DragDropEffects.Copy : DragDropEffects.None;
@@ -135,12 +147,12 @@ public partial class MainWindow : Window, IDisposable
         e.Handled = true;
     }
 
-    private void TranscriptionGroup_DragLeave(object sender, DragEventArgs e)
+    private void Window_DragLeave(object sender, DragEventArgs e)
     {
         DropOverlay.Visibility = Visibility.Collapsed;
     }
 
-    private void TranscriptionGroup_Drop(object sender, DragEventArgs e)
+    private void Window_Drop(object sender, DragEventArgs e)
     {
         DropOverlay.Visibility = Visibility.Collapsed;
         if (!TryGetSingleDroppedFile(e, out var filePath))

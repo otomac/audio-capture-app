@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using AudioCaptureApp.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -205,10 +205,10 @@ public partial class MainViewModel
     /// </summary>
     internal static string StartTimeHintFor(StartTimeSource source) => source switch
     {
-        StartTimeSource.FileName => "ファイル名から自動入力しました（推定値です。不要なら消してください）",
-        StartTimeSource.CreationTime => "ファイルの作成日時から自動入力しました（推定値です。不要なら消してください）",
+        StartTimeSource.FileName => "ファイル名から自動入力しました",
+        StartTimeSource.CreationTime => "ファイルの作成日時から自動入力しました",
         StartTimeSource.LastWriteMinusDuration =>
-            "最終更新日時と音声の長さから逆算しました（推定値です。不要なら消してください）",
+            "最終更新日時と音声の長さから逆算しました",
         _ => string.Empty
     };
 

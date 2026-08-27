@@ -1,9 +1,18 @@
-﻿<Application x:Class="AudioCaptureApp.App"
+<Application x:Class="AudioCaptureApp.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:AudioCaptureApp"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <ResourceDictionary>
+            <!--
+                T154 — アプリ全体の見た目。Controls.xaml が Theme.xaml（色・寸法・書体）を
+                取り込むため、ここで読むのは Controls.xaml だけでよい。
+                UI ライブラリは導入していない（CLAUDE.md「ライブラリ追加は個別承認制」）。
+            -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Styles/Controls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Windows.Threading;
 using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
@@ -94,7 +94,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.SpeakerDiarizationEnabled,
             SpeakerDiarizationService.ModelFilesExist(diarizationOptions));
         SpeakerDiarizationStatus = DiarizationStatusTextFor(availability);
-        IsSpeakerDiarizationReady = IsSpeakerDiarizationReadyFor(availability);
         SpeakerDiarizationTooltip = DiarizationTooltipFor(availability);
 
         // 有効なときだけ生成する。モデルの読み込みは初回の実行まで遅らせるため、
@@ -138,6 +137,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isRecording;
 
     [ObservableProperty]
@@ -148,6 +148,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isStopping;
 
     [ObservableProperty]
@@ -159,6 +160,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isTranscribingFile;
 
     public bool IsNotBusy => !IsRecording && !IsStopping && !IsTranscribingFile;
@@ -201,6 +203,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private string _lastResultPath = string.Empty;
+
+    /// <summary>
+    /// 設定ウィンドウを開いてほしい、という要求（REQ-SETWIN-02）。
+    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
+    /// </summary>
+    public event Action? SettingsRequested;
+
+    /// <summary>
+    /// 「設定…」の可否（REQ-SETWIN-05）。録音中・停止処理中・ファイル文字起こし中は無効にする。
+    /// 設定ウィンドウの項目はいずれも REQ-REC-09 でその間は操作できず、開いても何もできない。
+    /// 一方でモーダル（REQ-SETWIN-02）なので、開いている間は**録音の停止操作が塞がれる**。
+    /// 得るものが無く塞ぐものがある以上、開かせない。
+    /// </summary>
+    private bool CanShowSettings => IsNotBusy;
+
+    [RelayCommand(CanExecute = nameof(CanShowSettings))]
+    private void ShowSettings() => SettingsRequested?.Invoke();
 
     /// <summary>
     /// 「保存先を開く」の可否。成果物が未設定なら無効（REQ-OPEN-04）。加えて録音中・停止処理中・

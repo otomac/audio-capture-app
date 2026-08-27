@@ -1,4 +1,4 @@
-using System.Windows.Media;
+﻿using System.Windows.Media;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.Input;
 
@@ -9,7 +9,7 @@ namespace AudioCaptureApp.ViewModels;
 public partial class MainViewModel
 {
     private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
-    private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));
+    private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x26, 0x30, 0x3F));
 
     static MainViewModel()
     {

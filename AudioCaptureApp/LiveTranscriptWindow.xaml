@@ -8,20 +8,20 @@
         Width="480" Height="240"
         MinWidth="200" MinHeight="120"
         ResizeMode="CanResize" ShowInTaskbar="False"
-        WindowStartupLocation="CenterOwner"
-        Background="#FFE0E0E0">
+        WindowStartupLocation="CenterOwner">
 
     <!--
+        地色・文字色は App.xaml の共通スタイルに任せる（ここで色を直書きしない）。
         REQ-LIVEVIEW-02: 9pt。WPF の FontSize は既定で DIP（1/96 インチ）だが、
         単位付きで書けるので意図がそのまま読める形にしている。
     -->
-    <ListBox x:Name="LinesList" Margin="8" FontSize="9pt"
+    <ListBox x:Name="LinesList" Margin="12" FontSize="9pt"
              ItemsSource="{Binding LiveTranscriptLines}"
              HorizontalContentAlignment="Stretch"
              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
         <ListBox.ItemTemplate>
             <DataTemplate>
-                <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding}" TextWrapping="Wrap" VerticalAlignment="Top"/>
             </DataTemplate>
         </ListBox.ItemTemplate>
     </ListBox>
