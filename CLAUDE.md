@@ -34,6 +34,18 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 - 定義と既知の穴: [docs/harness/40-quality-gates.md](docs/harness/40-quality-gates.md)
 - **実行結果を示さずに「通りました」と言わない。** 件数を書く（「42 件成功 / 0 件失敗」）。
 
+### ブランチ運用
+
+新しいタスクは **最新の `develop` から作業ブランチを切って** 始める。`develop` / `main` の上で直接
+ソースを編集しない（`guard-source-edit.ps1` が `.cs` / `.xaml` の編集を **deny** で止める）。
+
+1. `git switch develop` → `git pull --ff-only origin develop`
+2. `git switch -c <feature|fix|maintenance>-<slug>`（1 タスク = 1 ブランチ。起票もこのブランチで）
+3. **品質ゲート 3 つが全部緑になってから** `commit` → `push` → PR 作成（**宛先は `develop`**）
+
+詳細は [ブランチ運用](docs/harness/00-ways-of-working.md#ブランチ運用) と
+[10-workflow.md](docs/harness/10-workflow.md) の S0 / S8。
+
 ### 不可逆な操作
 
 `git commit` / `push` / `add` / ブランチ切替 / PR 作成は、**その都度**明示的に依頼されたときだけ行う。
@@ -46,7 +58,7 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 ---
 
 ## 技術スタック
-- 言語: C# 12 / .NET 8（`net8.0-windows`）
+- 言語: C# 14 / .NET 10（`net10.0-windows`）
 - UI: WPF + CommunityToolkit.Mvvm（MVVM パターン）
 - 録音: NAudio + NAudio.Wasapi（WASAPI Shared Mode）
 - MP3: NAudio.Lame（`LameMP3FileWriter`）
@@ -63,7 +75,9 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 背景は [ADR-0001](docs/adr/0001-baseline-architecture.md)。
 
 - Models / ViewModels / Services の 3 層構成
-- ViewModel は `MainViewModel.cs` 1 ファイルに集約（シンプル優先）
+- ViewModel は **`MainViewModel` 1 クラス**に集約（シンプル優先）。ファイルは機能単位で
+  `partial` に割ってよい（1 ファイル 500 行が目安。[ADR-0005](docs/adr/0005-mainviewmodel-split.md)）。
+  **`ViewModels/` に `MainViewModel` 以外のクラスを置かない** — 置きたくなったら ADR を書く
 - **DI コンテナ・Service のインターフェース抽象は意図的に不使用**（ADR-0001）。導入したくなったら ADR を書く
 - NAudio を直接使用する（独自抽象化レイヤーを作らない）
 - **UI スレッド以外からバインドプロパティを更新しない。** 必ず
@@ -92,3 +106,8 @@ dotnet run --project AudioCaptureApp
 | [docs/tasks/](docs/tasks/) | タスク台帳と実装計画 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録 |
 | [docs/archive/](docs/archive/) | 過去の成果物。参照専用、更新しない |
+
+**この表に無い場所へ仕様文書・設計文書を作らない。** 支援エージェント（superpowers 等）が
+`docs/superpowers/specs/` のような独自の置き場を提案・生成してきても採用しない。仕様なら
+`docs/spec/`、設計判断なら `docs/adr/`、1 タスク分の実装計画なら `docs/tasks/<ID>-<slug>.md` へ書く。
+規範は [50-spec-standards.md §1.1](docs/harness/50-spec-standards.md#11-docsspec-の外に仕様文書を作らない)。

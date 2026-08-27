@@ -18,8 +18,8 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 | 層 | 場所 | 責務 | 禁止 |
 |---|---|---|---|
-| **View** | `MainWindow.xaml(.cs)` / `Controls/` | 表示とユーザー操作の受付、バインディング | 業務ロジック、Service の直接呼び出し |
-| **ViewModel** | `ViewModels/MainViewModel.cs` | UI 状態の保持、コマンド、Service のオーケストレーション | NAudio / Whisper.net / `System.IO` の直接使用 |
+| **View** | `MainWindow.xaml(.cs)` / 補助ウィンドウ（`*Window.xaml(.cs)`） / `Controls/` | 表示とユーザー操作の受付、バインディング | 業務ロジック、Service の直接呼び出し |
+| **ViewModel** | `ViewModels/MainViewModel*.cs`（`partial`） | UI 状態の保持、コマンド、Service のオーケストレーション | NAudio / Whisper.net / `System.IO` の直接使用 |
 | **Service** | `Services/` | 外部リソース（NAudio・Whisper.net・ファイル I/O）の操作 | View / ViewModel への参照、`MessageBox` 等の UI 呼び出し |
 | **Model** | `Models/` | データ保持のみの POCO | ロジック、外部依存 |
 
@@ -27,6 +27,11 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 1. **Service → ViewModel の参照は禁止。** Service から上位へ伝えたいことは **イベント** で通知する
    （`RecordingError` / `Error` / `RuntimeInfo` が既存の例）。
+   **ViewModel → View も同様に禁止。** ViewModel が `Window` の派生型を `new` してはならない。
+   「このウィンドウを開いてほしい」も **イベント** で上げ、生成・表示は `MainWindow` の
+   コードビハインドが行う（`FileTranscriptionRequested` / `LiveTranscriptRequested` が既存の例。
+   [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。
+   ただし `Microsoft.Win32` の共通ファイルダイアログは OS 側の部品であり、この禁止に当たらない。
 2. **Model → 何か への参照は禁止。** Model は他の層も外部ライブラリも知らない。
 3. **View → Service の直接呼び出しは禁止。** 必ず ViewModel を経由する。
 4. **Service 間の相互参照は禁止。** 現状 `AudioCaptureService → TranscriptionService` の
@@ -40,8 +45,8 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 項目 | 現状 | 理由 |
 |---|---|---|
 | **DI コンテナ** | 不使用。`MainWindow` が `MainViewModel` を直接 `new` し、ViewModel が Service を直接生成する | 単一ウィンドウ・単一 ViewModel の規模では、コンテナの間接性が理解のコストに見合わない |
-| **ViewModel の分割** | `MainViewModel.cs` 1 ファイルに集約 | シンプル優先（`CLAUDE.md` の方針）。分割の閾値は §6 参照 |
-| **Service のインターフェース抽象** | 具象クラスを直接使用。NAudio も独自ラップせず直接使う | 実装が 1 つしかない抽象は害。テスト容易性は `InternalsVisibleTo` ＋ 純粋関数の切り出しで確保する |
+| **ViewModel のクラス分割** | `MainViewModel` **1 クラス**に集約（ファイルは `partial` で機能単位に割る） | シンプル優先（`CLAUDE.md` の方針）。クラスを増やすかの再評価の契機は §6 と [ADR-0005](../adr/0005-mainviewmodel-split.md) |
+| **Service のインターフェース抽象** | 具象クラスを直接使用。NAudio・Whisper.net・sherpa-onnx も独自ラップせず直接使う | 実装が 1 つしかない抽象は害。テスト容易性は `InternalsVisibleTo` ＋ 純粋関数の切り出しで確保する。差し替え可能性が要求された場合も、抽象ではなく**依存を 1 クラスに閉じ込める**ことで満たす（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md) 争点 3） |
 | **リポジトリ／永続化層** | `SettingsService` が直接 JSON を読み書き | 永続化対象が設定ファイル 1 つのみ |
 
 ## 3. スレッドモデルの規範
@@ -81,15 +86,18 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 画面に出す値・状態 | `MainViewModel` のプロパティ | `[ObservableProperty]` を使う |
 | ボタン等の操作 | `MainViewModel` のコマンド | `[RelayCommand]` を使う |
 | 外部リソースを触る処理 | 既存 Service のメソッド | 3 つのどれにも属さないなら新規 Service を検討（ADR 対象） |
-| 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `IsSilent` が既存の例） |
+| 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` が既存の例） |
 | データの入れ物 | `Models/` の POCO | ロジックを入れない |
 | 再利用する UI 部品 | `Controls/` のユーザーコントロール | 依存プロパティで ViewModel とバインドする |
+| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` | `MainViewModel` を `DataContext` に共有し、自前の状態を持たない。生成は `MainWindow` が行い、`Owner` を設定する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。**5 枚目を足すときは先に [ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価を行う** |
 
 ## 6. 構造が壊れかけているサイン
 
 以下に該当したら、その場で直さず **ADR を起票して構造変更を提案** する。
 
-- `MainViewModel.cs` が **1,500 行** を超えた → 機能単位の ViewModel 分割を検討
+- `MainViewModel` の **全ファイル合計**（`MainViewModel*.cs`）が **1,500 行** を超えた
+  → ウィンドウ単位の ViewModel 分割を検討（[ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価契機①）
+- **5 枚目のウィンドウ**を足すことになった → 同上（[ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価契機②）
 - 1 つの Service が **3 つ以上の無関係な外部リソース** を触っている → Service 分割を検討
 - View のコードビハインドに `if` による業務判断が現れた → ViewModel へ移す
 - テストを書くために `public` にした（本来 `private` でよい）メンバーが増えた

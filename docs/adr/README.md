@@ -26,3 +26,7 @@
 | # | 決定 | 状態 | 日付 |
 |---|---|---|---|
 | [0001](./0001-baseline-architecture.md) | ベースラインアーキテクチャ（3 層 / DI なし / 抽象化なし） | 承認済み | 2026-08-14 |
+| [0002](./0002-secondary-windows-share-mainviewmodel.md) | 補助ウィンドウは `MainViewModel` を共有する View として追加する | 承認済み | 2026-08-20 |
+| [0003](./0003-speaker-diarization-with-sherpa-onnx.md) | 話者ダイアライゼーションを sherpa-onnx で行い、ファイル文字起こし経路にだけ載せる | 承認済み | 2026-08-22 |
+| [0004](./0004-speaker-id-assignment-strategy.md) | 話者 ID の付け方を sherpa-onnx に任せ続ける（自前クラスタリングは今回採らない） | 承認済み | 2026-08-23 |
+| [0005](./0005-mainviewmodel-split.md) | `MainViewModel` を分割するか（ADR-0002 の再評価） | 承認済み | 2026-08-27 |

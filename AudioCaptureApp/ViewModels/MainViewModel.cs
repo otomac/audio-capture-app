@@ -1,6 +1,4 @@
-using System.Collections.ObjectModel;
-using System.Globalization;
-using System.Windows.Media;
+﻿using System.Globalization;
 using System.Windows.Threading;
 using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
@@ -14,8 +12,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly AudioCaptureService _audioCaptureService = new();
     private readonly TranscriptionService _transcriptionService = new();
     private readonly SettingsService _settingsService = new();
+
+    /// <summary>
+    /// 話者ダイアライゼーション（REQ-TRX-DIA-03）。設定で無効なら <c>null</c> のままにする。
+    /// 生成と破棄はここが持ち、<see cref="TranscriptionService"/> へは引数で貸すだけである
+    /// （[ADR-0003](../../docs/adr/0003-speaker-diarization-with-sherpa-onnx.md) の決定 D11）。
+    /// </summary>
+    private readonly SpeakerDiarizationService? _speakerDiarizationService;
     private readonly DispatcherTimer _meterTimer;
     private readonly DispatcherTimer _clockTimer;
+
+    /// <summary>
+    /// 読み込んだ設定そのもの。SaveSettings はこのインスタンスを更新して保存する。
+    /// 毎回 new すると、UI を持たない設定項目（無音カットの調整値など）が
+    /// 保存のたびに既定値へ戻ってしまうため。
+    /// </summary>
+    private readonly AppSettings _settings;
+
     private DateTime _recordingStartTime;
     private bool _initializing;
     private bool _suppressMicMuteWriteBack;
@@ -45,12 +58,50 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transcriptionService.RuntimeInfo += runtime =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"Whisperランタイム: {runtime}");
+        // 文字起こしワーカースレッドから発火するため、必ず Dispatcher を経由する（NFR-01）
+        _transcriptionService.SegmentTranscribed += QueueLiveTranscriptLine;
 
-        var settings = _settingsService.Load();
-        OutputFolder = settings.OutputFolder;
-        TranscriptionEnabled = settings.TranscriptionEnabled;
-        WhisperModelPath = settings.WhisperModelPath;
-        UseGpuForTranscription = settings.UseGpuForTranscription;
+        _settings = _settingsService.Load();
+        OutputFolder = _settings.OutputFolder;
+        TranscriptionEnabled = _settings.TranscriptionEnabled;
+        WhisperModelPath = _settings.WhisperModelPath;
+        UseGpuForTranscription = _settings.UseGpuForTranscription;
+
+        // REQ-TRX-10: settings.json は手編集され得るので、必ず正規化してから使う。
+        // 一覧に無いコードや、ライブ側の "auto" は日本語へ倒れる。
+        SelectedLiveLanguage = FindLanguage(
+            TranscriptionLanguages.ForLive,
+            TranscriptionLanguages.NormalizeForLive(_settings.LiveTranscriptionLanguage));
+        SelectedFileLanguage = FindLanguage(
+            TranscriptionLanguages.ForFile,
+            TranscriptionLanguages.NormalizeForFile(_settings.FileTranscriptionLanguage));
+
+        _transcriptionService.SilenceCut = new SilenceCutOptions(
+            _settings.SilenceRmsThreshold,
+            _settings.SilenceMergeGapSeconds,
+            _settings.VoicedPaddingSeconds);
+
+        var diarizationOptions = new SpeakerDiarizationOptions(
+            _settings.SpeakerSegmentationModelPath,
+            _settings.SpeakerEmbeddingModelPath,
+            _settings.SpeakerClusteringThreshold,
+            _settings.KnownSpeakerCount,
+            _settings.SpeakerDiarizationThreads);
+
+        // REQ-TRX-DIA-15: 起動時に 1 度だけ状態を判定する。**読み込みはしない**
+        // （存在検査だけ。ADR-0003 N2 の遅延読み込みを維持する）。
+        var availability = DiarizationAvailabilityFor(
+            _settings.SpeakerDiarizationEnabled,
+            SpeakerDiarizationService.ModelFilesExist(diarizationOptions));
+        SpeakerDiarizationStatus = DiarizationStatusTextFor(availability);
+        SpeakerDiarizationTooltip = DiarizationTooltipFor(availability);
+
+        // 有効なときだけ生成する。モデルの読み込みは初回の実行まで遅らせるため、
+        // ここで生成してもモデルが未配置なら起動を妨げない（エラーは実行時に出る）。
+        if (_settings.SpeakerDiarizationEnabled)
+        {
+            _speakerDiarizationService = new SpeakerDiarizationService(diarizationOptions);
+        }
 
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
         // ライブ用チェックボックスと独立して動作する）
@@ -62,50 +113,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RefreshDevicesInternal();
 
         // 前回のマイク選択を復元
-        if (settings.LastSelectedDeviceId != null)
+        if (_settings.LastSelectedDeviceId != null)
         {
-            SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedDeviceId);
+            SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == _settings.LastSelectedDeviceId);
         }
         SelectedCaptureDevice ??= CaptureDevices.FirstOrDefault(d => d.IsDefault) ?? CaptureDevices.FirstOrDefault();
 
         // 前回のスピーカー選択を復元
-        if (settings.LastSelectedLoopbackDeviceId != null)
+        if (_settings.LastSelectedLoopbackDeviceId != null)
         {
-            SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == settings.LastSelectedLoopbackDeviceId);
+            SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == _settings.LastSelectedLoopbackDeviceId);
         }
 
         _initializing = false;
     }
-
-    // --- マイク入力デバイス ---
-    public ObservableCollection<AudioDevice> CaptureDevices { get; } = new();
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
-    private AudioDevice? _selectedCaptureDevice;
-
-    partial void OnSelectedCaptureDeviceChanged(AudioDevice? value)
-    {
-        if (value != null)
-        {
-            _audioCaptureService.StartMicMonitor(value);
-            // 起動時／デバイス切替時に OS の現在ミュート値を ViewModel に反映
-            _suppressMicMuteWriteBack = true;
-            try { IsMicMuted = _audioCaptureService.IsMicMuted; }
-            finally { _suppressMicMuteWriteBack = false; }
-        }
-        else
-        {
-            _audioCaptureService.StopMicMonitor();
-        }
-    }
-
-    // --- スピーカー（ループバック）デバイス ---
-    public ObservableCollection<AudioDevice> RenderDevices { get; } = new();
-
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
-    private AudioDevice? _selectedRenderDevice;
 
     // --- 共通プロパティ ---
     [ObservableProperty]
@@ -115,6 +136,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isRecording;
 
     [ObservableProperty]
@@ -124,6 +147,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isStopping;
 
     [ObservableProperty]
@@ -134,24 +159,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isTranscribingFile;
-
-    [ObservableProperty]
-    private string _fileTranscriptionStatus = "";
-
-    private CancellationTokenSource? _fileTranscriptionCts;
-
-    private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
-    private static readonly SolidColorBrush StoppedBrush = new(Color.FromRgb(0x00, 0x00, 0x00));
-
-    static MainViewModel()
-    {
-        RecordingBrush.Freeze();
-        StoppedBrush.Freeze();
-    }
-
-    public string RecordingStatusText => IsStopping ? "停止処理中" : IsRecording ? "録音中" : "停止中";
-    public SolidColorBrush RecordingStatusColor => IsRecording ? RecordingBrush : StoppedBrush;
 
     public bool IsNotBusy => !IsRecording && !IsStopping && !IsTranscribingFile;
 
@@ -174,6 +184,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(IsNotBusy));
         OnPropertyChanged(nameof(CanToggleGpu));
+        OnPropertyChanged(nameof(CanStartFileTranscription));
     }
 
     [ObservableProperty]
@@ -185,141 +196,91 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _statusMessage = "待機中";
 
-    // --- 文字起こし設定 ---
+    /// <summary>
+    /// 直近の成果物のパス（REQ-OPEN-01）。録音とファイル文字起こしで保存先が異なるため、
+    /// 「設定上の保存先」ではなくここを開く対象にする。
+    /// </summary>
     [ObservableProperty]
-    private bool _transcriptionEnabled;
+    [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
+    private string _lastResultPath = string.Empty;
 
-    partial void OnTranscriptionEnabledChanged(bool value)
+    /// <summary>
+    /// 設定ウィンドウを開いてほしい、という要求（REQ-SETWIN-02）。
+    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
+    /// </summary>
+    public event Action? SettingsRequested;
+
+    /// <summary>
+    /// 「設定…」の可否（REQ-SETWIN-05）。録音中・停止処理中・ファイル文字起こし中は無効にする。
+    /// 設定ウィンドウの項目はいずれも REQ-REC-09 でその間は操作できず、開いても何もできない。
+    /// 一方でモーダル（REQ-SETWIN-02）なので、開いている間は**録音の停止操作が塞がれる**。
+    /// 得るものが無く塞ぐものがある以上、開かせない。
+    /// </summary>
+    private bool CanShowSettings => IsNotBusy;
+
+    [RelayCommand(CanExecute = nameof(CanShowSettings))]
+    private void ShowSettings() => SettingsRequested?.Invoke();
+
+    /// <summary>
+    /// 「保存先を開く」の可否。成果物が未設定なら無効（REQ-OPEN-04）。加えて録音中・停止処理中・
+    /// ファイル文字起こし中も無効にする（REQ-OPEN-05）。保持しているのは進行中の作業ではなく
+    /// それ以前の成果物であり、開けてしまうと誤解を招くため。
+    /// </summary>
+    internal static bool CanOpenResultFolderFor(string lastResultPath, bool isNotBusy)
+        => isNotBusy && !string.IsNullOrEmpty(lastResultPath);
+
+    private bool CanOpenResultFolder => CanOpenResultFolderFor(LastResultPath, IsNotBusy);
+
+    [RelayCommand(CanExecute = nameof(CanOpenResultFolder))]
+    private void OpenResultFolder()
     {
-        // このチェックボックスは「録音中のライブ文字起こし」の ON/OFF のみを司る
-        // モデルのロード自体はパスが設定されていれば常に行う
-        if (value)
+        var arguments = BuildExplorerArguments(LastResultPath);
+        if (arguments == null)
         {
-            if (_transcriptionService.IsModelLoaded)
-            {
-                _audioCaptureService.SetTranscriptionService(_transcriptionService);
-            }
-            else
-            {
-                TryLoadWhisperModel();
-            }
-        }
-        else
-        {
-            _audioCaptureService.SetTranscriptionService(null);
-        }
-        if (!_initializing)
-        {
-            SaveSettings();
-        }
-    }
-
-    [ObservableProperty]
-    private string _whisperModelPath = string.Empty;
-
-    [ObservableProperty]
-    private string _transcriptionStatus = "";
-
-    // --- 文字起こしGPU使用設定 ---
-    [ObservableProperty]
-    private bool _useGpuForTranscription = true;
-
-    [ObservableProperty]
-    private bool _gpuAvailable = true;
-
-    public bool CanToggleGpu => IsNotBusy && GpuAvailable;
-
-    partial void OnGpuAvailableChanged(bool value)
-    {
-        OnPropertyChanged(nameof(CanToggleGpu));
-    }
-
-    partial void OnUseGpuForTranscriptionChanged(bool value)
-    {
-        if (_initializing || _suppressUseGpuWriteBack)
-        {
+            StatusMessage = $"保存先が見つかりません: {LastResultPath}";
             return;
         }
-        SaveSettings();
-        TryLoadWhisperModel();
-    }
 
-    [ObservableProperty]
-    private bool _isMicMuted;
-
-    partial void OnIsMicMutedChanged(bool value)
-    {
-        if (_suppressMicMuteWriteBack) return;
-        _audioCaptureService.IsMicMuted = value;
-    }
-
-    [ObservableProperty]
-    private bool _isSpeakerMuted;
-
-    partial void OnIsSpeakerMutedChanged(bool value)
-    {
-        _audioCaptureService.IsSpeakerMuted = value;
-    }
-
-    [ObservableProperty]
-    private double _micLevelDb = -60.0;
-
-    [ObservableProperty]
-    private double _loopbackLevelDb = -60.0;
-
-    // --- コマンド ---
-
-    private bool CanStartRecording =>
-        (SelectedCaptureDevice != null || SelectedRenderDevice != null)
-        && !IsRecording && !IsStopping && !IsTranscribingFile;
-
-    private bool CanStopRecording => IsRecording && !IsStopping;
-
-    [RelayCommand(CanExecute = nameof(CanStartRecording))]
-    private void StartRecording()
-    {
         try
         {
-            _recordingStartTime = _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, OutputFolder);
-            IsRecording = true;
-            ElapsedTime = "00:00:00";
-            _clockTimer.Start();
-            StatusMessage = "録音中...";
-            SaveSettings();
+            using var _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = arguments,
+                UseShellExecute = true
+            });
         }
-        catch (InvalidOperationException ex)
+        // CA1031: シェル起動は環境依存で任意の例外を投げうる。フォルダを開けなくても
+        //         アプリの動作には影響しないため、画面のステータスに変換する。
+#pragma warning disable CA1031
+        catch (Exception ex)
         {
-            StatusMessage = $"エラー: {ex.Message}";
+            StatusMessage = $"保存先を開けませんでした: {ex.Message}";
         }
+#pragma warning restore CA1031
     }
 
-    [RelayCommand(CanExecute = nameof(CanStopRecording))]
-    private async Task StopRecordingAsync()
+    /// <summary>
+    /// エクスプローラーへ渡す引数を組み立てる。成果物が存在すれば選択状態で開き
+    /// （REQ-OPEN-02）、無ければ親フォルダを開く（REQ-OPEN-03）。
+    /// どちらも存在しなければ <c>null</c>。
+    /// </summary>
+    internal static string? BuildExplorerArguments(string resultPath)
     {
-        _clockTimer.Stop();
-        IsStopping = true;
-        LoopbackLevelDb = -60.0;
-        StatusMessage = "停止処理中...";
-
-        var transcriptionEnabled = TranscriptionEnabled;
-        await Task.Run(() => _audioCaptureService.StopRecording());
-
-        IsRecording = false;
-        IsStopping = false;
-
-        var session = _audioCaptureService.CurrentSession;
-        if (session != null)
+        if (string.IsNullOrWhiteSpace(resultPath))
         {
-            var txtPath = System.IO.Path.ChangeExtension(session.FilePath, ".txt");
-            var hasTxt = transcriptionEnabled && System.IO.File.Exists(txtPath);
-            StatusMessage = hasTxt
-                ? $"保存完了: {session.FilePath} (文字起こし: {txtPath})"
-                : $"保存完了: {session.FilePath}";
+            return null;
         }
-        else
+
+        if (System.IO.File.Exists(resultPath))
         {
-            StatusMessage = "録音データなし（ファイルは作成されませんでした）";
+            return $"/select,\"{resultPath}\"";
         }
+
+        var folder = System.IO.Path.GetDirectoryName(resultPath);
+        return !string.IsNullOrEmpty(folder) && System.IO.Directory.Exists(folder)
+            ? $"\"{folder}\""
+            : null;
     }
 
     private bool CanSelectOutputFolder => !IsRecording && !IsStopping && !IsTranscribingFile;
@@ -335,287 +296,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanRefreshDevices => !IsRecording && !IsStopping && !IsTranscribingFile;
-
-    [RelayCommand(CanExecute = nameof(CanRefreshDevices))]
-    private void RefreshDevices()
-    {
-        RefreshDevicesInternal();
-        StatusMessage = $"デバイス一覧を更新しました (マイク {CaptureDevices.Count} / スピーカー {RenderDevices.Count})";
-    }
-
-    private void RefreshDevicesInternal()
-    {
-        _audioCaptureService.RefreshDevices();
-
-        var prevCapture = SelectedCaptureDevice?.DeviceId;
-        var prevRender = SelectedRenderDevice?.DeviceId;
-
-        CaptureDevices.Clear();
-        foreach (var d in _audioCaptureService.GetCaptureDevices())
-        {
-            CaptureDevices.Add(d);
-        }
-
-        RenderDevices.Clear();
-        foreach (var d in _audioCaptureService.GetRenderDevices())
-        {
-            RenderDevices.Add(d);
-        }
-
-        if (prevCapture != null)
-        {
-            SelectedCaptureDevice = CaptureDevices.FirstOrDefault(d => d.DeviceId == prevCapture);
-        }
-        if (prevRender != null)
-        {
-            SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == prevRender);
-        }
-    }
-
-    private void UpdateMeters()
-    {
-        MicLevelDb = PeakToDb(_audioCaptureService.MicPeakLevel);
-        LoopbackLevelDb = PeakToDb(_audioCaptureService.LoopbackPeakLevel);
-    }
-
-    internal static double PeakToDb(float peak)
-    {
-        if (peak <= 0f)
-        {
-            return -60.0;
-        }
-        double db = 20.0 * Math.Log10(peak);
-        return Math.Clamp(db, -60.0, 3.0);
-    }
-
-    private void OnMicMuteChangedExternally(bool newMute)
-    {
-        // OnVolumeNotification は非UIスレッドで発火するため Dispatcher 経由
-        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-        {
-            if (IsMicMuted == newMute) return;
-            _suppressMicMuteWriteBack = true;
-            try { IsMicMuted = newMute; }
-            finally { _suppressMicMuteWriteBack = false; }
-        });
-    }
-
-    private void OnRecordingError(string message)
-    {
-        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-        {
-            _clockTimer.Stop();
-            IsRecording = false;
-            IsStopping = false;
-            StatusMessage = $"エラー: {message}";
-        });
-    }
-
-    private bool CanSelectWhisperModel => !IsRecording && !IsStopping && !IsTranscribingFile;
-
-    [RelayCommand(CanExecute = nameof(CanSelectWhisperModel))]
-    private void SelectWhisperModel()
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Whisperモデルファイルを選択",
-            Filter = "GGMLモデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
-        };
-        if (dialog.ShowDialog() == true)
-        {
-            WhisperModelPath = dialog.FileName;
-            TryLoadWhisperModel();
-            SaveSettings();
-        }
-    }
-
-    private bool _isLoadingModel;
-
-    private async void TryLoadWhisperModel()
-    {
-        if (string.IsNullOrEmpty(WhisperModelPath))
-        {
-            TranscriptionStatus = "モデルパス未設定";
-            _audioCaptureService.SetTranscriptionService(null);
-            return;
-        }
-
-        if (!System.IO.File.Exists(WhisperModelPath))
-        {
-            TranscriptionStatus = "モデルファイルが見つかりません";
-            _audioCaptureService.SetTranscriptionService(null);
-            return;
-        }
-
-        if (_isLoadingModel)
-        {
-            return;
-        }
-
-        try
-        {
-            _isLoadingModel = true;
-            TranscriptionStatus = "モデル読み込み中...";
-            var modelPath = WhisperModelPath;
-            var requestGpu = UseGpuForTranscription;
-            var (success, gpuAvailable) = await Task.Run(() => _transcriptionService.LoadModel(modelPath, requestGpu));
-            if (success)
-            {
-                GpuAvailable = gpuAvailable;
-                if (!gpuAvailable && requestGpu)
-                {
-                    // GPUが利用不可と判明した場合は設定を強制的にOFFにする
-                    _suppressUseGpuWriteBack = true;
-                    try { UseGpuForTranscription = false; }
-                    finally { _suppressUseGpuWriteBack = false; }
-                    SaveSettings();
-                }
-
-                TranscriptionStatus = "モデル読み込み完了";
-                // ライブ文字起こしが ON のときのみ、録音サービスにワイヤする
-                if (TranscriptionEnabled)
-                {
-                    _audioCaptureService.SetTranscriptionService(_transcriptionService);
-                }
-            }
-            else
-            {
-                TranscriptionStatus = "モデル読み込み失敗";
-                _audioCaptureService.SetTranscriptionService(null);
-            }
-        }
-        // CA1031: async void（例外を漏らすとプロセスごと落ちる）かつ Whisper のネイティブ
-        //         読み込み境界のため、全例外を画面のステータスに変換する。
-#pragma warning disable CA1031
-        catch (Exception ex)
-        {
-            TranscriptionStatus = $"モデル読み込みエラー: {ex.Message}";
-            _audioCaptureService.SetTranscriptionService(null);
-        }
-#pragma warning restore CA1031
-        finally
-        {
-            _isLoadingModel = false;
-            TranscribeFromFileCommand.NotifyCanExecuteChanged();
-        }
-    }
-
-    private bool CanTranscribeFromFile =>
-        !IsRecording && !IsStopping && !IsTranscribingFile
-        && _transcriptionService.IsModelLoaded;
-
-    [RelayCommand(CanExecute = nameof(CanTranscribeFromFile))]
-    private async Task TranscribeFromFileAsync()
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "文字起こしする音声ファイルを選択",
-            Filter = "音声ファイル (*.wav;*.mp3)|*.wav;*.mp3|すべてのファイル (*.*)|*.*"
-        };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        await RunFileTranscriptionAsync(dialog.FileName);
-    }
-
-    public bool CanAcceptFileDrop => CanTranscribeFromFile;
-
-    public async Task TranscribeDroppedFileAsync(string filePath)
-    {
-        if (!CanTranscribeFromFile)
-        {
-            return;
-        }
-
-        if (!IsSupportedAudioExtension(filePath))
-        {
-            var ext = System.IO.Path.GetExtension(filePath);
-            StatusMessage = $"エラー: 対応していないファイル形式です ({ext})";
-            return;
-        }
-
-        await RunFileTranscriptionAsync(filePath);
-    }
-
-    internal static bool IsSupportedAudioExtension(string filePath)
-    {
-        var ext = System.IO.Path.GetExtension(filePath);
-        return string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private async Task RunFileTranscriptionAsync(string filePath)
-    {
-        _fileTranscriptionCts = new CancellationTokenSource();
-        IsTranscribingFile = true;
-        FileTranscriptionStatus = "準備中...";
-        StatusMessage = "音声ファイルから文字起こし中...";
-        try
-        {
-            var progress = new Progress<(TimeSpan processed, TimeSpan total)>(v =>
-                FileTranscriptionStatus =
-                    $"処理中: {v.processed:hh\\:mm\\:ss} / {v.total:hh\\:mm\\:ss}");
-            var token = _fileTranscriptionCts.Token;
-            // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
-            var ok = await Task.Run(() =>
-                _transcriptionService.TranscribeFileAsync(filePath, progress, token));
-            if (ok)
-            {
-                var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
-                FileTranscriptionStatus = "完了";
-                StatusMessage = $"文字起こし完了: {txtPath}";
-            }
-            else
-            {
-                FileTranscriptionStatus = "失敗";
-                StatusMessage = "文字起こしに失敗しました";
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            FileTranscriptionStatus = "中止しました";
-            StatusMessage = "文字起こしを中止しました";
-        }
-        // CA1031: UI コマンド境界。ファイル文字起こしの任意の失敗を画面のステータスに変換し、
-        //         アプリを落とさずに次の操作へ戻す。
-#pragma warning disable CA1031
-        catch (Exception ex)
-        {
-            FileTranscriptionStatus = $"エラー: {ex.Message}";
-            StatusMessage = $"エラー: {ex.Message}";
-        }
-#pragma warning restore CA1031
-        finally
-        {
-            _fileTranscriptionCts?.Dispose();
-            _fileTranscriptionCts = null;
-            IsTranscribingFile = false;
-        }
-    }
-
-    private bool CanCancelFileTranscription => IsTranscribingFile;
-
-    [RelayCommand(CanExecute = nameof(CanCancelFileTranscription))]
-    private void CancelFileTranscription()
-    {
-        _fileTranscriptionCts?.Cancel();
-        FileTranscriptionStatus = "中止中...";
-    }
-
     private void SaveSettings()
     {
-        _settingsService.Save(new AppSettings
-        {
-            OutputFolder = OutputFolder,
-            LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId,
-            LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId,
-            TranscriptionEnabled = TranscriptionEnabled,
-            WhisperModelPath = WhisperModelPath,
-            UseGpuForTranscription = UseGpuForTranscription
-        });
+        // UI を持たない設定項目（無音カットの調整値など）を消さないため、
+        // 読み込んだインスタンスの UI 対応プロパティだけを更新して保存する。
+        _settings.OutputFolder = OutputFolder;
+        _settings.LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId;
+        _settings.LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId;
+        _settings.TranscriptionEnabled = TranscriptionEnabled;
+        _settings.WhisperModelPath = WhisperModelPath;
+        _settings.UseGpuForTranscription = UseGpuForTranscription;
+        _settings.LiveTranscriptionLanguage = SelectedLiveLanguage.Code;
+        _settings.FileTranscriptionLanguage = SelectedFileLanguage.Code;
+        _settingsService.Save(_settings);
     }
 
     public void Dispose()
@@ -638,5 +331,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _fileTranscriptionCts = null;
         _audioCaptureService.Dispose();
         _transcriptionService.Dispose();
+        _speakerDiarizationService?.Dispose();
     }
 }

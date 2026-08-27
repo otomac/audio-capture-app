@@ -1,0 +1,185 @@
+﻿<Window x:Class="AudioCaptureApp.FileTranscriptionOptionsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="ファイルから文字起こし"
+        Width="460" SizeToContent="Height"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <!--
+        地色・文字色・ボタンの形は App.xaml の共通スタイル（Styles/Controls.xaml）に任せる。
+        ここで色を直書きしない — メインウィンドウと見た目がずれるため。
+    -->
+    <Window.Resources>
+        <!-- 処理前だけ見せるボタン（開始 / キャンセル） -->
+        <Style x:Key="IdleButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="MinWidth" Value="90"/>
+            <Setter Property="Visibility" Value="Visible"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 「開始」は主操作なのでアクセント -->
+        <Style x:Key="StartButton" TargetType="Button" BasedOn="{StaticResource Button.Accent}">
+            <Setter Property="MinWidth" Value="90"/>
+            <Setter Property="Visibility" Value="Visible"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 処理中だけ見せるボタン（中止）。破壊的な操作ではないので通常配色でよい -->
+        <Style x:Key="BusyButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="MinWidth" Value="90"/>
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 処理中は入力を止める -->
+        <Style x:Key="IdleTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="IdleComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ===== 対象と条件 ===== -->
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+            <StackPanel>
+
+                <TextBlock Text="対象ファイル" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding FileTranscriptionFileName}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding FileTranscriptionFileName}"
+                           Margin="0,0,0,12"/>
+
+                <!-- 開始時刻（REQ-TRX-FILE-10 / 15） -->
+                <TextBlock Text="開始時刻" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBox Width="76" Style="{StaticResource IdleTextBox}"
+                             Text="{Binding FileTranscriptionStartTime, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Text="hh:mm（空欄ならファイル先頭を 00:00:00 とする）"
+                               Style="{StaticResource Text.Label}" Margin="8,0,0,0"/>
+                </StackPanel>
+
+                <!-- 自動入力の根拠（REQ-TRX-FILE-15） -->
+                <TextBlock Margin="0,4,0,0"
+                           Text="{Binding FileTranscriptionStartTimeHint}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Hint}">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding FileTranscriptionStartTimeHint}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- 書式エラー（REQ-TRX-FILE-10） -->
+                <TextBlock Margin="0,4,0,0"
+                           Text="24 時間表記の hh:mm で入力してください（例: 9:05 / 14:30）">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Error}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasFileTranscriptionStartTimeError}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- 言語（REQ-TRX-FILE-16）。ライブ側の選択とは独立 -->
+                <TextBlock Text="言語" Style="{StaticResource Text.Label}" Margin="0,12,0,4"/>
+                <ComboBox HorizontalAlignment="Left" MinWidth="130"
+                          Style="{StaticResource IdleComboBox}"
+                          ItemsSource="{Binding FileLanguageOptions}"
+                          SelectedItem="{Binding SelectedFileLanguage}">
+                          <ComboBox.ItemTemplate>
+                              <DataTemplate>
+                                  <TextBlock Text="{Binding DisplayName}"/>
+                              </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                </ComboBox>
+            </StackPanel>
+        </Border>
+
+        <!-- ===== 進捗（処理中のみ。REQ-TRX-FILE-06） ===== -->
+        <Border Grid.Row="1" Margin="0,0,0,10">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel>
+                <ProgressBar Minimum="0" Maximum="100"
+                             Value="{Binding FileTranscriptionProgress, Mode=OneWay}"/>
+                <TextBlock Text="{Binding FileTranscriptionStatus}"
+                           Style="{StaticResource Text.Label}" Margin="0,8,0,0"/>
+
+                <!-- REQ-TRX-FILE-07: 「中止」を押したことを残す行。進捗行とは別に置く —
+                     同じ行へ書くと次の進捗通知で上書きされて消えるためである。 -->
+                <TextBlock Text="{Binding FileTranscriptionCancelNotice}" Margin="0,4,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Hint}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsFileTranscriptionCancelRequested}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </StackPanel>
+        </Border>
+
+        <!-- ===== ボタン ===== -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="開始" Style="{StaticResource StartButton}"
+                    IsEnabled="{Binding CanStartFileTranscription}"
+                    IsDefault="True" Click="StartButton_Click" Margin="0,0,8,0"/>
+            <Button Content="キャンセル" Style="{StaticResource IdleButton}" IsCancel="True"/>
+            <!-- REQ-TRX-FILE-07: 中止はこのダイアログにだけ置く -->
+            <Button Content="中止" Style="{StaticResource BusyButton}"
+                    Command="{Binding CancelFileTranscriptionCommand}"/>
+        </StackPanel>
+    </Grid>
+</Window>

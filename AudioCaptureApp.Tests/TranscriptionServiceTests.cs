@@ -1,70 +1,310 @@
+using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
+using Whisper.net.LibraryLoader;
 
 namespace AudioCaptureApp.Tests;
 
 public class TranscriptionServiceTests
 {
-    [Fact]
-    public void IsSilent_AllZeros_ReturnsTrue()
-    {
-        var samples = new float[1000];
+    // --- ギャップ検出 (T116) ---
 
-        Assert.True(TranscriptionService.IsSilent(samples));
+    [Fact]
+    public void ShouldSplitOnGap_ContiguousAudio_ReturnsFalse()
+    {
+        // 直前のパケット末尾 10.000s に対し、次のパケットが 10.010s から始まる（通常の連続供給）
+        var result = TranscriptionService.ShouldSplitOnGap(
+            audioStart: TimeSpan.FromSeconds(10.010),
+            bufferEndElapsed: TimeSpan.FromSeconds(10.0),
+            bufferedSampleCount: 160000,
+            threshold: TimeSpan.FromMilliseconds(500));
+
+        Assert.False(result);
     }
 
     [Fact]
-    public void IsSilent_VerySmallSignal_ReturnsTrue()
+    public void ShouldSplitOnGap_LongSilenceGap_ReturnsTrue()
     {
-        // RMS < 0.01 threshold
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.005f; // constant 0.005 → RMS = 0.005 < 0.01
+        // ミュート／再生停止で 2 分間コールバックが来なかったケース
+        var result = TranscriptionService.ShouldSplitOnGap(
+            audioStart: TimeSpan.FromSeconds(130),
+            bufferEndElapsed: TimeSpan.FromSeconds(10),
+            bufferedSampleCount: 160000,
+            threshold: TimeSpan.FromMilliseconds(500));
 
-        Assert.True(TranscriptionService.IsSilent(samples));
+        Assert.True(result);
     }
 
     [Fact]
-    public void IsSilent_LoudSignal_ReturnsFalse()
+    public void ShouldSplitOnGap_JitterBelowThreshold_ReturnsFalse()
     {
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.5f; // RMS = 0.5 >> 0.01
+        // キャプチャスレッドの遅延程度では分割しない
+        var result = TranscriptionService.ShouldSplitOnGap(
+            audioStart: TimeSpan.FromSeconds(10.3),
+            bufferEndElapsed: TimeSpan.FromSeconds(10),
+            bufferedSampleCount: 160000,
+            threshold: TimeSpan.FromMilliseconds(500));
 
-        Assert.False(TranscriptionService.IsSilent(samples));
+        Assert.False(result);
     }
 
     [Fact]
-    public void IsSilent_SingleLargeSampleAmongSilence_DependsOnRms()
+    public void ShouldSplitOnGap_EmptyBuffer_ReturnsFalse()
     {
-        // 1000 samples, only 1 is loud (0.5)
-        // RMS = sqrt(0.25 / 1000) = sqrt(0.00025) ≈ 0.0158 > 0.01 → not silent
-        var samples = new float[1000];
-        samples[500] = 0.5f;
+        // 分割すべき中身が無いので、どれだけ間が空いていても分割しない
+        var result = TranscriptionService.ShouldSplitOnGap(
+            audioStart: TimeSpan.FromSeconds(600),
+            bufferEndElapsed: TimeSpan.FromSeconds(10),
+            bufferedSampleCount: 0,
+            threshold: TimeSpan.FromMilliseconds(500));
 
-        Assert.False(TranscriptionService.IsSilent(samples));
+        Assert.False(result);
+    }
+
+    // --- チャンク先頭時刻の逆算 (T116) ---
+
+    [Fact]
+    public void ChunkStartElapsed_SubtractsBufferedDuration()
+    {
+        // 末尾が 30 秒地点、バッファに 20 秒 (320000 サンプル) → 先頭は 10 秒地点
+        var start = TranscriptionService.ChunkStartElapsed(
+            TimeSpan.FromSeconds(30), bufferedSampleCount: 320000);
+
+        Assert.Equal(TimeSpan.FromSeconds(10), start);
     }
 
     [Fact]
-    public void IsSilent_BelowThresholdRms_ReturnsTrue()
+    public void ChunkStartElapsed_NeverGoesNegative()
     {
-        // Choose amplitude so RMS is just below 0.01
-        // For constant signal: RMS = amplitude, so amplitude < 0.01
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.009f;
+        // セッション開始直後は逆算がマイナスになりうるが、記録時刻が
+        // 録音開始より前になってはいけない
+        var start = TranscriptionService.ChunkStartElapsed(
+            TimeSpan.FromSeconds(1), bufferedSampleCount: 320000);
 
-        Assert.True(TranscriptionService.IsSilent(samples));
+        Assert.Equal(TimeSpan.Zero, start);
     }
 
     [Fact]
-    public void IsSilent_AboveThreshold_ReturnsFalse()
+    public void ChunkStartElapsed_AfterTakingOneChunk_RemainderStartsWhereChunkEnded()
     {
-        // RMS clearly above 0.01
-        var samples = new float[1000];
-        for (int i = 0; i < samples.Length; i++)
-            samples[i] = 0.02f;
+        // T117: TakeNextChunk はバッファ全体ではなく 20 秒 (320000) ぶんだけ切り出す。
+        // 切り出し後も残りの先頭時刻が連続していることを保証する。
+        var bufferEnd = TimeSpan.FromSeconds(60);
+        const int fullCount = 16000 * 60;      // 60 秒ぶん
+        const int chunkCount = 16000 * 20;     // 20 秒ぶん切り出す
 
-        Assert.False(TranscriptionService.IsSilent(samples));
+        var chunkStart = TranscriptionService.ChunkStartElapsed(bufferEnd, fullCount);
+        var remainderStart = TranscriptionService.ChunkStartElapsed(bufferEnd, fullCount - chunkCount);
+
+        Assert.Equal(TimeSpan.Zero, chunkStart);
+        // 残りは切り出したチャンクの直後から始まる（時刻の連続性）
+        Assert.Equal(chunkStart + TimeSpan.FromSeconds(20), remainderStart);
+    }
+
+    // --- チャンクの確定契機 (T117 / T120 / T129) ---
+    //
+    // 契機は 3 つ。①20 秒分たまった ②末尾に発話終了とみなせる無音が積まれた
+    // ③供給が途絶えた。この優先順で判定する（REQ-TRX-LIVE-04）。
+
+    private const int Threshold = 16000 * 20;   // BufferThresholdSamples
+    private const int Endpoint = 16000 * 2;     // 既定 MergeGapSeconds = 2.0 秒
+
+    /// <summary>供給が続いている（最後のパケットを受け取った直後）状態。</summary>
+    private static readonly TimeSpan Supplying = TimeSpan.Zero;
+
+    private static readonly double Rms = SilenceCutOptions.Default.RmsThreshold;
+
+    [Fact]
+    public void ChunkTakeCount_ReachedThreshold_TakesExactlyThreshold()
+    {
+        // 20 秒分に達していれば、それ以上溜まっていても 20 秒分だけ（T117）
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(Threshold, Supplying, 0, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_FarOverThresholdAndIdle_StillTakesOnlyThreshold()
+    {
+        // バックログが積んでいても 1 回の Whisper 呼び出しは 20 秒分に制限する
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(
+                Threshold * 6, TimeSpan.FromSeconds(600), null, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_OverThresholdWithSilentTail_StillTakesOnlyThreshold()
+    {
+        // 末尾無音の契機が同時に成立していても、上限（①）を優先する
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(Threshold + 1, Supplying, Endpoint, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_ContinuousSupplyWithVoiceAtEnd_TakesNothing()
+    {
+        // まだ溜め続けるべき状態（発話の途中）
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 16, Supplying, 0, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SilentTailAtEndpointLength_TakesWholeBuffer()
+    {
+        // 発話が終わった契機。20 秒に達していなくても確定する（T129）
+        const int buffered = 16000 * 5;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(buffered, Supplying, Endpoint, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SilentTailOneSampleShort_TakesNothing()
+    {
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 5, Supplying, Endpoint - 1, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_AllSilenceBelowThreshold_TakesNothing()
+    {
+        // バッファ全体が無音（null）では末尾無音で確定しない。20 秒たまってから切り出され、
+        // 有声区間 0 件として Whisper を呼ばずに捨てられる
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 19, Supplying, null, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_ZeroEndpointLengthWithVoiceAtEnd_TakesNothing()
+    {
+        // MergeGapSeconds に 0 を設定されても、有声のまま（発話の途中で）確定しない
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(16000 * 5, Supplying, 0, 0));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SupplyIdleAtThreshold_TakesWholeBuffer()
+    {
+        // 報告事象の再現条件: 16 秒分たまった直後にミュートされ、次のパケットが来ない
+        const int buffered = 16000 * 16;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(
+                buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_SupplyIdleButShorterThanTailMinimum_TakesNothing()
+    {
+        // 0.2 秒未満の断片は 1 回の推論に見合わないためセッション終了まで持ち越す
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(
+                TranscriptionService.MinTailSamples - 1,
+                TimeSpan.FromSeconds(600),
+                null,
+                Endpoint));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_EmptyBuffer_TakesNothing()
+    {
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(0, TimeSpan.FromSeconds(600), null, Endpoint));
+    }
+
+    // --- 末尾無音の検出 (T129) ---
+
+    [Fact]
+    public void TrailingSilenceSamples_AllSilence_ReturnsNull()
+    {
+        var buffer = new List<float>(new float[16000 * 3]);
+
+        Assert.Null(TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_EmptyBuffer_ReturnsNull()
+    {
+        Assert.Null(TranscriptionService.TrailingSilenceSamples([], Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_EndsWithVoice_ReturnsZero()
+    {
+        var buffer = new List<float>(MakeSamples(16000, (12800, 3200)));
+
+        Assert.Equal(0, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_SilentTail_ReturnsTailLength()
+    {
+        // 先頭 1 秒が有声、残り 2 秒が無音
+        var buffer = new List<float>(MakeSamples(16000 * 3, (0, 16000)));
+
+        Assert.Equal(16000 * 2, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_LengthNotWindowMultiple_CountsFromEnd()
+    {
+        // 4000 サンプル（窓 2 個 + 端数 800）。有声は先頭 2000 まで。
+        // 末尾揃えなら窓は [2400,4000) [800,2400) [0,800) と敷かれ、
+        // [800,2400) が有声に当たるので末尾無音は 1600。
+        // 先頭揃えだと 800 になるため、この値で敷き方の違いを検出できる。
+        var buffer = new List<float>(MakeSamples(4000, (0, 2000)));
+
+        Assert.Equal(1600, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    [Fact]
+    public void TrailingSilenceSamples_VoiceOnlyInHeadRemainder_NotAllSilence()
+    {
+        // 有声が先頭側の端数窓（500 サンプル）にしかない。
+        // 端数窓を評価しないと「全体が無音」と誤判定して確定を取りこぼす
+        var buffer = new List<float>(MakeSamples(5300, (0, 500)));
+
+        Assert.Equal(4800, TranscriptionService.TrailingSilenceSamples(buffer, Rms));
+    }
+
+    // --- 短いチャンクのパディング (T116) ---
+
+    [Fact]
+    public void PadToMinimum_ShorterThanMinimum_PadsWithSilenceAtEnd()
+    {
+        float[] samples = [0.5f, -0.5f, 0.25f];
+
+        var result = TranscriptionService.PadToMinimum(samples, minSamples: 8);
+
+        Assert.Equal(8, result.Length);
+        // 先頭は保存される（セグメント時刻がずれないこと）
+        Assert.Equal(0.5f, result[0]);
+        Assert.Equal(-0.5f, result[1]);
+        Assert.Equal(0.25f, result[2]);
+        // 残りは無音
+        for (int i = 3; i < result.Length; i++)
+        {
+            Assert.Equal(0f, result[i]);
+        }
+    }
+
+    [Fact]
+    public void PadToMinimum_AlreadyLongEnough_ReturnsSameInstance()
+    {
+        float[] samples = [0.1f, 0.2f, 0.3f, 0.4f];
+
+        var result = TranscriptionService.PadToMinimum(samples, minSamples: 4);
+
+        Assert.Same(samples, result);
     }
 
     [Fact]
@@ -78,5 +318,818 @@ public class TranscriptionServiceTests
         // 判定不可の場合はGPU利用可能とみなす（チェックボックスをON扱いのままにするため）
         Assert.True(gpuAvailable);
         Assert.False(service.IsModelLoaded);
+    }
+
+    [Fact]
+    public void LoadModel_CorruptModelFile_ReturnsFailureAndRaisesError()
+    {
+        // T122 / REQ-TRX-01。WhisperFactory.FromPath は読み込みに失敗しても例外を投げず
+        // ファクトリを返すため、LoadModel は壊れたモデルでも成功を返していた。
+        //
+        // 注: このテストは Whisper のネイティブランタイム（Whisper.net.Runtime* が出力へ
+        //     配置する DLL）のロードを伴う。実 GGML モデルは要求しない。
+        var path = Path.Combine(Path.GetTempPath(), $"t122-corrupt-{Guid.NewGuid():N}.bin");
+        // GGML のマジック (0x67676d6c) と一致しない固定パターンで埋める
+        var garbage = new byte[64 * 1024];
+        Array.Fill(garbage, (byte)0xAB);
+        File.WriteAllBytes(path, garbage);
+
+        try
+        {
+            using var service = new TranscriptionService();
+            var errors = new List<string>();
+            service.Error += errors.Add;
+
+            var (success, _) = service.LoadModel(path, useGpu: false);
+
+            Assert.False(success);
+            Assert.False(service.IsModelLoaded);
+            Assert.NotEmpty(errors);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // --- 実行先の表記 (T119 / T123 / REQ-GPU-05) ---
+    //
+    // RuntimeOptions.LoadedLibrary は「どのランタイム DLL を読み込んだか」であって
+    // 「GPU で計算しているか」ではない。GPU 版ランタイムを読み込んだまま CPU 実行する
+    // ケースが 2 つある（UseGpu = false のとき / 使える GPU デバイスが無いとき）ため、
+    // 通知には LoadedLibrary の値をそのまま使えない。
+
+    [Fact]
+    public void DescribeRuntime_GpuInUseAndGpuLibraryLoaded_ReportsGpuWithLibraryName()
+    {
+        Assert.Equal("GPU (Vulkan)", TranscriptionService.DescribeRuntime(RuntimeLibrary.Vulkan, gpuInUse: true));
+        Assert.Equal("GPU (Cuda)", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cuda, gpuInUse: true));
+    }
+
+    [Fact]
+    public void DescribeRuntime_GpuLibraryLoadedButRunningOnCpu_ReportsCpu()
+    {
+        // T119 / T123 の本体。Vulkan ランタイムを読み込んだままでも計算が CPU なら CPU と通知する。
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Vulkan, gpuInUse: false));
+    }
+
+    [Fact]
+    public void DescribeRuntime_CpuLibraryLoaded_ReportsCpuAlways()
+    {
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cpu, gpuInUse: true));
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.CpuNoAvx, gpuInUse: true));
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(RuntimeLibrary.Cpu, gpuInUse: false));
+    }
+
+    [Fact]
+    public void DescribeRuntime_NoLibraryLoaded_ReportsCpu()
+    {
+        Assert.Equal("CPU", TranscriptionService.DescribeRuntime(null, gpuInUse: true));
+    }
+
+    // --- ネイティブログからの GPU 実態判定 (T123 / REQ-TRX-02, REQ-GPU-05) ---
+    //
+    // 入力はすべて実機で採取した whisper.cpp / ggml のログ行そのもの。
+    // GPU 版ランタイム DLL はデバイスが無くても読み込めるため、LoadedLibrary だけでは
+    // GPU 利用可否を判定できない（Vulkan ICD を無効化して誤検知を実証済み）。
+
+    [Fact]
+    public void ParseBackendCount_WhisperInitLine_ReturnsCount()
+    {
+        Assert.Equal(2, TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: backends   = 2"));
+        Assert.Equal(1, TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: backends   = 1"));
+    }
+
+    [Fact]
+    public void ParseBackendCount_DeviceCountLine_ReturnsNull()
+    {
+        // devices は backends とは別の値。取り違えない
+        Assert.Null(TranscriptionService.ParseBackendCount(
+            "whisper_init_with_params_no_state: devices    = 5"));
+    }
+
+    [Fact]
+    public void ParseBackendCount_UnrelatedLine_ReturnsNull()
+    {
+        Assert.Null(TranscriptionService.ParseBackendCount(
+            "whisper_model_load: loading model"));
+        Assert.Null(TranscriptionService.ParseBackendCount(""));
+    }
+
+    [Fact]
+    public void ParseModelBackend_GpuPlacement_ReturnsBackendName()
+    {
+        Assert.Equal("Vulkan0", TranscriptionService.ParseModelBackend(
+            "whisper_model_load:      Vulkan0 total size =   487.01 MB"));
+    }
+
+    [Fact]
+    public void ParseModelBackend_CpuPlacement_ReturnsCpu()
+    {
+        Assert.Equal("CPU", TranscriptionService.ParseModelBackend(
+            "whisper_model_load:          CPU total size =   487.01 MB"));
+    }
+
+    [Fact]
+    public void ParseModelBackend_ModelSizeLine_ReturnsNull()
+    {
+        // "total size" ではなく "model size" の行。バックエンド名は載っていない
+        Assert.Null(TranscriptionService.ParseModelBackend(
+            "whisper_model_load: model size    =  487.01 MB"));
+        Assert.Null(TranscriptionService.ParseModelBackend(
+            "ggml_vulkan: Found 4 Vulkan devices:"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_CpuPlacement_ReturnsFalse()
+    {
+        Assert.False(TranscriptionService.IsGpuInUse("CPU"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_GpuPlacement_ReturnsTrue()
+    {
+        Assert.True(TranscriptionService.IsGpuInUse("Vulkan0"));
+        Assert.True(TranscriptionService.IsGpuInUse("CUDA0"));
+    }
+
+    [Fact]
+    public void IsGpuInUse_Unknown_ReturnsFalse()
+    {
+        Assert.False(TranscriptionService.IsGpuInUse(null));
+    }
+
+    // --- 無音カットの調整値 (T112) ---
+    //
+    // settings.json から手書きで与えられうるため、不正値でも既定値へ倒れることを保証する。
+
+    [Fact]
+    public void SilenceCutOptions_Defaults_MatchSpec()
+    {
+        var options = SilenceCutOptions.Default;
+
+        Assert.Equal(0.01, options.RmsThreshold);
+        Assert.Equal(2.0, options.MergeGapSeconds);
+        Assert.Equal(0.2, options.PaddingSeconds);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void SilenceCutOptions_NonFiniteValues_FallBackToDefaults(double bad)
+    {
+        var options = new SilenceCutOptions(bad, bad, bad);
+
+        Assert.Equal(SilenceCutOptions.Default.RmsThreshold, options.RmsThreshold);
+        Assert.Equal(SilenceCutOptions.Default.MergeGapSeconds, options.MergeGapSeconds);
+        Assert.Equal(SilenceCutOptions.Default.PaddingSeconds, options.PaddingSeconds);
+    }
+
+    [Fact]
+    public void SilenceCutOptions_OutOfRangeValues_AreClamped()
+    {
+        var options = new SilenceCutOptions(-1.0, -5.0, 999.0);
+
+        Assert.Equal(0.0, options.RmsThreshold);
+        Assert.Equal(0.0, options.MergeGapSeconds);
+        Assert.Equal(5.0, options.PaddingSeconds);
+    }
+
+    // --- チャンクの有声区間分割 (T112) ---
+    //
+    // 20 秒チャンクのうち発話が 0.5 秒だけでも、従来は 20 秒まるごと Whisper に渡っていた。
+    // 無音部分に「ご視聴ありがとうございました」等のハルシネーションが載るため、
+    // 有声区間だけを切り出してそれぞれ個別に渡す。
+
+    [Fact]
+    public void SplitVoicedRegions_AllSilent_ReturnsEmpty()
+    {
+        var samples = new float[16000 * 20];
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_EmptyChunk_ReturnsEmpty()
+    {
+        var regions = TranscriptionService.SplitVoicedRegions([], SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    /// <summary>16kHz の無音バッファを作り、指定範囲だけ有声（振幅 0.5）にする。</summary>
+    private static float[] MakeSamples(int totalSamples, params (int Start, int Length)[] voiced)
+    {
+        var samples = new float[totalSamples];
+        foreach (var (start, length) in voiced)
+        {
+            for (int i = start; i < start + length; i++)
+            {
+                samples[i] = 0.5f;
+            }
+        }
+        return samples;
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_SilenceWithShortNoise_ReturnsOnlyNoiseRegion()
+    {
+        var samples = MakeSamples(16000 * 20, (160000, 8000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        var region = Assert.Single(regions);
+        Assert.Equal(160000 - 3200, region.Start);
+        Assert.Equal(8000 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_TwoUtterancesWithLongGap_ReturnsTwoRegions()
+    {
+        var samples = MakeSamples(16000 * 10, (0, 16000), (80000, 16000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+        Assert.Equal(0, regions[0].Start);
+        Assert.Equal(16000 + 3200, regions[0].Length);
+        Assert.Equal(80000 - 3200, regions[1].Start);
+        Assert.Equal(16000 + 6400, regions[1].Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ShortGap_MergesIntoOneRegion()
+    {
+        var samples = MakeSamples(16000 * 10, (0, 16000), (32000, 16000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(48000 + 3200, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_AddsPaddingAroundVoiced()
+    {
+        var samples = MakeSamples(16000 * 10, (80000, 16000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(80000 - 3200, region.Start);
+        Assert.Equal(16000 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_PaddingClampedToChunkBounds()
+    {
+        var samples = MakeSamples(16000, (0, 8000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.True(region.Start + region.Length <= samples.Length);
+        Assert.Equal(8000 + 3200, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_MostlyVoiced_ReturnsSingleFullRegion()
+    {
+        // 0〜9 秒と 11〜20 秒に発話（間隔ちょうど 2 秒なので結合されない）。
+        // 余白込みの有声合計は 92% ≧ 90% → 分割せずチャンク全体を 1 区間で返す
+        var samples = MakeSamples(16000 * 20, (0, 144000), (176000, 144000));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ContinuousSpeech_ReturnsSingleFullRegion()
+    {
+        var samples = MakeSamples(16000 * 20, (0, 16000 * 20));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ClickShorterThanMinimum_IsDropped()
+    {
+        // 100ms の単発クリック音（< 0.2 秒）→ 捨てる。
+        // 足切りをパディングより後に行うと 0.1 + 0.4 = 0.5 秒になり素通りするため、
+        // このテストが「足切りが先」という順序を守る。
+        var samples = MakeSamples(16000 * 10, (48000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_VoicedAtMinimumLength_IsKept()
+    {
+        var samples = MakeSamples(16000 * 10, (48000, 3200));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(3200 + 6400, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_QuietRoomNoise_ReturnsEmpty()
+    {
+        var samples = new float[16000 * 20];
+        for (int i = 0; i < samples.Length; i++)
+        {
+            samples[i] = 0.005f;
+        }
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ZeroThreshold_TreatsEverythingAsVoiced()
+    {
+        var samples = new float[16000 * 10];
+        var options = new SilenceCutOptions(0.0, 2.0, 0.2);
+
+        var region = Assert.Single(TranscriptionService.SplitVoicedRegions(samples, options));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    // --- 停止時に区間ループを打ち切る条件 (T127) ---
+    // 通常運転中は停止要求で打ち切る。停止時の排出処理では打ち切ってはならない
+    // （_isRunning は既に false なので、打ち切ると最後のチャンクを 1 区間も処理せず捨てる）。
+
+    [Fact]
+    public void ShouldStopRegionLoop_Cancelled_AlwaysStops()
+    {
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: true, isRunning: true, interruptible: true));
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: true, isRunning: false, interruptible: false));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_Running_Continues()
+    {
+        Assert.False(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: true, interruptible: true));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_StopRequestedWhileInterruptible_Stops()
+    {
+        // 通常運転中に停止要求 → 残りの区間は処理しない（T117 の 30 秒猶予を超えないため）
+        Assert.True(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: false, interruptible: true));
+    }
+
+    [Fact]
+    public void ShouldStopRegionLoop_DrainingAfterStop_DoesNotStop()
+    {
+        // 排出処理は _isRunning == false で走る。ここで打ち切ると
+        // 最後のチャンクが 1 区間も書き出されずに失われる（T120 の対策が無効になる）。
+        Assert.False(TranscriptionService.ShouldStopRegionLoop(
+            cancelled: false, isRunning: false, interruptible: false));
+    }
+
+    // --- 区間の開始時刻の合成 (T112) ---
+    // ライブ・ファイルの両経路が RegionStart を通る。ここが壊れると
+    // 「無音を切ったぶんだけ記録時刻がずれる」という最も気付きにくい壊れ方をする。
+
+    [Fact]
+    public void RegionStart_AtChunkHead_EqualsChunkStart()
+    {
+        var chunkStart = TimeSpan.FromSeconds(30);
+
+        Assert.Equal(chunkStart, TranscriptionService.RegionStart(chunkStart, 0));
+    }
+
+    [Fact]
+    public void RegionStart_AddsRegionOffsetInSeconds()
+    {
+        // チャンク先頭が 30 秒地点、区間はその 10 秒後（160000 サンプル）から始まる
+        var chunkStart = TimeSpan.FromSeconds(30);
+
+        var start = TranscriptionService.RegionStart(chunkStart, 160000);
+
+        Assert.Equal(TimeSpan.FromSeconds(40), start);
+    }
+
+    [Fact]
+    public void RegionStart_UsesSampleCountNotRegionLength()
+    {
+        // 16000 サンプル = 1 秒。区間長ではなく「チャンク先頭からの位置」で換算する
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            TranscriptionService.RegionStart(TimeSpan.Zero, 16000));
+    }
+
+    [Fact]
+    public void RegionStart_SubSecondOffset_IsNotTruncated()
+    {
+        // パディング分の 3200 サンプル = 0.2 秒。整数秒に丸めると語頭がずれる
+        var start = TranscriptionService.RegionStart(TimeSpan.Zero, 3200);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(200), start);
+    }
+
+    // --- 境界値と既知の限界の固定 (T112 / ミューテーション検査で判明した穴) ---
+
+    [Fact]
+    public void SplitVoicedRegions_GapExactlyMergeThreshold_DoesNotMerge()
+    {
+        // 間隔がちょうど 2.0 秒。判定は「未満なら結合」なので結合されない。
+        // この境界を固定しないと `<` を `<=` に変えても全テストが通ってしまう。
+        var samples = MakeSamples(16000 * 20, (0, 32000), (64000, 32000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+        Assert.Equal(0, regions[0].Start);
+        Assert.Equal(32000 + 3200, regions[0].Length);
+        Assert.Equal(64000 - 3200, regions[1].Start);
+        Assert.Equal(32000 + 6400, regions[1].Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_PaddingCausesOverlap_MergesAfterPadding()
+    {
+        // 結合幅 0.1 秒 < 余白 2×0.5 秒。パディング後に区間が接触するため、
+        // 後段の再結合が無いと重なった区間を 2 つ返し、同じ音声を 2 回 Whisper に渡してしまう。
+        var samples = MakeSamples(16000 * 10, (0, 16000), (32000, 16000));
+        var options = new SilenceCutOptions(0.01, 0.1, 0.5);
+
+        var region = Assert.Single(TranscriptionService.SplitVoicedRegions(samples, options));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(56000, region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ChunkLengthNotMultipleOfWindow_CoversToEnd()
+    {
+        // チャンク長が窓長の倍数でない場合、末尾の短い窓を落とさず区間が末尾まで届く。
+        var samples = MakeSamples(16000 * 10 + 800, (152000, 8800));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(152000 - 3200, region.Start);
+        Assert.Equal(samples.Length, region.Start + region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_JustBelowNoSplitRatio_ReturnsSeparateRegions()
+    {
+        // 余白込みの有声合計が 88%（< 90%）→ 分割したまま返す。
+        var samples = MakeSamples(16000 * 20, (0, 136000), (168000, 136000));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Equal(2, regions.Count);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ExactlyAtNoSplitRatio_ReturnsSingleFullRegion()
+    {
+        // 余白込みの有声合計がちょうど 90% → 判定は「以上」なのでチャンク全体を返す。
+        var samples = MakeSamples(16000 * 20, (0, 139200), (171200, 139200));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(0, region.Start);
+        Assert.Equal(samples.Length, region.Length);
+    }
+
+    // --- 結合した区間の足切り (T125) ---
+    //
+    // 足切りは結合後の区間の幅ではなく、結合「前」のラン（連続有声窓のかたまり）を見る。
+    // 幅で判定すると、0.1 秒の物音が結合幅の中に 2 つあるだけで 0.2 秒を超えてしまい、
+    // 中身の大半が無音の区間が Whisper に渡っていた。
+
+    [Fact]
+    public void SplitVoicedRegions_TwoClicksWithinMergeGap_AreDropped()
+    {
+        // 0.1 秒のクリック音 2 つ。結合されて span は 1.1 秒になるが、
+        // 0.2 秒以上続くランが 1 本も無いので区間ごと捨てる。
+        var samples = MakeSamples(16000 * 20, (48000, 1600), (64000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ManyClicksWithinMergeGap_AreDropped()
+    {
+        // クリック音 5 つ＝有声合計 0.5 秒。「有声合計が 0.2 秒以上なら残す」に
+        // 退行すると生き残ってしまうため、合計では判定していないことを固定する。
+        var samples = MakeSamples(
+            16000 * 20,
+            (48000, 1600), (64000, 1600), (80000, 1600), (96000, 1600), (112000, 1600));
+
+        var regions = TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default);
+
+        Assert.Empty(regions);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_ClickNearUtterance_KeepsMergedRegion()
+    {
+        // 0.5 秒の発話の 1.9 秒後に 0.1 秒の物音。結合されて 1 区間になる。
+        // 有声密度（0.6 / 2.5 = 0.24）で切ると実体のある発話まで巻き添えで消えるため、
+        // 密度ではなく「0.2 秒以上のランを含むか」で判定している。
+        var samples = MakeSamples(16000 * 20, (48000, 8000), (86400, 1600));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(88000 + 3200, region.Start + region.Length);
+    }
+
+    [Fact]
+    public void SplitVoicedRegions_SustainedRunAtExactMinimum_IsKept()
+    {
+        // ちょうど 0.2 秒のランと 0.1 秒の物音。判定は「以上」なので発話側が実体とみなされ、
+        // 区間は残る。`>=` を `>` に変えるとこのテストが落ちる。
+        var samples = MakeSamples(16000 * 20, (48000, 3200), (64000, 1600));
+
+        var region = Assert.Single(
+            TranscriptionService.SplitVoicedRegions(samples, SilenceCutOptions.Default));
+
+        Assert.Equal(48000 - 3200, region.Start);
+        Assert.Equal(65600 + 3200, region.Start + region.Length);
+    }
+
+    // --- 確定済みの行の書き出し (T126) ---
+    //
+    // ProcessChunk はキャンセル・例外で区間ループを抜けたあとも、確定済みの行を
+    // 必ずここへ通す。ヘルパーが例外を投げるとワーカースレッドごと落ちるため、
+    // 失敗は戻り値で返す契約になっている。
+
+    [Fact]
+    public void AppendTranscriptLines_EmptyList_DoesNotCreateFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, []);
+
+        Assert.Null(failure);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_AppendsToExistingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.txt");
+        File.WriteAllLines(path, ["[00:00:01 - 00:00:02] [マイク] 既存の行"]);
+        try
+        {
+            var failure = TranscriptionService.AppendTranscriptLines(
+                path, ["[00:00:03 - 00:00:04] [マイク] 追加の行"]);
+
+            Assert.Null(failure);
+            Assert.Equal(
+                [
+                    "[00:00:01 - 00:00:02] [マイク] 既存の行",
+                    "[00:00:03 - 00:00:04] [マイク] 追加の行"
+                ],
+                File.ReadAllLines(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AppendTranscriptLines_MissingDirectory_ReturnsError()
+    {
+        // 書き出しに失敗しても例外を投げない（投げると TranscriptionLoop まで抜けて
+        // ワーカースレッドが死に、以降のチャンクが全部落ちる）
+        var path = Path.Combine(
+            Path.GetTempPath(), $"acapp-nodir-{Guid.NewGuid():N}", "live.txt");
+
+        var failure = TranscriptionService.AppendTranscriptLines(path, ["行"]);
+
+        Assert.NotNull(failure);
+    }
+
+    // --- 発話時間帯の組み立て (T137 / REQ-TRX-DIA-13) ---
+
+    // (テキスト, 開始, 終了)。開始・終了は whisper.cpp と同じ 10ms 単位。
+    private static (string?, long, long) Tok(string? text, long start, long end) => (text, start, end);
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesSpecialTokens()
+    {
+        // [_BEG_] や [_TT_nnn] は発話ではない。WhisperToken に判別用のメンバーが無いため
+        // テキストの形で除いている。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("[_BEG_]", 0, 10), Tok("あ", 10, 20), Tok("[_TT_173]", 20, 30)],
+            TimeSpan.Zero);
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), span.Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), span.End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesZeroLengthTokens()
+    {
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("の", 50, 50), Tok("あ", 100, 120)],
+            TimeSpan.Zero);
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromMilliseconds(1000), span.Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_ExcludesReversedTokens()
+    {
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("壊", 200, 100), Tok("あ", 300, 400)],
+            TimeSpan.Zero);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(3000), Assert.Single(spans).Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_MergesOverlappingAndAdjacent()
+    {
+        // 0-10 と 10-20 は隣接、15-25 は重なる → 1 つにまとまる。40-50 は離れているので別。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("a", 0, 10), Tok("b", 10, 20), Tok("c", 15, 25), Tok("d", 40, 50)],
+            TimeSpan.Zero);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(TimeSpan.Zero, spans[0].Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), spans[0].End);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), spans[1].Start);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), spans[1].End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_UnorderedTokens_AreSortedBeforeMerging()
+    {
+        // トークン時刻は概ね単調だが、それに依存しない。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("d", 40, 50), Tok("a", 0, 10), Tok("b", 10, 20)],
+            TimeSpan.Zero);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(TimeSpan.Zero, spans[0].Start);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_AppliesOffset()
+    {
+        // 区間先頭のオフセットを足して絶対時刻で返す。
+        var spans = TranscriptionService.BuildSpeechSpans(
+            [Tok("あ", 100, 200)],
+            TimeSpan.FromSeconds(30));
+
+        var span = Assert.Single(spans);
+        Assert.Equal(TimeSpan.FromSeconds(31), span.Start);
+        Assert.Equal(TimeSpan.FromSeconds(32), span.End);
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_NoUsableTokens_ReturnsEmpty()
+    {
+        // 空を返すと呼び出し側はセグメント範囲へ縮退する（従来動作）。
+        Assert.Empty(TranscriptionService.BuildSpeechSpans(
+            [Tok("[_BEG_]", 0, 10), Tok("の", 50, 50)], TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void BuildSpeechSpans_Null_ReturnsEmpty()
+    {
+        Assert.Empty(TranscriptionService.BuildSpeechSpans(null, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("[_BEG_]", true)]
+    [InlineData("[_TT_173]", true)]
+    [InlineData("[_EOT_]", true)]
+    [InlineData("あ", false)]
+    [InlineData("[未確定]", false)]
+    [InlineData(null, false)]
+    public void IsSpecialToken_DetectsWhisperControlTokens(string? text, bool expected)
+    {
+        Assert.Equal(expected, TranscriptionService.IsSpecialToken(text));
+    }
+
+    // --- 文字起こしの言語 (T153 / REQ-TRX-10) ---
+
+    [Fact]
+    public void Languages_Live_DoesNotOfferAutoDetection()
+    {
+        // ライブ経路は 20 秒チャンクで言語検出が誤りやすいと考えられるが、
+        // その誤検出率を実測していないため選択肢に出さない（T153 D2）
+        Assert.DoesNotContain(
+            TranscriptionLanguages.ForLive,
+            l => string.Equals(l.Code, TranscriptionLanguages.Auto, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Languages_File_OffersAutoDetection()
+    {
+        Assert.Contains(
+            TranscriptionLanguages.ForFile,
+            l => string.Equals(l.Code, TranscriptionLanguages.Auto, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Languages_AllOptions_HaveCodeAndDisplayName()
+    {
+        // 空の項目が紛れ込むと、ドロップダウンに選べない空行が出る
+        foreach (var language in TranscriptionLanguages.ForLive.Concat(TranscriptionLanguages.ForFile))
+        {
+            Assert.False(string.IsNullOrWhiteSpace(language.Code));
+            Assert.False(string.IsNullOrWhiteSpace(language.DisplayName));
+        }
+    }
+
+    [Fact]
+    public void Languages_FirstOption_IsJapanese()
+    {
+        // 既定値・フォールバック先が従来のハードコード（"ja"）と同じであること
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.ForLive[0].Code);
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.ForFile[0].Code);
+    }
+
+    [Theory]
+    [InlineData("fr")]
+    [InlineData("japanese")]
+    [InlineData("!!")]
+    public void NormalizeForLive_UnknownCode_FallsBackToJapanese(string code)
+    {
+        // settings.json は手編集され得る。未知の値で Whisper を呼ぶと実行時まで気付けない
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForLive(code));
+    }
+
+    [Fact]
+    public void NormalizeForLive_Auto_FallsBackToJapanese()
+    {
+        // ライブでは自動判定を選べないため、書かれていても採らない（T153 D5）
+        Assert.Equal(
+            TranscriptionLanguages.Japanese,
+            TranscriptionLanguages.NormalizeForLive(TranscriptionLanguages.Auto));
+    }
+
+    [Fact]
+    public void NormalizeForFile_Auto_IsKept()
+    {
+        Assert.Equal(
+            TranscriptionLanguages.Auto,
+            TranscriptionLanguages.NormalizeForFile(TranscriptionLanguages.Auto));
+    }
+
+    [Fact]
+    public void NormalizeForFile_UnknownCode_FallsBackToJapanese()
+    {
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForFile("zz"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Normalize_NullOrBlank_FallsBackToJapanese(string? code)
+    {
+        // 既存の settings.json にはキーが無い。従来どおり日本語で動くこと
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForLive(code));
+        Assert.Equal(TranscriptionLanguages.Japanese, TranscriptionLanguages.NormalizeForFile(code));
+    }
+
+    [Fact]
+    public void Normalize_MixedCaseAndPadding_IsAccepted()
+    {
+        Assert.Equal(TranscriptionLanguages.English, TranscriptionLanguages.NormalizeForLive(" EN "));
     }
 }

@@ -14,9 +14,9 @@ audio-capture-app/                    ← リポジトリルート ＝ .NET ソ�
 │  Directory.Packages.props           Central Package Management（バージョン一元管理）
 │  .editorconfig                      root=true。書式・命名・ルール別 severity
 │  CLAUDE.md                          常時ロードされるプロジェクトの法
-├─ AudioCaptureApp/                   WPF 本体（net8.0-windows, WinExe）
+├─ AudioCaptureApp/                   WPF 本体（net10.0-windows, WinExe）
 │  ├─ Models/ ViewModels/ Services/ Controls/ assets/
-├─ AudioCaptureApp.Tests/             xUnit テスト（net8.0-windows）
+├─ AudioCaptureApp.Tests/             xUnit テスト（net10.0-windows）
 ├─ docs/
 │  ├─ harness/                        ← 規範（この文書群）
 │  ├─ spec/                           現行仕様書（唯一の正）
@@ -100,7 +100,8 @@ CPM 導入前はテストプロジェクトが本体より古いバージョン�
 
 - ビルド／テスト／format のコマンドはすべて `AudioCaptureApp.slnx` を対象にする。
 - **`.sln` を参照するコマンドやスクリプトを書かないこと。** 存在しないファイルを指すため失敗する。
-- `.slnx` の読み込みには .NET SDK 9 以降が必要。CI の `DOTNET_VERSION` を下げないこと。
+- `.slnx` の読み込みには .NET SDK 9 以降が必要。ターゲットが `net10.0-windows` のため CI は
+  `DOTNET_VERSION: 10.0.x` を使う。これを下げないこと。
 
 ## 7. パッケージを追加するとき
 

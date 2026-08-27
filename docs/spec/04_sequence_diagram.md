@@ -28,10 +28,17 @@ sequenceDiagram
 
     VM->>ACS: RefreshDevices()
     ACS-->>VM: CaptureDevices / RenderDevices
-    VM->>VM: 前回選択デバイスを復元（無ければ既定/先頭デバイス）
+    VM->>VM: 前回選択デバイスを復元（マイクは無ければ既定/先頭デバイス）
     VM->>ACS: StartMicMonitor(SelectedCaptureDevice)
     ACS->>ACS: WasapiCapture 開始・AudioEndpointVolume 初期同期
     ACS-->>VM: IsMicMuted（OS側の現在値）
+
+    opt SelectedRenderDevice != null
+        VM->>ACS: StartLoopbackMonitor(SelectedRenderDevice)
+        ACS->>ACS: WasapiLoopbackCapture 開始（録音と独立・常時稼働）
+        ACS-->>VM: false なら StatusMessage に機能低下を表示
+    end
+
     MW->>VM: DataContext = VM
 ```
 
@@ -47,7 +54,7 @@ sequenceDiagram
 
     User->>VM: 「録音開始」クリック (StartRecordingCommand)
     VM->>ACS: StartRecording(mic, loopback, outputFolder)
-    ACS->>ACS: SetupLoopbackCapture(loopback) ※マイクは常時稼働中のため対象外
+    Note over ACS: マイク・スピーカーとも常時モニタ稼働中のため<br/>ここでキャプチャの生成は行わない
     ACS->>ACS: SetupMixer() フォーマット決定・MixingSampleProvider構築
     ACS->>ACS: ファイル名生成 (yyyyMMdd_HHmmss.mp3) / フォルダ作成
     ACS->>Lame: new LameMP3FileWriter(filePath, format, STANDARD)
@@ -58,8 +65,7 @@ sequenceDiagram
         TS->>TS: WhisperTranscription スレッド起動
     end
 
-    ACS->>ACS: _micBuffer.ClearBuffer()
-    ACS->>ACS: _loopbackCapture.StartRecording()
+    ACS->>ACS: _micBuffer.ClearBuffer() / _loopbackBuffer.ClearBuffer()
     ACS->>ACS: AudioMixerWriter スレッド起動 (WriterLoop)
     ACS-->>VM: 開始時刻 (DateTime)
     VM->>VM: IsRecording = true / ElapsedTime 更新開始 (_clockTimer)
@@ -92,14 +98,17 @@ sequenceDiagram
     end
 
     Note over TS: 別スレッド (WhisperTranscription) が1秒毎にポーリング
-    TS->>TS: Pcm16kBuffer が20秒分(閾値)に到達したソースを検出
-    TS->>TS: IsSilent() 判定
-    alt 無音でない
-        TS->>TS: WhisperProcessor.ProcessAsync(chunk)
-        TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形
-        TS->>TS: File.AppendAllLines(outputPath, results)
-        TS-->>VM: SegmentTranscribed イベント（必要に応じ購読側でUI通知）
+    TS->>TS: 確定条件を満たしたソースを検出（20秒到達 / 末尾に2秒の無音 / 供給が5秒途絶）
+    TS->>TS: SplitVoicedRegions() で有声区間に分割
+    loop 有声区間ごと
+        TS->>TS: WhisperProcessor.ProcessAsync(region)
+        TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
+        TS-->>VM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
+        VM->>VM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（100 行超は先頭から破棄）
+        Note over VM: 文字起こし表示ウィンドウが開いていれば最新行が見える（REQ-LIVEVIEW-03）
     end
+    Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る
+    TS->>TS: AppendTranscriptLines(outputPath, results)（results が空でなければ）
 ```
 
 ## 4. 録音停止
@@ -112,7 +121,7 @@ sequenceDiagram
     participant TS as TranscriptionService
 
     User->>VM: 「停止」クリック (StopRecordingCommand)
-    VM->>VM: IsStopping = true / LoopbackLevelDb = -60 / _clockTimer.Stop()
+    VM->>VM: IsStopping = true / _clockTimer.Stop()
     VM->>ACS: StopRecording() ※ Task.Run 上で実行
 
     ACS->>ACS: _isWriting = false
@@ -122,7 +131,7 @@ sequenceDiagram
     TS->>TS: スレッド終了待機 (最大30秒、超過時はキャンセルして5秒待機)
     TS-->>ACS: 完了
 
-    ACS->>ACS: CleanupLoopback() (WasapiLoopbackCapture 破棄)
+    Note over ACS: マイク・スピーカーの常時モニタは停止しない<br/>（レベルメーターは録音停止後も動き続ける）
     ACS->>ACS: Mp3Writer.Dispose()
     alt データが一度も書き込まれなかった
         ACS->>ACS: MP3ファイルを削除 / CurrentSession = null
@@ -175,6 +184,8 @@ sequenceDiagram
     participant VM as MainViewModel
     participant TS as TranscriptionService
 
+    participant OW as FileTranscriptionOptionsWindow
+
     alt ダイアログから選択
         User->>VM: 「音声ファイルから文字起こし」クリック
         VM->>VM: OpenFileDialog 表示 (*.wav / *.mp3)
@@ -182,25 +193,50 @@ sequenceDiagram
     else ドラッグ＆ドロップ
         User->>MW: 音声ファイルをドロップ
         MW->>MW: TryGetSingleDroppedFile()
-        MW->>VM: TranscribeDroppedFileAsync(filePath)
+        MW->>VM: TranscribeDroppedFile(filePath)
         VM->>VM: CanTranscribeFromFile / 拡張子チェック
     end
 
-    VM->>VM: RunFileTranscriptionAsync(filePath)
-    VM->>VM: IsTranscribingFile = true
-    VM->>TS: TranscribeFileAsync(filePath, progress, token) ※Task.Run上
+    Note over VM,OW: REQ-TRX-FILE-09: すぐに処理を始めず、オプション指定ダイアログを挟む
+    VM->>VM: 対象パスを保持 / FileTranscriptionFileName を設定
+    VM-->>MW: FileTranscriptionRequested イベント
+    MW->>OW: new FileTranscriptionOptionsWindow(vm) { Owner = MainWindow }
+    MW->>OW: ShowDialog()（モーダル）
 
-    TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
-    loop 閾値(20秒)到達毎
-        TS->>TS: IsSilent() 判定 → WhisperProcessor.ProcessAsync()
-        TS->>TS: {入力ファイル名}.transcript.txt に追記
-        TS-->>VM: progress.Report(processed, total)
-        VM->>VM: FileTranscriptionStatus 更新
+    alt 「キャンセル」または ✕（開始前）
+        User->>OW: キャンセル
+        OW-->>MW: 閉じる（処理は行わない）
+    else 「開始」
+        User->>OW: 開始時刻 hh:mm を入力（空欄可）
+        Note over OW: 書式が不正な間は「開始」を無効化（REQ-TRX-FILE-10）
+        User->>OW: 「開始」クリック
+        OW->>VM: StartFileTranscriptionAsync()
     end
 
-    alt ユーザーが「中止」をクリック
+    VM->>VM: TryParseStartTime() → startOffset
+    VM->>VM: RunFileTranscriptionAsync(filePath, startOffset)
+    VM->>VM: IsTranscribingFile = true（ダイアログが進捗表示へ切り替わる）
+    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token) ※Task.Run上
+
+    Note over TS: diarization が null（＝話者ダイアライゼーション無効）なら以下の従来経路。<br/>非 null のときは §6.1 の経路を通る
+    TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
+    loop 閾値(20秒)到達毎
+        TS->>TS: SplitVoicedRegions() で有声区間に分割
+        loop 有声区間ごと
+            TS->>TS: WhisperProcessor.ProcessAsync(region)
+            TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（startOffset + chunkOffset + 区間先頭のオフセット を基準に加算）
+            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
+        end
+        TS->>TS: FlushAsync()
+        TS-->>VM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）
+        VM->>VM: FileTranscriptionStatus / FileTranscriptionProgress 更新
+    end
+
+    alt ユーザーが「中止」をクリック（オプション指定ダイアログのみ。REQ-TRX-FILE-07）
         User->>VM: CancelFileTranscription()
+        VM->>VM: IsFileTranscriptionCancelRequested = true（「中止」を無効化し、注記を出す。REQ-TRX-FILE-07）
         VM->>TS: CancellationTokenSource.Cancel()
+        Note over VM,TS: 実際に止まるのは推論の境界（REQ-TRX-DIA-12）。<br/>それまで進捗の報告は続き、注記は別の行なので消えない。
         TS->>TS: OperationCanceledException 捕捉 → 出力ファイル削除
         TS-->>VM: throw OperationCanceledException
         VM->>VM: FileTranscriptionStatus = "中止しました"
@@ -210,7 +246,67 @@ sequenceDiagram
     end
 
     VM->>VM: IsTranscribingFile = false
+    VM-->>OW: StartFileTranscriptionAsync() の await が完了
+    OW->>OW: Close()（完了・失敗・中止のいずれでも自動で閉じる。REQ-TRX-FILE-12）
+
+    Note over MW,OW: 処理中にダイアログを ✕ で閉じようとしたら「中止して閉じるか」を確認する。<br/>はいならその時点で中止し、完了は待たずに閉じる（REQ-TRX-FILE-13）。<br/>メインウィンドウに進捗表示と「中止」は無い（T151 で削除。REQ-TRX-FILE-06 / 07）。<br/>閉じたあと中止が完了するまでの経過はステータスバーの 1 行で分かる
 ```
+
+### 6.1 話者ダイアライゼーション有効時（REQ-TRX-DIA-*）
+
+`SpeakerDiarizationEnabled = true` のときだけこの経路を通る。無効時は §6 の従来経路がそのまま走る。
+
+```mermaid
+sequenceDiagram
+    participant VM as MainViewModel
+    participant TS as TranscriptionService
+    participant SD as SpeakerDiarizationService
+    participant M as TranscriptDiarizationMerger
+
+    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token)
+
+    Note over TS: ① デコード（1 回だけ）
+    TS->>TS: AudioFileReader → ダウンミックス+LPF+リサンプル → 16kHz モノラル PCM 全体（NFR-07）
+
+    Note over TS,SD: ② 話者ダイアライゼーションを先に走らせる<br/>モデル不備は Whisper を回す前に判明させたいため（REQ-TRX-DIA-11）
+    TS->>TS: token.ThrowIfCancellationRequested()（REQ-TRX-DIA-12）
+    TS->>SD: Diarize(pcm, progress, token)
+    SD->>SD: 初回のみ: 両モデルの File.Exists を検査（REQ-TRX-DIA-08）
+    Note over SD: 検査を省くとネイティブが NULL ハンドルを返し、<br/>その後の呼び出しでアクセス違反（catch 不能）になる
+    SD->>SD: OfflineSpeakerDiarization 生成（lock 内・以後は使い回す。REQ-TRX-DIA-10）
+    SD->>SD: SampleRate == 16000 を検証（REQ-TRX-DIA-09）
+    SD->>SD: ProcessWithCallback(pcm, 進捗コールバック)
+    SD-->>TS: 進捗コールバック（0.0〜1.0）
+    TS-->>VM: progress.Report("話者識別中", processed, total)
+    SD-->>TS: SpeakerSegment[]（Start / End / 0 始まりの SpeakerId）
+    TS->>TS: token.ThrowIfCancellationRequested()
+
+    Note over TS: ③ Whisper は同じ PCM を独立に解析する（REQ-TRX-DIA-04）
+    loop 20秒チャンク → 有声区間ごと
+        TS->>TS: WhisperProcessor.ProcessAsync(region)
+        TS->>TS: トークン時刻から発話時間帯を作る（特殊トークン・長さ0を除き、重なりは結合）
+        TS->>TS: TranscriptSegment（ファイル先頭基準の時刻＋発話時間帯）として溜める
+        TS-->>VM: progress.Report("処理中", processed, total)
+    end
+
+    Note over TS,M: ④ タイムラインを突き合わせる
+    TS->>M: Merge(transcriptSegments, speakerSegments)
+    M->>M: 重複長が最大の話者を選ぶ。同値なら小さい ID。重複ゼロなら話者不明（REQ-TRX-DIA-05）
+    Note over M: 重複は**発話時間帯の合計**で測る。セグメントの余白は数えない（REQ-TRX-DIA-13）
+    M-->>TS: SpeakerAttributedSegment[]
+
+    Note over TS: ⑤ ここで初めてファイルへ書く（確定処理。ここではキャンセルを見ない）
+    TS->>TS: [時刻] [ファイル] [話者N] テキスト を .transcript.txt へ書き出す
+    TS-->>VM: SegmentTranscribed（行ごと。表示ウィンドウへ）
+    TS-->>VM: true
+```
+
+> **逐次表示のタイミングが変わる。** 話者の割り当てはタイムライン全体が揃うまで確定できないため、
+> 有効時の `SegmentTranscribed` は最後の書き出し（⑤）でまとめて発火する。無効時は従来どおり
+> 1 セグメント確定するたびに発火する。
+>
+> **Diarization が失敗した場合は文字起こしごと中止する**（REQ-TRX-DIA-11）。
+> 話者欄が黙って欠けた `.transcript.txt` を作らないためである。
 
 ## 7. 文字起こし GPU 使用設定の切り替え
 
@@ -228,10 +324,13 @@ sequenceDiagram
 
     VM->>TS: LoadModel(modelPath, requestGpu)
     TS->>TS: DisposeProcessor() (既存モデル破棄)
-    TS->>TS: GPU優先順で読み込み試行 → 実利用ライブラリ判定
-    alt requestGpu == false かつ GPU利用可能と判定
-        TS->>TS: 破棄してCPU限定順で再読み込み
-    end
+    TS->>TS: RuntimeLibraryOrder = GPU優先順<br/>※実際に効くのはプロセス内で最初の読み込みのみ
+    TS->>TS: LogProvider.AddLogger(...) で読み込み中だけネイティブログを購読
+    TS->>TS: FromPath(modelPath, WhisperFactoryOptions{UseGpu = requestGpu})
+    TS->>TS: CreateBuilder() を 1 度呼ぶ<br/>※FromPath は読み込み失敗を例外にしないため
+    TS->>TS: 購読解除。ログから backends 数と重みの配置先を取得
+    TS->>TS: GpuAvailable = GPU版ランタイム かつ backends >= 2<br/>実行先 = 重みの配置先が CPU 以外か
+    TS-->>VM: RuntimeInfo("GPU (Vulkan)" / "CPU")
     TS-->>VM: (Success, GpuAvailable)
 
     alt Success

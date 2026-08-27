@@ -37,9 +37,9 @@
 | `CLAUDE.md` | 常時ロードされるプロジェクトの法 | influence（強） | リポジトリルート |
 | `docs/harness/*.md` | 規範の本体（この文書群） | influence | Markdown |
 | `docs/harness/templates/` | タスク票・ADR・仕様変更の様式 | influence | Markdown |
-| `.claude/hooks/guard-source-edit.ps1` | タスク未起票・仕様書未更新のソース編集を **ask** で止める | **enforcement** | PowerShell |
+| `.claude/hooks/guard-source-edit.ps1` | 保護ブランチ（`develop` / `main`）上のソース編集を **deny**。タスク未起票・仕様書未更新のソース編集を **ask** で止める | **enforcement** | PowerShell |
 | `.claude/hooks/protect-commands.ps1` | 破壊的コマンドと git 操作を **deny / ask** する | **enforcement** | PowerShell |
-| `.claude/hooks/session-start-context.ps1` | セッション開始時に法と進行中タスクを注入する | influence（自動） | PowerShell |
+| `.claude/hooks/session-start-context.ps1` | セッション開始時に法・現在ブランチ・進行中タスクを注入する | influence（自動） | PowerShell |
 | `Directory.Build.props` | アナライザー全開＋警告をエラー化 | **enforcement** | MSBuild |
 | `Directory.Packages.props` | NuGet バージョンの一元管理（CPM） | **enforcement** | MSBuild |
 | `.editorconfig` | 書式・命名・ルール別 severity | **enforcement** | EditorConfig |
@@ -60,7 +60,7 @@
 | [00-ways-of-working.md](./00-ways-of-working.md) | 4 つの法の本文。守るべきことの全体。 |
 | [10-workflow.md](./10-workflow.md) | 起票 → 仕様 → 実装 → ゲート → 完了 の作業手順。 |
 | [20-architecture-standards.md](./20-architecture-standards.md) | 3 層構成・依存方向・スレッドモデルの規範。 |
-| [30-coding-standards.md](./30-coding-standards.md) | C# 12 / .NET 8 のコーディング標準。 |
+| [30-coding-standards.md](./30-coding-standards.md) | C# 14 / .NET 10 のコーディング標準。 |
 | [40-quality-gates.md](./40-quality-gates.md) | 品質ゲートの定義・実行コマンド・既知の穴。 |
 | [50-spec-standards.md](./50-spec-standards.md) | `docs/spec/` の章立てと更新義務。 |
 | [60-task-format.md](./60-task-format.md) | タスク票の様式と状態遷移。 |
