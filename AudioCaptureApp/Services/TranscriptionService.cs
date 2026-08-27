@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -758,11 +758,14 @@ public class TranscriptionService : IDisposable
         return true;
     }
 
+    // internal なのは、中止の注記をどちらの文言にするかを ViewModel がフェーズで
+    // 決めるためである（REQ-TRX-FILE-07）。表示名をここだけで持ち、写しを作らない。
+
     /// <summary>進捗表示に出すフェーズ名（REQ-TRX-FILE-06）。</summary>
-    private const string TranscribePhase = "処理中";
+    internal const string TranscribePhase = "処理中";
 
     /// <summary>進捗表示に出すフェーズ名（話者ダイアライゼーション有効時のみ現れる）。</summary>
-    private const string DiarizePhase = "話者識別中";
+    internal const string DiarizePhase = "話者識別中";
 
     /// <summary>ファイル文字起こしの出力行に付けるラベル。</summary>
     internal const string FileSourceLabel = "ファイル";

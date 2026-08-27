@@ -153,6 +153,21 @@
                              Value="{Binding FileTranscriptionProgress, Mode=OneWay}"/>
                 <TextBlock Text="{Binding FileTranscriptionStatus}"
                            Style="{StaticResource Text.Label}" Margin="0,8,0,0"/>
+
+                <!-- REQ-TRX-FILE-07: 「中止」を押したことを残す行。進捗行とは別に置く —
+                     同じ行へ書くと次の進捗通知で上書きされて消えるためである。 -->
+                <TextBlock Text="{Binding FileTranscriptionCancelNotice}" Margin="0,4,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Hint}">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsFileTranscriptionCancelRequested}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </StackPanel>
         </Border>
 

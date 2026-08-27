@@ -29,7 +29,7 @@
                 <TextBlock Text="録音" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
 
                 <TextBlock Text="保存先フォルダ" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
-                <Grid Margin="0,0,0,12">
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -41,16 +41,8 @@
                             Command="{Binding SelectOutputFolderCommand}"/>
                 </Grid>
 
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="入力デバイスの一覧を取り直す"
-                               Style="{StaticResource Text.Label}"/>
-                    <Button Grid.Column="1" Content="一覧を更新"
-                            Command="{Binding RefreshDevicesCommand}"/>
-                </Grid>
+                <!-- REQ-SETWIN-03: デバイス一覧の「更新」はここに置かない（T158 で外した）。
+                     選び直す先のコンボボックスから離れるため、置き場はメインウィンドウである（REQ-DEV-01）。 -->
             </StackPanel>
         </Border>
 

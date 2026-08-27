@@ -7,7 +7,7 @@
         xmlns:controls="clr-namespace:AudioCaptureApp.Controls"
         mc:Ignorable="d"
         Title="音声キャプチャ"
-        Width="480" Height="374"
+        Width="480" Height="404"
         ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen"
         AllowDrop="True"
@@ -97,6 +97,13 @@
                         <controls:LevelMeterControl Grid.Row="1" Grid.Column="1" Margin="0,4,0,0"
                                                     Level="{Binding LoopbackLevelDb}"/>
                     </Grid>
+
+                    <!-- REQ-DEV-01: 一覧の取り直しは、選び直す先のコンボボックスと同じカードに置く。
+                         録音中・停止処理中・ファイル文字起こし中は押せない（CanRefreshDevices）。 -->
+                    <Button Content="一覧を更新" Margin="0,8,0,0"
+                            Style="{StaticResource Button.Small}"
+                            HorizontalAlignment="Right"
+                            Command="{Binding RefreshDevicesCommand}"/>
 
                     <Border Style="{StaticResource Card.Divider}"/>
 

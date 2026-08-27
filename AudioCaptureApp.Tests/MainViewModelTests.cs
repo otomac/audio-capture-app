@@ -1,4 +1,5 @@
-using System.Globalization;
+﻿using System.Globalization;
+using AudioCaptureApp.Services;
 using AudioCaptureApp.ViewModels;
 
 namespace AudioCaptureApp.Tests;
@@ -567,6 +568,45 @@ public class MainViewModelTests
 
         Assert.NotNull(message);
         Assert.Contains("中止して閉じますか", message, StringComparison.Ordinal);
+    }
+
+    // --- 中止を要求したときの注記 (T157 / T160 / REQ-TRX-FILE-07) ---
+
+    [Fact]
+    public void IsDiarizationPhase_DiarizePhase_IsTrue()
+    {
+        // フェーズ名は TranscriptionService だけが持ち、ViewModel は写しを作らない
+        Assert.True(MainViewModel.IsDiarizationPhase(TranscriptionService.DiarizePhase));
+    }
+
+    [Fact]
+    public void IsDiarizationPhase_TranscribePhase_IsFalse()
+    {
+        // T160 の不具合そのもの。話者識別が有効でも Whisper のフェーズは通るため、
+        // ここを true にすると「処理中」に「話者識別が終わるまで待て」と出てしまう
+        Assert.False(MainViewModel.IsDiarizationPhase(TranscriptionService.TranscribePhase));
+    }
+
+    [Fact]
+    public void FileTranscriptionCancelNoticeFor_WaitingForDiarization_MentionsSpeakerIdentification()
+    {
+        // 話者識別中は、中止が効くのは推論が終わったあと（REQ-TRX-DIA-12）。
+        // 数十秒〜数分待たされるので、何を待っているのかを名指しする。
+        var notice = MainViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: true);
+
+        Assert.Contains("中止を要求しました", notice, StringComparison.Ordinal);
+        Assert.Contains("話者識別", notice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FileTranscriptionCancelNoticeFor_NotWaitingForDiarization_DoesNotMentionSpeakerIdentification()
+    {
+        // Whisper の「処理中」や準備中に「話者識別の完了を待て」と言うのは事実に反する。
+        // Whisper はチャンクと有声区間の境目ごとにキャンセルを見るので数秒で止まる
+        var notice = MainViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: false);
+
+        Assert.Contains("中止を要求しました", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("話者識別", notice, StringComparison.Ordinal);
     }
 
     // --- 話者識別の状態表示 (T152 / REQ-TRX-DIA-15) ---
