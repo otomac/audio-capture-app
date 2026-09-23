@@ -1,6 +1,6 @@
 # ADR-0005 — `MainViewModel` を分割するか（ADR-0002 の再評価）
 
-> **状態:** 承認済み
+> **状態:** 承認済み（規則 1〜3 は有効。規則 4 の再評価契機①②には 2026-09-22 に到達し、[ADR-0006](./0006-mainviewmodel-split-reevaluation.md) で処理した）
 > **日付:** 2026-08-27（起草 2026-08-26）
 > **関連タスク:** [T155](../tasks/T155-viewmodel-split-adr.md)（本 ADR）/ [T154](../tasks/T154-ui-refresh.md)（本 ADR の結論を待って再開）
 > **関連 ADR:** [ADR-0001](./0001-baseline-architecture.md)（3 層 / DI なし / 抽象なし）、

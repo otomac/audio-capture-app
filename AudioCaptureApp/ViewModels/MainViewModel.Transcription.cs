@@ -60,6 +60,22 @@ public partial class MainViewModel
         _ => "話者識別: 無効"
     };
 
+    /// <summary>
+    /// 起動時に判定した話者識別の状態（REQ-TRX-DIA-15）。以後変わらない。
+    /// ダイアログの「話者識別を行う」を操作できるかの根拠にも使う（REQ-TRX-DIA-16）。
+    /// </summary>
+    private readonly DiarizationAvailability _diarizationAvailability;
+
+    /// <summary>
+    /// ダイアログで「話者識別を行う」を操作できるか（REQ-TRX-DIA-16）。
+    /// **①有効のときだけ** true。②モデル未配置・③無効は OFF 固定にする。
+    /// </summary>
+    internal static bool IsDiarizationSelectable(DiarizationAvailability availability)
+        => availability == DiarizationAvailability.Available;
+
+    /// <summary>「話者識別を行う」の操作可否（REQ-TRX-DIA-16）。起動後は変わらない。</summary>
+    public bool CanChooseFileDiarization => IsDiarizationSelectable(_diarizationAvailability);
+
     /// <summary>状態表示のツールチップ。状態ごとに次の一手が分かるようにする。</summary>
     internal static string DiarizationTooltipFor(DiarizationAvailability availability) => availability switch
     {
@@ -182,23 +198,8 @@ public partial class MainViewModel
         TryLoadWhisperModel();
     }
 
-    private bool CanSelectWhisperModel => !IsRecording && !IsStopping && !IsTranscribingFile;
-
-    [RelayCommand(CanExecute = nameof(CanSelectWhisperModel))]
-    private void SelectWhisperModel()
-    {
-        var dialog = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Whisperモデルファイルを選択",
-            Filter = "GGMLモデル (*.bin)|*.bin|すべてのファイル (*.*)|*.*"
-        };
-        if (dialog.ShowDialog() == true)
-        {
-            WhisperModelPath = dialog.FileName;
-            TryLoadWhisperModel();
-            SaveSettings();
-        }
-    }
+    // モデルの選択は登録一覧のドロップダウン（MainViewModel.WhisperModels.cs、REQ-MODELWIN-07）で行う。
+    // パスを直接選ぶ「選択」ボタンは T162 で廃止した。
 
     private bool _isLoadingModel;
 

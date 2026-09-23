@@ -88,12 +88,43 @@ classDiagram
         +string LastResultPath
         +string SpeakerDiarizationStatus
         +string SpeakerDiarizationTooltip
+        +ObservableCollection~WhisperModelEntry~ WhisperModels
+        +WhisperModelEntry? SelectedWhisperModel
+        +WhisperModelEntry? ManagedWhisperModel
+        +WhisperModelEntry? SelectedFileWhisperModel
+        +string FileTranscriptionModelError
+        +string EditingModelName
+        +string EditingModelPath
+        +string WhisperModelError
+        +bool IsEditingWhisperModel
+        +bool FileDiarizationEnabled
+        +bool AutoStartRecordingEnabled
+        +bool IsAutoStartedRecording
+        +bool IsModalDialogOpen
+        +double TranscriptionPendingSeconds
+        +bool IsStopAbortRequested
+        +AbortStop()
+        +string MetadataMeetingName
+        +string MetadataHeldAt
+        +string MetadataParticipantsText
+        +string MetadataTargetName
+        +CompleteRecordingMetadata(bool)
+        +bool CanChooseFileDiarization
+        +IReadOnlyList~SpeakerCountOption~ SpeakerCountOptions
+        +SpeakerCountOption SelectedSpeakerCount
         +StartRecording()
         +StopRecordingAsync() Task
         +ShutdownAsync() Task
         +SelectOutputFolder()
         +RefreshDevices()
-        +SelectWhisperModel()
+        +ShowWhisperModels()
+        +BrowseWhisperModelFile()
+        +AddWhisperModel()
+        +RenameWhisperModel()
+        +RemoveWhisperModel()
+        +NewWhisperModel()
+        +MoveWhisperModelUp()
+        +MoveWhisperModelDown()
         +TranscribeFromFile()
         +TranscribeDroppedFile(string)
         +StartFileTranscriptionAsync() Task
@@ -105,6 +136,10 @@ classDiagram
         +DiarizationAvailabilityFor(bool, bool) DiarizationAvailability$
         +DiarizationStatusTextFor(DiarizationAvailability) string$
         +DiarizationTooltipFor(DiarizationAvailability) string$
+        +IsDiarizationSelectable(DiarizationAvailability) bool$
+        +MigrateWhisperModelList(IEnumerable~WhisperModelEntry~?, string?) List~WhisperModelEntry~$
+        +ValidateWhisperModelEntry(IEnumerable~WhisperModelEntry~, string, string, WhisperModelEntry?) string?$
+        +SpeakerCountOptionFor(int?) SpeakerCountOption$
         +BuildExplorerArguments(string) string
         +TryParseStartTime(string, out TimeSpan) bool
         +TryParseRecordedFileNameTime(string, out DateTime) bool$
@@ -118,6 +153,8 @@ classDiagram
         event FileTranscriptionRequested
         event LiveTranscriptRequested
         event SettingsRequested
+        event WhisperModelsRequested
+        event RecordingMetadataRequested
     }
 
     %% ==================== Service層 ====================
@@ -144,6 +181,7 @@ classDiagram
         +StopLoopbackMonitor()
         +SetTranscriptionService(TranscriptionService)
         +StartRecording(AudioDevice, AudioDevice, string) DateTime
+        +RenameSessionFiles(string) string?
         +StopRecording()
         +Dispose()
         +BytesToFloats(byte[], int, WaveFormat) float[]
@@ -162,11 +200,14 @@ classDiagram
         +SilenceCutOptions SilenceCut
         +string LiveLanguage
         +LoadModel(string, bool) ValueTuple~bool,bool~
+        +UnloadModel()
         +RegisterSource(AudioSourceType, string, int, int)
         +StartSession(string, DateTime)
         +AddSamples(AudioSourceType, float[], int)
-        +TranscribeFileAsync(string, TimeSpan, string, SpeakerDiarizationService?, IProgress~FileTranscriptionProgress~, CancellationToken) Task~bool~
+        +TranscribeFileAsync(string, FileTranscriptionOptions, SpeakerDiarizationService?, IProgress~FileTranscriptionProgress~, CancellationToken) Task~FileTranscriptionResult~
         +StopSession()
+        +RequestAbort()
+        +double PendingSeconds
         +Dispose()
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
         +AppendTranscriptLines(string, IReadOnlyList~string~) string
@@ -204,6 +245,22 @@ classDiagram
         +TimeSpan Total
     }
 
+    class FileTranscriptionOptions {
+        <<sealed record>>
+        +TimeSpan StartOffset
+        +string Language
+        +int? KnownSpeakerCount
+        +string? ModelPath
+        +bool UseGpu
+        +string? MeetingName
+    }
+
+    class FileTranscriptionResult {
+        <<sealed record>>
+        +FileTranscriptionOutcome Outcome
+        +string? Message
+    }
+
     class TranscriptionLanguage {
         <<sealed record>>
         +string Code
@@ -227,7 +284,8 @@ classDiagram
         -OfflineSpeakerDiarization _diarization
         -Lock _gate
         +int RequiredSampleRate$
-        +Diarize(float[], IProgress~double~, CancellationToken) IReadOnlyList~SpeakerSegment~
+        +Diarize(float[], int?, IProgress~double~, CancellationToken) IReadOnlyList~SpeakerSegment~
+        +EffectiveSpeakerCount(int?, int?) int?$
         +ModelFilesExist(SpeakerDiarizationOptions) bool$
         +Dispose()
     }
@@ -243,6 +301,36 @@ classDiagram
 
     class SpeakerDiarizationException {
         <<Exception>>
+    }
+
+    class AutoStartOptions {
+        <<sealed record>>
+        +double ThresholdDb
+        +TimeSpan Sustain
+        +TimeSpan Cooldown
+    }
+
+    class RecordingMetadataFile {
+        <<static>>
+        +SanitizeMeetingName(string) string$
+        +WithMeetingName(string, string) string$
+        +BuildMetadataPath(string) string$
+        +ParseParticipants(string) List~string~$
+        +NormalizeParticipants(IEnumerable~string~, string) List~string~$
+        +Write(string, RecordingMetadata)$
+    }
+
+    class AutoStartTrigger {
+        -TimeSpan _sustained
+        +Observe(double, TimeSpan, bool) bool
+        +Reset()
+        +NotifyStopped()
+    }
+
+    class SpeakerCountOption {
+        <<sealed record>>
+        +string DisplayName
+        +int? Count
     }
 
     class TranscriptDiarizationMerger {
@@ -277,6 +365,13 @@ classDiagram
         +string? LastSelectedLoopbackDeviceId
         +bool TranscriptionEnabled
         +string WhisperModelPath
+        +Collection~WhisperModelEntry~ WhisperModelList
+        +string? FileWhisperModelName
+        +bool AutoStartRecordingEnabled
+        +double AutoStartThresholdDb
+        +double AutoStartSustainSeconds
+        +double AutoStartCooldownSeconds
+        +string ParticipantDomainSortedLast
         +bool UseGpuForTranscription
         +double SilenceRmsThreshold
         +double SilenceMergeGapSeconds
@@ -287,6 +382,17 @@ classDiagram
         +double SpeakerClusteringThreshold
         +int? KnownSpeakerCount
         +int SpeakerDiarizationThreads
+    }
+
+    class WhisperModelEntry {
+        +string ModelName
+        +string ModelPath
+    }
+
+    class RecordingMetadata {
+        +string MeetingName
+        +string HeldAt
+        +List~string~ Participants
     }
 
     class TranscriptSegment {
@@ -345,6 +451,13 @@ classDiagram
     TranscriptionService ..> SpeakerDiarizationService : TranscribeFileAsync の引数（保持も破棄もしない）
     TranscriptionService ..> TranscriptDiarizationMerger : Merge を呼ぶ
     TranscriptionService ..> FileTranscriptionProgress : 進捗として報告する
+    TranscriptionService ..> FileTranscriptionOptions : TranscribeFileAsync の引数
+    TranscriptionService ..> FileTranscriptionResult : TranscribeFileAsync が返す
+    MainViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
+    MainViewModel "1" --> "1" AutoStartTrigger : メーターの 50ms タイマーで Observe
+    MainViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形
+    RecordingMetadataFile ..> RecordingMetadata : 書き出す
+    AutoStartTrigger "1" --> "1" AutoStartOptions
 
     MainViewModel "1" --> "0..1" SpeakerDiarizationService : 設定で有効なときだけ生成し Dispose する
 
@@ -361,4 +474,4 @@ classDiagram
 
 > `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath` / `TryGetAudioDuration`（`TranscriptionService`）、`Merge` / `FormatSpeaker`（`TranscriptDiarizationMerger`。クラス自体が `internal static`）、`PeakToDb` / `TryParseStartTime` / `TryParseRecordedFileNameTime` / `InferStartTime` / `CloseConfirmationMessage` / `FileTranscriptionCloseConfirmation` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine` / `AppendLiveTranscriptLines`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
 >
-> `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。各ウィンドウの生成は `MainWindow` のコードビハインドが行い、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested`）で要求を上げるだけである。
+> `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)、[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md)）。各ウィンドウの生成は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` は `SettingsWindow` が生成する）、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `WhisperModelsRequested` / `RecordingMetadataRequested`）で要求を上げるだけである。

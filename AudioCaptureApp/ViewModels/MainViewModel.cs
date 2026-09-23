@@ -31,6 +31,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private DateTime _recordingStartTime;
     private bool _initializing;
+
+    /// <summary>直近の <c>Error</c> イベントの内容（T134）。ファイル文字起こしの失敗表示に併記する。</summary>
+    private string? _lastTranscriptionError;
     private bool _suppressMicMuteWriteBack;
     private bool _suppressUseGpuWriteBack;
 
@@ -53,8 +56,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _audioCaptureService.RecordingError += OnRecordingError;
         _audioCaptureService.MicMuteChangedExternally += OnMicMuteChangedExternally;
         _transcriptionService.Error += msg =>
+        {
+            // T134: 続く「失敗しました」の 1 行に理由を併記するため控えておく（REQ-TRX-FILE-12）。
+            // ワーカースレッドで代入するが、string の代入は原子的で、読むのは継続（UI スレッド）だけ。
+            _lastTranscriptionError = msg;
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
+        };
         _transcriptionService.RuntimeInfo += runtime =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"Whisperランタイム: {runtime}");
@@ -64,8 +72,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings = _settingsService.Load();
         OutputFolder = _settings.OutputFolder;
         TranscriptionEnabled = _settings.TranscriptionEnabled;
-        WhisperModelPath = _settings.WhisperModelPath;
+        // REQ-CFG-08: 旧バージョンの設定（一覧なし・パスだけ）を一覧へ移行し、選択を実パスから引く。
+        foreach (var entry in MigrateWhisperModelList(_settings.WhisperModelList, _settings.WhisperModelPath))
+        {
+            WhisperModels.Add(entry);
+        }
+        SelectedWhisperModel = FindWhisperModel(WhisperModels, _settings.WhisperModelPath);
+        WhisperModelPath = SelectedWhisperModel?.ModelPath ?? string.Empty;
         UseGpuForTranscription = _settings.UseGpuForTranscription;
+
+        // REQ-REC-12 / REQ-CFG-10: 閾値・継続・クールダウンは起動時に固定（UI 無し）。ON/OFF だけが UI にある。
+        _autoStartTrigger = new AutoStartTrigger(new AutoStartOptions(
+            _settings.AutoStartThresholdDb,
+            _settings.AutoStartSustainSeconds,
+            _settings.AutoStartCooldownSeconds,
+            _settings.AutoStartDipGraceSeconds));
+        AutoStartRecordingEnabled = _settings.AutoStartRecordingEnabled;
 
         // REQ-TRX-10: settings.json は手編集され得るので、必ず正規化してから使う。
         // 一覧に無いコードや、ライブ側の "auto" は日本語へ倒れる。
@@ -93,6 +115,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var availability = DiarizationAvailabilityFor(
             _settings.SpeakerDiarizationEnabled,
             SpeakerDiarizationService.ModelFilesExist(diarizationOptions));
+        _diarizationAvailability = availability;
         SpeakerDiarizationStatus = DiarizationStatusTextFor(availability);
         SpeakerDiarizationTooltip = DiarizationTooltipFor(availability);
 
@@ -134,7 +157,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
@@ -145,7 +167,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
@@ -156,7 +177,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectWhisperModelCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
@@ -305,7 +325,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId;
         _settings.TranscriptionEnabled = TranscriptionEnabled;
         _settings.WhisperModelPath = WhisperModelPath;
+        _settings.WhisperModelList.Clear();
+        foreach (var entry in WhisperModels)
+        {
+            _settings.WhisperModelList.Add(entry);
+        }
         _settings.UseGpuForTranscription = UseGpuForTranscription;
+        _settings.AutoStartRecordingEnabled = AutoStartRecordingEnabled;
         _settings.LiveTranscriptionLanguage = SelectedLiveLanguage.Code;
         _settings.FileTranscriptionLanguage = SelectedFileLanguage.Code;
         _settingsService.Save(_settings);

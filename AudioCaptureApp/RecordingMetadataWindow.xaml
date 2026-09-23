@@ -1,0 +1,70 @@
+<Window x:Class="AudioCaptureApp.RecordingMetadataWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="録音のメタデータ"
+        Width="460" SizeToContent="Height"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+
+    <!--
+        REQ-REC-13 / §16: 録音停止後に会議名・実施日時・参加者を入力する。
+        自前の状態を持たず、MainViewModel を DataContext として共有する（ADR-0002 / ADR-0006）。
+        「OK」で JSON を書き、会議名があればファイルを改名する。「キャンセル」なら何も残さない。
+        結果（DialogResult）は MainWindow が受け取り、ViewModel の CompleteRecordingMetadata へ渡す。
+    -->
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="録音ファイル" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding MetadataTargetName}"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding MetadataTargetName}"
+                           Margin="0,0,0,12"/>
+
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="70"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <!-- 会議名（REQ-META-02: ファイル名にも付く） -->
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="会議名" Style="{StaticResource Text.Label}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,6"
+                             Text="{Binding MetadataMeetingName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <!-- 実施日時（自由記述。既定は録音開始〜終了） -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="実施日時" Style="{StaticResource Text.Label}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,6"
+                             Text="{Binding MetadataHeldAt, UpdateSourceTrigger=PropertyChanged}"/>
+                    <!-- 参加者（REQ-META-03 / 04） -->
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="参加者" Style="{StaticResource Text.Label}"
+                               VerticalAlignment="Top" Margin="0,4,0,0"/>
+                    <TextBox Grid.Row="2" Grid.Column="1"
+                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="120"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding MetadataParticipantsText, UpdateSourceTrigger=PropertyChanged}"/>
+                </Grid>
+                <TextBlock Text="会議名を入れると、ファイル名の末尾に「_会議名」が付きます（.mp3 と文字起こしの .txt の両方）。参加者は改行またはカンマで区切ります。"
+                           Style="{StaticResource Text.Caption}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="キャンセルするとメタデータは作らず、ファイル名もそのままです。"
+                           Style="{StaticResource Text.Caption}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="OK" MinWidth="90" Margin="0,0,8,0" IsDefault="True"
+                    Style="{StaticResource Button.Accent}" Click="OkButton_Click"/>
+            <Button Content="キャンセル" MinWidth="90" IsCancel="True"/>
+        </StackPanel>
+    </Grid>
+</Window>

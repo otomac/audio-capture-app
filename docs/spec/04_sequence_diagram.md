@@ -18,6 +18,7 @@ sequenceDiagram
     VM->>SS: Load()
     SS-->>VM: AppSettings
     VM->>VM: OutputFolder / TranscriptionEnabled / WhisperModelPath / UseGpuForTranscription を復元
+    VM->>VM: WhisperModelList を復元（無ければ WhisperModelPath から 1 件へ移行。REQ-CFG-08）<br/>WhisperModelPath と一致する要素を SelectedWhisperModel にする
 
     alt WhisperModelPath が設定済み
         VM->>VM: TryLoadWhisperModel() (非同期)
@@ -128,7 +129,8 @@ sequenceDiagram
     ACS->>ACS: WriterThread の終了を待機 (最大5秒)
     ACS->>TS: StopSession()
     TS->>TS: 残りバッファ(1秒以上)を処理
-    TS->>TS: スレッド終了待機 (最大30秒、超過時はキャンセルして5秒待機)
+    TS->>TS: スレッド終了待機（滞留分を吐き切るまで。上限なし）<br/>「打ち切り」が要求されたらキャンセルして10秒待機
+    Note over VM: 待っている間、メーターのタイマーが PendingSeconds を読み<br/>「停止処理中... 文字起こしの残り N 秒分」を1秒ごとに出す
     TS-->>ACS: 完了
 
     Note over ACS: マイク・スピーカーの常時モニタは停止しない<br/>（レベルメーターは録音停止後も動き続ける）
@@ -142,6 +144,18 @@ sequenceDiagram
 
     VM->>VM: IsRecording = false / IsStopping = false
     VM->>VM: CurrentSession を参照し StatusMessage 更新（保存完了 / 文字起こしファイルの有無）
+
+    opt CurrentSession != null（REQ-REC-13）
+        VM-->>User: RecordingMetadataRequested → MainWindow が RecordingMetadataWindow を ShowDialog
+        alt OK
+            VM->>VM: CompleteRecordingMetadata(true)
+            VM->>ACS: RenameSessionFiles(会議名) ※会議名があるとき。.mp3 と .txt を改名
+            VM->>VM: RecordingMetadataFile.Write(同名の .json)
+            VM->>VM: LastResultPath を改名後のパスへ
+        else キャンセル
+            VM->>VM: 何も残さない
+        end
+    end
 ```
 
 ## 5. マイクミュートの双方向同期
@@ -216,7 +230,10 @@ sequenceDiagram
     VM->>VM: TryParseStartTime() → startOffset
     VM->>VM: RunFileTranscriptionAsync(filePath, startOffset)
     VM->>VM: IsTranscribingFile = true（ダイアログが進捗表示へ切り替わる）
-    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token) ※Task.Run上
+    VM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token) ※Task.Run上
+    alt options.ModelPath がライブ用の読み込み済みモデルと異なる（REQ-TRX-FILE-17）
+        TS->>TS: 2 つ目の WhisperFactory を作る（失敗なら ModelLoadFailed を返し、VM はダイアログ内に理由を出して閉じない）
+    end
 
     Note over TS: diarization が null（＝話者ダイアライゼーション無効）なら以下の従来経路。<br/>非 null のときは §6.1 の経路を通る
     TS->>TS: AudioFileReader で読み込み・チャンク毎にダウンミックス+リサンプル
@@ -263,14 +280,14 @@ sequenceDiagram
     participant SD as SpeakerDiarizationService
     participant M as TranscriptDiarizationMerger
 
-    VM->>TS: TranscribeFileAsync(filePath, startOffset, diarization, progress, token)
+    VM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token)
 
     Note over TS: ① デコード（1 回だけ）
     TS->>TS: AudioFileReader → ダウンミックス+LPF+リサンプル → 16kHz モノラル PCM 全体（NFR-07）
 
     Note over TS,SD: ② 話者ダイアライゼーションを先に走らせる<br/>モデル不備は Whisper を回す前に判明させたいため（REQ-TRX-DIA-11）
     TS->>TS: token.ThrowIfCancellationRequested()（REQ-TRX-DIA-12）
-    TS->>SD: Diarize(pcm, progress, token)
+    TS->>SD: Diarize(pcm, knownSpeakerCount, progress, token)
     SD->>SD: 初回のみ: 両モデルの File.Exists を検査（REQ-TRX-DIA-08）
     Note over SD: 検査を省くとネイティブが NULL ハンドルを返し、<br/>その後の呼び出しでアクセス違反（catch 不能）になる
     SD->>SD: OfflineSpeakerDiarization 生成（lock 内・以後は使い回す。REQ-TRX-DIA-10）
@@ -308,7 +325,31 @@ sequenceDiagram
 > **Diarization が失敗した場合は文字起こしごと中止する**（REQ-TRX-DIA-11）。
 > 話者欄が黙って欠けた `.transcript.txt` を作らないためである。
 
-## 7. 文字起こし GPU 使用設定の切り替え
+## 7. 録音の自動開始（マイク音量）
+
+```mermaid
+sequenceDiagram
+    participant Timer as _meterTimer (50ms, UI)
+    participant VM as MainViewModel
+    participant AT as AutoStartTrigger
+    participant ACS as AudioCaptureService
+
+    loop 50ms ごと
+        Timer->>VM: UpdateMeters()
+        VM->>ACS: MicPeakLevel
+        VM->>VM: MicLevelDb = PeakToDb(peak)
+        VM->>AT: Observe(MicLevelDb, 50ms, canStart)<br/>canStart = 有効 && IsNotBusy && マイク選択済み && !IsModalDialogOpen
+        alt 閾値以上が Sustain 秒連続、かつ停止から Cooldown 秒経過
+            AT-->>VM: true
+            VM->>VM: StartRecording()（手動と同じ処理）
+            VM->>VM: IsAutoStartedRecording = true → 「自動録音中」
+        else
+            AT-->>VM: false
+        end
+    end
+```
+
+## 8. 文字起こし GPU 使用設定の切り替え
 
 ```mermaid
 sequenceDiagram

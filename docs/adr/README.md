@@ -30,3 +30,4 @@
 | [0003](./0003-speaker-diarization-with-sherpa-onnx.md) | 話者ダイアライゼーションを sherpa-onnx で行い、ファイル文字起こし経路にだけ載せる | 承認済み | 2026-08-22 |
 | [0004](./0004-speaker-id-assignment-strategy.md) | 話者 ID の付け方を sherpa-onnx に任せ続ける（自前クラスタリングは今回採らない） | 承認済み | 2026-08-23 |
 | [0005](./0005-mainviewmodel-split.md) | `MainViewModel` を分割するか（ADR-0002 の再評価） | 承認済み | 2026-08-27 |
+| [0006](./0006-mainviewmodel-split-reevaluation.md) | `MainViewModel` 分割の再評価（契機①②到達。案 D を続け、案 A は T170 へ） | 暫定承認 | 2026-09-22 |
