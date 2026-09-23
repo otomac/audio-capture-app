@@ -63,10 +63,31 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <!-- REQ-TRX-DIA-16: 話者識別が「①有効」のときだけ操作できる。処理中も止める -->
+        <Style x:Key="DiarizationCheckBox" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="IsEnabled" Value="{Binding CanChooseFileDiarization}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- REQ-TRX-DIA-17: 話者人数は「話者識別を行う」が ON のときだけ選べる。処理中も止める -->
+        <Style x:Key="SpeakerCountComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+            <Setter Property="IsEnabled" Value="{Binding FileDiarizationEnabled}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsTranscribingFile}" Value="True">
+                    <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="14">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -133,11 +154,100 @@
                               </DataTemplate>
                           </ComboBox.ItemTemplate>
                 </ComboBox>
+
+                <!-- モデル（REQ-TRX-FILE-17）。ライブ側の選択とは独立 -->
+                <TextBlock Text="Whisper モデル" Style="{StaticResource Text.Label}" Margin="0,12,0,4"/>
+                <ComboBox HorizontalAlignment="Left" MinWidth="180"
+                          Style="{StaticResource IdleComboBox}"
+                          ItemsSource="{Binding WhisperModels}"
+                          SelectedItem="{Binding SelectedFileWhisperModel}"
+                          ToolTip="{Binding SelectedFileWhisperModel.ModelPath}">
+                          <ComboBox.ItemTemplate>
+                              <DataTemplate>
+                                  <TextBlock Text="{Binding ModelName}"/>
+                              </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                </ComboBox>
+                <!-- モデルを読み込めなかった理由（REQ-TRX-FILE-17）。処理は始まっておらず、ダイアログは閉じない -->
+                <TextBlock Margin="0,4,0,0" TextWrapping="Wrap"
+                           Text="{Binding FileTranscriptionModelError}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Error}">
+                            <Setter Property="Visibility" Value="Visible"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding FileTranscriptionModelError}" Value="">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- 話者識別（REQ-TRX-DIA-16）。①有効のときだけ操作でき、②③は OFF 固定 -->
+                <CheckBox Content="話者識別を行う" Margin="0,12,0,0"
+                          Style="{StaticResource DiarizationCheckBox}"
+                          IsChecked="{Binding FileDiarizationEnabled}"/>
+                <!-- なぜ押せないかが分かるよう、状態表示（REQ-TRX-DIA-15）の文言をそのまま出す -->
+                <TextBlock Text="{Binding SpeakerDiarizationStatus}"
+                           Style="{StaticResource Text.Caption}" Margin="21,4,0,0"/>
+
+                <!-- 話者人数（REQ-TRX-DIA-17）。「指定なし」「10 人以上」は設定値に倒れる -->
+                <Grid Margin="21,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="話者の人数" Style="{StaticResource Text.Label}" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Column="1" MinWidth="110"
+                              Style="{StaticResource SpeakerCountComboBox}"
+                              ItemsSource="{Binding SpeakerCountOptions}"
+                              SelectedItem="{Binding SelectedSpeakerCount}">
+                              <ComboBox.ItemTemplate>
+                                  <DataTemplate>
+                                      <TextBlock Text="{Binding DisplayName}"/>
+                                  </DataTemplate>
+                              </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+                <!-- T147 の実測: 正しい人数を渡しても区別 4/4 → 1/4、正答率 92% → 52% に落ちた -->
+                <TextBlock Text="人数を指定すると、かえって精度が落ちることがあります（実際の音声で確認しています）。通常は「指定なし」のままにしてください。"
+                           Style="{StaticResource Text.Caption}" Margin="21,4,0,0" TextWrapping="Wrap"/>
+            </StackPanel>
+        </Border>
+
+        <!-- ===== メタデータ（REQ-TRX-FILE-18 / §16）。開始時刻とは別の項目 ===== -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="メタデータ（任意。会議名は出力ファイル名にも付きます）" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="70"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="会議名" Style="{StaticResource Text.Label}"/>
+                    <TextBox Grid.Row="0" Grid.Column="1" Style="{StaticResource IdleTextBox}" Margin="0,0,0,6"
+                             Text="{Binding MetadataMeetingName, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="実施日時" Style="{StaticResource Text.Label}"/>
+                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource IdleTextBox}" Margin="0,0,0,6"
+                             Text="{Binding MetadataHeldAt, UpdateSourceTrigger=PropertyChanged}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="参加者" Style="{StaticResource Text.Label}" VerticalAlignment="Top" Margin="0,4,0,0"/>
+                    <TextBox Grid.Row="2" Grid.Column="1" Style="{StaticResource IdleTextBox}"
+                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="48" MaxHeight="96"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding MetadataParticipantsText, UpdateSourceTrigger=PropertyChanged}"/>
+                </Grid>
+                <TextBlock Text="参加者は改行またはカンマで区切ります。メールアドレスは @ より前を名前として記録します。"
+                           Style="{StaticResource Text.Caption}" Margin="0,4,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
 
         <!-- ===== 進捗（処理中のみ。REQ-TRX-FILE-06） ===== -->
-        <Border Grid.Row="1" Margin="0,0,0,10">
+        <Border Grid.Row="2" Margin="0,0,0,10">
             <Border.Style>
                 <Style TargetType="Border" BasedOn="{StaticResource Card}">
                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -172,7 +282,7 @@
         </Border>
 
         <!-- ===== ボタン ===== -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
             <Button Content="開始" Style="{StaticResource StartButton}"
                     IsEnabled="{Binding CanStartFileTranscription}"
                     IsDefault="True" Click="StartButton_Click" Margin="0,0,8,0"/>

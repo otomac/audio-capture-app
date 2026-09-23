@@ -24,6 +24,8 @@ graph TB
         FTW["FileTranscriptionOptionsWindow"]
         LTW["LiveTranscriptWindow"]
         SW["SettingsWindow"]
+        WMW["WhisperModelsWindow"]
+        RMW["RecordingMetadataWindow"]
         LMC["LevelMeterControl"]
         STY["Styles/Theme.xaml
 Styles/Controls.xaml"]
@@ -54,16 +56,20 @@ Styles/Controls.xaml"]
         Lame["NAudio.Lame (LameMP3FileWriter)"]
         Whisper["Whisper.net (WhisperFactory / WhisperProcessor)"]
         Sherpa["sherpa-onnx (OfflineSpeakerDiarization)"]
-        FS["ファイルシステム (settings.json, *.mp3, *.txt)"]
+        FS["ファイルシステム (settings.json, *.mp3, *.txt, *.json)"]
     end
 
     MW -->|"DataContext"| MVM
     MW -->|"生成・表示 (ShowDialog)"| FTW
     MW -->|"生成・表示 (Show, Owner=MainWindow)"| LTW
     MW -->|"生成・表示 (ShowDialog)"| SW
+    SW -->|"生成・表示 (ShowDialog, Owner=SettingsWindow)"| WMW
+    MW -->|"生成・表示 (ShowDialog)"| RMW
     FTW -->|"DataContext (同一インスタンス)"| MVM
     LTW -->|"DataContext (同一インスタンス)"| MVM
     SW -->|"DataContext (同一インスタンス)"| MVM
+    WMW -->|"DataContext (同一インスタンス)"| MVM
+    RMW -->|"DataContext (同一インスタンス)"| MVM
     MW --> LMC
     LMC -->|"Level (dB) バインド"| MVM
 
@@ -87,9 +93,9 @@ Styles/Controls.xaml"]
 
 ### 各層の責務
 
-- **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `SettingsWindow`, `Controls/LevelMeterControl`, `Styles/`）
+- **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `SettingsWindow`, `WhisperModelsWindow`, `RecordingMetadataWindow`, `Controls/LevelMeterControl`, `Styles/`）
   UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、`MainViewModel` へのバインディングのみを持ち、業務ロジックは持たない。
-  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
+  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` だけは、モーダルな `SettingsWindow` の上に出すため `SettingsWindow` のコードビハインドが生成し `Owner` にする）、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `WhisperModelsRequested` / `RecordingMetadataRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
   `Styles/` は `App.xaml` の `MergedDictionaries` から読み込む `ResourceDictionary` で、コントロールの `Style` と `ControlTemplate` だけを持つ。UI ライブラリは導入していない（`CLAUDE.md`「ライブラリ追加は個別承認制」）。
 - **ViewModel層**（`ViewModels/MainViewModel*.cs`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
@@ -102,15 +108,20 @@ Styles/Controls.xaml"]
   | `MainViewModel.Devices.cs` | デバイスの一覧・選択・モニタリング、ミュート、レベルメーター |
   | `MainViewModel.Recording.cs` | 録音の開始／停止、録音状態の表示、終了時の確認と後始末 |
   | `MainViewModel.Transcription.cs` | Whisper モデルの読み込み、GPU 切り替え、言語の選択、話者識別の状態表示 |
-  | `MainViewModel.FileTranscription.cs` | 音声ファイルからの文字起こし（オプション指定ダイアログ・開始時刻の推定を含む） |
+  | `MainViewModel.FileTranscription.cs` | 音声ファイルからの文字起こし（オプション指定ダイアログ・モデル／話者識別／メタデータの選択を含む） |
+  | `MainViewModel.FileTranscription.StartTime.cs` | ファイル文字起こしの開始時刻の自動入力（REQ-TRX-FILE-15） |
   | `MainViewModel.LiveTranscript.cs` | 文字起こし表示ウィンドウへ流す行の蓄積と反映 |
+  | `MainViewModel.WhisperModels.cs` | Whisper モデルの登録一覧（エイリアス）、ライブ用の選択、モデル管理ダイアログの編集状態 |
+  | `MainViewModel.AutoStart.cs` | 録音の自動開始（マイク音量の監視。レベルメーターのタイマーに相乗りする） |
+  | `MainViewModel.RecordingMetadata.cs` | 録音停止時のメタデータ入力（会議名・実施日時・参加者）、JSON の書き出しと改名の指示 |
 
   **`ViewModels/` に `MainViewModel` 以外のクラスは置かない**（ADR-0005 の規則 3）。
-  ウィンドウ単位の ViewModel へ分ける案は、①全ファイル合計が 1,500 行を超えたとき、
-  ②5 枚目のウィンドウを足すとき に再評価する。
-- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`）
+  ウィンドウ単位の ViewModel へ分ける案は、①全ファイル合計が 2,500 行を超えたとき、
+  ②7 枚目のウィンドウを足すとき に再評価する（1,500 行・5 枚目の契機は
+  [ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) で処理済み。案 A の実施判断は T170）。
+- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`, `AutoStartTrigger`, `RecordingMetadataFile`（static））
   NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
-- **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
+- **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `WhisperModelEntry`, `RecordingMetadata`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
   可変・不変データを保持する POCO。ロジックを持たない。
 
 ## 3. コンポーネント間の主要な依存関係
@@ -200,10 +211,11 @@ flowchart TB
 | データ | 保存先 | 備考 |
 |---|---|---|
 | アプリ設定 | `%APPDATA%\AudioCaptureApp\settings.json` | `SettingsService` が JSON で読み書き |
-| 録音ファイル | `<OutputFolder>\yyyyMMdd_HHmmss.mp3`（既定 `%USERPROFILE%\Documents\AudioCapture`） | `AudioCaptureService.StartRecording` |
+| 録音ファイル | `<OutputFolder>\yyyyMMdd_HHmmss.mp3`（既定 `%USERPROFILE%\Documents\AudioCapture`）。メタデータの会議名があれば停止後に `yyyyMMdd_HHmmss_会議名.mp3` へ改名 | `AudioCaptureService.StartRecording` / `RenameSessionFiles` |
 | ライブ文字起こし結果 | 録音ファイルと同名の `.txt` | `TranscriptionService.StartSession` |
-| ファイル文字起こし結果 | `{入力ファイル名}.transcript.txt` | `TranscriptionService.BuildTranscriptPath` |
-| Whisper モデル | 既定 `%APPDATA%\AudioCaptureApp\models\ggml-small.bin`（ユーザー変更可） | `AppSettings.WhisperModelPath` |
+| ファイル文字起こし結果 | `{入力ファイル名}[_会議名].transcript.txt` | `TranscriptionService.BuildTranscriptPath` |
+| 録音のメタデータ | 音声（改名後）または `.transcript.txt` と同名の `.json`（`会議名` / `実施日時` / `参加者`） | `RecordingMetadataFile.Write` |
+| Whisper モデル | 既定 `%APPDATA%\AudioCaptureApp\models\ggml-small.bin`（ユーザー変更可）。登録一覧は `settings.json` の `WhisperModelList` | `AppSettings.WhisperModelPath` / `WhisperModelList` |
 
 ## 7. エラーハンドリング方針
 

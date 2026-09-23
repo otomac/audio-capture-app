@@ -131,6 +131,10 @@ public partial class MainViewModel
     {
         MicLevelDb = PeakToDb(_audioCaptureService.MicPeakLevel);
         LoopbackLevelDb = PeakToDb(_audioCaptureService.LoopbackPeakLevel);
+        // REQ-REC-12: 自動開始の判定はこのタイマーに相乗りする（スレッドを増やさない）
+        ObserveAutoStart(MicLevelDb);
+        // REQ-REC-07 / REQ-TRX-LIVE-11: 停止処理中の残り表示も同じタイマーで
+        UpdateStoppingStatus();
     }
 
     internal static double PeakToDb(float peak)

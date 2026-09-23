@@ -664,6 +664,68 @@ public class AudioCaptureService : IDisposable
         }
     }
 
+    /// <summary>
+    /// 停止後の録音ファイル（`.mp3` と、あれば同名の `.txt`）を会議名付きの名前へ改名する（REQ-META-02）。
+    /// 成功したら <see cref="CurrentSession"/> の <c>FilePath</c> を新しい名前へ追従させる。
+    /// </summary>
+    /// <returns>改名しなかった・できなかった理由。改名した（または会議名が空で改名の必要が無い）なら <c>null</c>。</returns>
+    /// <remarks>
+    /// 録音中は呼ばない（ファイルが開いている）。改名先が既にある場合や失敗した場合は**何も動かさない** —
+    /// 音声を失わないことを優先し、呼び出し元は元の名前のまま JSON だけを書く。
+    /// `.mp3` を先に改名し、`.txt` の改名に失敗したら `.mp3` を元に戻す（2 つの名前が食い違わないように）。
+    /// </remarks>
+    public string? RenameSessionFiles(string meetingName)
+    {
+        if (IsRecording)
+        {
+            return "録音中は改名できません。";
+        }
+
+        var session = _currentSession;
+        if (session == null)
+        {
+            return "録音データがありません。";
+        }
+
+        var newMp3 = RecordingMetadataFile.WithMeetingName(session.FilePath, meetingName);
+        if (string.Equals(newMp3, session.FilePath, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var oldTxt = Path.ChangeExtension(session.FilePath, ".txt");
+        var newTxt = Path.ChangeExtension(newMp3, ".txt");
+        var hasTxt = File.Exists(oldTxt);
+        if (File.Exists(newMp3) || (hasTxt && File.Exists(newTxt)))
+        {
+            return $"同じ名前のファイルが既にあるため改名しませんでした: {Path.GetFileName(newMp3)}";
+        }
+
+        try
+        {
+            File.Move(session.FilePath, newMp3);
+            if (hasTxt)
+            {
+                try
+                {
+                    File.Move(oldTxt, newTxt);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    File.Move(newMp3, session.FilePath);
+                    return $"文字起こしファイルの改名に失敗したため元に戻しました: {ex.Message}";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"改名に失敗しました: {ex.Message}";
+        }
+
+        session.FilePath = newMp3;
+        return null;
+    }
+
     public void Dispose()
     {
         Dispose(disposing: true);
