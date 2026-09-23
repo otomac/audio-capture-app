@@ -34,8 +34,10 @@ public class AppSettingsTests
         Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
         // 録音の自動開始は既定で OFF（REQ-CFG-10）。勝手に録音が始まる既定にしてはならない
         Assert.False(settings.AutoStartRecordingEnabled);
-        Assert.Equal(-30.0, settings.AutoStartThresholdDb);
-        Assert.Equal(3.0, settings.AutoStartSustainSeconds);
+        // 実測にもとづく既定（REQ-REC-12 / T176）
+        Assert.Equal(-15.0, settings.AutoStartThresholdDb);
+        Assert.Equal(1.0, settings.AutoStartSustainSeconds);
+        Assert.Equal(0.3, settings.AutoStartDipGraceSeconds);
         Assert.Equal(10.0, settings.AutoStartCooldownSeconds);
     }
 

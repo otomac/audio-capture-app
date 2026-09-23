@@ -48,7 +48,7 @@
                 <CheckBox Content="マイクの音量で録音を自動で開始する" Margin="0,12,0,0"
                           IsChecked="{Binding AutoStartRecordingEnabled}"
                           IsEnabled="{Binding IsNotBusy}"/>
-                <TextBlock Text="声が一定時間続いたら自動で録音を始めます（既定: −30 dB 以上が 3 秒）。停止は自動化しません。閾値などは settings.json で調整できます。"
+                <TextBlock Text="話し始めると自動で録音を開始します（既定: −15 dB 以上が合計 1 秒。語の切れ目は許容します）。停止は自動化しません。マイクが遠くて始まらないときは settings.json で閾値を下げられます。"
                            Style="{StaticResource Text.Caption}" Margin="21,4,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>

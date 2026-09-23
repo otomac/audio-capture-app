@@ -6,28 +6,44 @@ namespace AudioCaptureApp.Services;
 /// </summary>
 public sealed record AutoStartOptions
 {
-    public const double DefaultThresholdDb = -30.0;
-    public const double DefaultSustainSeconds = 3.0;
+    public const double DefaultThresholdDb = -15.0;
+    public const double DefaultSustainSeconds = 1.0;
+    public const double DefaultDipGraceSeconds = 0.3;
     public const double DefaultCooldownSeconds = 10.0;
 
-    public AutoStartOptions(double thresholdDb, double sustainSeconds, double cooldownSeconds)
+    public AutoStartOptions(
+        double thresholdDb,
+        double sustainSeconds,
+        double cooldownSeconds,
+        double dipGraceSeconds = DefaultDipGraceSeconds)
     {
         ThresholdDb = Sanitize(thresholdDb, -60.0, 0.0, DefaultThresholdDb);
         Sustain = TimeSpan.FromSeconds(Sanitize(sustainSeconds, 0.5, 60.0, DefaultSustainSeconds));
+        DipGrace = TimeSpan.FromSeconds(Sanitize(dipGraceSeconds, 0.0, 5.0, DefaultDipGraceSeconds));
         Cooldown = TimeSpan.FromSeconds(Sanitize(cooldownSeconds, 0.0, 600.0, DefaultCooldownSeconds));
     }
 
-    /// <summary>この値**以上**のレベル（dB。REQ-LVL-02 の値）を「声がある」とみなす。</summary>
+    /// <summary>
+    /// この値**以上**のレベル（dB。REQ-LVL-02 の値）を「声がある」とみなす。
+    /// 実測では会議音声のレベルの中央値が −22.9 dB で、−30 dB は発話していない時間帯も含め 63% の窓が超える。
+    /// </summary>
     public double ThresholdDb { get; }
 
-    /// <summary>閾値以上がこの時間**連続**したら発火する。</summary>
+    /// <summary>閾値以上の時間がこれだけ**たまったら**発火する（連続である必要はない）。</summary>
     public TimeSpan Sustain { get; }
+
+    /// <summary>
+    /// これ以内の落ち込みは発話の区切りとみなし、累積を 0 に戻さない。
+    /// 発話は語と語の間で必ずレベルが落ちるため（実測: −15 dB を連続で超えるのは中央値 0.10 秒）、
+    /// 0 にすると実質発火しない。
+    /// </summary>
+    public TimeSpan DipGrace { get; }
 
     /// <summary>録音が止まってからこの時間は発火しない（止めた直後の再開防止）。</summary>
     public TimeSpan Cooldown { get; }
 
     public static AutoStartOptions Default { get; } =
-        new(DefaultThresholdDb, DefaultSustainSeconds, DefaultCooldownSeconds);
+        new(DefaultThresholdDb, DefaultSustainSeconds, DefaultCooldownSeconds, DefaultDipGraceSeconds);
 
     private static double Sanitize(double value, double min, double max, double fallback)
     {
@@ -46,12 +62,16 @@ public sealed record AutoStartOptions
 /// <remarks>
 /// 副作用を持たず、状態は「閾値以上が続いた時間」と「停止からの経過時間」だけである。
 /// 呼び出しはレベルメーターのタイマー（UI スレッド、50ms）から行い、スレッドは増やさない。
-/// 誤起動（咳・キーボード音の 1 発）を避けるため、閾値を下回った時点で連続時間を 0 に戻す。
+/// 誤起動（咳・キーボード音の 1 発）を避けるため、落ち込みが <see cref="AutoStartOptions.DipGrace"/> を
+/// 超えたら累積を 0 に戻す。
 /// </remarks>
 public sealed class AutoStartTrigger
 {
     private readonly AutoStartOptions _options;
     private TimeSpan _sustained;
+
+    /// <summary>閾値を下回っている時間。<see cref="AutoStartOptions.DipGrace"/> を超えたら累積を捨てる。</summary>
+    private TimeSpan _belowFor;
 
     /// <summary>直前の停止からの経過。<c>null</c> なら停止したことが無い（クールダウン無し）。</summary>
     private TimeSpan? _sinceStopped;
@@ -62,11 +82,11 @@ public sealed class AutoStartTrigger
         _options = options;
     }
 
-    /// <summary>閾値以上が続いている時間（表示・診断用）。</summary>
+    /// <summary>閾値以上がたまっている時間（表示・診断用）。</summary>
     public TimeSpan Sustained => _sustained;
 
     /// <summary>
-    /// レベルを 1 回観測する。発火すべきなら <c>true</c> を返し、内部の連続時間を 0 に戻す。
+    /// レベルを 1 回観測する。発火すべきなら <c>true</c> を返し、内部の累積を 0 に戻す。
     /// </summary>
     /// <param name="levelDb">マイクのレベル（dB）。</param>
     /// <param name="elapsed">前回の観測からの経過時間。</param>
@@ -81,12 +101,24 @@ public sealed class AutoStartTrigger
             _sinceStopped = since + elapsed;
         }
 
-        if (!canStart || levelDb < _options.ThresholdDb)
+        if (!canStart)
         {
-            _sustained = TimeSpan.Zero;
+            Reset();
             return false;
         }
 
+        if (levelDb < _options.ThresholdDb)
+        {
+            // 語と語の間の短い落ち込みでは捨てない（REQ-REC-12）
+            _belowFor += elapsed;
+            if (_belowFor > _options.DipGrace)
+            {
+                _sustained = TimeSpan.Zero;
+            }
+            return false;
+        }
+
+        _belowFor = TimeSpan.Zero;
         _sustained += elapsed;
         if (_sustained < _options.Sustain)
         {
@@ -107,9 +139,13 @@ public sealed class AutoStartTrigger
     public void NotifyStopped()
     {
         _sinceStopped = TimeSpan.Zero;
-        _sustained = TimeSpan.Zero;
+        Reset();
     }
 
-    /// <summary>連続時間を 0 に戻す（開始に失敗したときなど）。</summary>
-    public void Reset() => _sustained = TimeSpan.Zero;
+    /// <summary>累積を 0 に戻す（開始に失敗したときなど）。</summary>
+    public void Reset()
+    {
+        _sustained = TimeSpan.Zero;
+        _belowFor = TimeSpan.Zero;
+    }
 }

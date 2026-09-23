@@ -85,7 +85,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _autoStartTrigger = new AutoStartTrigger(new AutoStartOptions(
             _settings.AutoStartThresholdDb,
             _settings.AutoStartSustainSeconds,
-            _settings.AutoStartCooldownSeconds));
+            _settings.AutoStartCooldownSeconds,
+            _settings.AutoStartDipGraceSeconds));
         AutoStartRecordingEnabled = _settings.AutoStartRecordingEnabled;
 
         // REQ-TRX-10: settings.json は手編集され得るので、必ず正規化してから使う。

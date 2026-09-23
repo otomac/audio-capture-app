@@ -61,11 +61,20 @@ public class AppSettings
     /// <summary>マイクの音量で録音を自動で開始するか。既定は OFF。UI は設定ウィンドウのチェックボックス。</summary>
     public bool AutoStartRecordingEnabled { get; set; }
 
-    /// <summary>自動開始の閾値（dB、−60〜0）。この値以上を「声がある」とみなす。UI からは変更できない。</summary>
-    public double AutoStartThresholdDb { get; set; } = -30.0;
+    /// <summary>
+    /// 自動開始の閾値（dB、−60〜0）。この値以上を「声がある」とみなす。UI からは変更できない。
+    /// マイクが遠い・声が小さいなどで発火しないときは −20 へ下げる。
+    /// </summary>
+    public double AutoStartThresholdDb { get; set; } = -15.0;
 
-    /// <summary>閾値以上がこの秒数連続したら開始する（0.5〜60）。UI からは変更できない。</summary>
-    public double AutoStartSustainSeconds { get; set; } = 3.0;
+    /// <summary>閾値以上の時間がこの秒数たまったら開始する（0.5〜60）。UI からは変更できない。</summary>
+    public double AutoStartSustainSeconds { get; set; } = 1.0;
+
+    /// <summary>
+    /// この秒数までの落ち込みは発話の区切りとみなし、累積を捨てない（0〜5）。UI からは変更できない。
+    /// 発話は語と語の間で必ずレベルが落ちるため、0 にすると実質発火しない。
+    /// </summary>
+    public double AutoStartDipGraceSeconds { get; set; } = 0.3;
 
     /// <summary>録音が止まってからこの秒数は自動開始しない（0〜600）。UI からは変更できない。</summary>
     public double AutoStartCooldownSeconds { get; set; } = 10.0;
