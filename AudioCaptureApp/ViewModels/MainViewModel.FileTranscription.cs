@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -50,6 +51,95 @@ public partial class MainViewModel
         // 利用者が触ったらもう「自動入力した値」ではない。
         // 自動入力そのものは、この後に Hint を入れ直すので消えない（RequestFileTranscription の順序）。
         FileTranscriptionStartTimeHint = "";
+    }
+
+    /// <summary>
+    /// この実行で話者識別を通すか（REQ-TRX-DIA-16）。ダイアログを開くたびに
+    /// 「①有効なら ON」へ戻す。**設定には保存しない**（1 回きりの選択）。
+    /// </summary>
+    [ObservableProperty]
+    private bool _fileDiarizationEnabled;
+
+    /// <summary>話者人数の選択肢（REQ-TRX-DIA-17）。「指定なし」「1 人」〜「9 人」「10 人以上」。</summary>
+    public IReadOnlyList<SpeakerCountOption> SpeakerCountOptions { get; } = Services.SpeakerCountOptions.All;
+
+    /// <summary>
+    /// この実行で指定する話者人数（REQ-TRX-DIA-17）。ダイアログを開くたびに設定値から既定を入れ直す。
+    /// **設定には保存しない。**
+    /// </summary>
+    [ObservableProperty]
+    private SpeakerCountOption _selectedSpeakerCount = Services.SpeakerCountOptions.Unspecified;
+
+    /// <summary>
+    /// ダイアログを開いたときの話者人数の既定（REQ-TRX-DIA-17）。設定値が 1〜9 ならその人数、
+    /// それ以外（<c>null</c>・0 以下・10 以上）は「指定なし」。
+    /// </summary>
+    /// <remarks>
+    /// 10 以上を「10 人以上」ではなく「指定なし」に倒すのは、どちらも未選択（＝設定値に倒れる）で
+    /// 意味が同じであり、設定値がそのまま効く従来の挙動を変えないため。
+    /// </remarks>
+    internal static SpeakerCountOption SpeakerCountOptionFor(int? settingsValue)
+    {
+        if (settingsValue is int count && count >= 1 && count <= Services.SpeakerCountOptions.MaxSelectableCount)
+        {
+            return Services.SpeakerCountOptions.All[count];
+        }
+
+        return Services.SpeakerCountOptions.Unspecified;
+    }
+
+    // --- ファイル文字起こしに使うモデル (T163 / REQ-TRX-FILE-17 / REQ-CFG-09) ---
+
+    /// <summary>
+    /// この実行で使う Whisper モデル（REQ-TRX-FILE-17）。ダイアログを開くたびに
+    /// <see cref="FileWhisperModelFor"/> で既定を入れ直す。変えた時点で名前を保存する（REQ-CFG-09）。
+    /// </summary>
+    [ObservableProperty]
+    private WhisperModelEntry? _selectedFileWhisperModel;
+
+    partial void OnSelectedFileWhisperModelChanged(WhisperModelEntry? value)
+    {
+        if (_initializing || _suppressFileWhisperModelWriteBack)
+        {
+            return;
+        }
+
+        _settings.FileWhisperModelName = value?.ModelName;
+        SaveSettings();
+    }
+
+    /// <summary>ダイアログを開くときの既定を入れる間、保存を抑止する。</summary>
+    private bool _suppressFileWhisperModelWriteBack;
+
+    /// <summary>
+    /// モデルの読み込みに失敗した理由（REQ-TRX-FILE-17）。空なら表示しない。
+    /// 処理を始めていないのでダイアログは閉じない。
+    /// </summary>
+    [ObservableProperty]
+    private string _fileTranscriptionModelError = "";
+
+    /// <summary>
+    /// ダイアログを開いたときのモデルの既定（REQ-TRX-FILE-17）。保存名（REQ-CFG-09）の要素 →
+    /// ライブ用に選択中のモデル → 一覧の先頭 の順。一覧が空なら <c>null</c>。
+    /// </summary>
+    internal static WhisperModelEntry? FileWhisperModelFor(
+        IReadOnlyList<WhisperModelEntry> models, string? savedName, WhisperModelEntry? liveModel)
+    {
+        if (!string.IsNullOrEmpty(savedName))
+        {
+            var saved = models.FirstOrDefault(m => string.Equals(m.ModelName, savedName, StringComparison.Ordinal));
+            if (saved != null)
+            {
+                return saved;
+            }
+        }
+
+        if (liveModel != null && models.Contains(liveModel))
+        {
+            return liveModel;
+        }
+
+        return models.Count > 0 ? models[0] : null;
     }
 
     /// <summary>進捗の百分率（0〜100）。ダイアログの <c>ProgressBar</c> 用。</summary>
@@ -142,129 +232,6 @@ public partial class MainViewModel
             text.Trim(), [@"h\:mm", @"hh\:mm"], CultureInfo.InvariantCulture, out startTime);
     }
 
-    // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
-
-    /// <summary>開始時刻をどこから推定したか。</summary>
-    internal enum StartTimeSource
-    {
-        /// <summary>推定できなかった（入力欄は空欄のまま）。</summary>
-        None,
-
-        /// <summary>ファイル名（本アプリが録音した <c>yyyyMMdd_HHmmss</c> 形式）。</summary>
-        FileName,
-
-        /// <summary>ファイルの作成日時。</summary>
-        CreationTime,
-
-        /// <summary>最終更新日時 − 音声の長さ（録音終了時刻からの逆算）。</summary>
-        LastWriteMinusDuration
-    }
-
-    /// <summary>推定した開始時刻と、その根拠。</summary>
-    /// <param name="Text">入力欄へ入れる文字列（<c>HH:mm</c>）。推定できなければ空文字列。</param>
-    /// <param name="Source">どこから取ったか。</param>
-    internal readonly record struct StartTimeEstimate(string Text, StartTimeSource Source);
-
-    /// <summary>
-    /// 本アプリが録音したファイル名（<c>yyyyMMdd_HHmmss.mp3</c>、REQ-REC-04）から
-    /// 録音開始時刻を取り出す（REQ-TRX-FILE-15 の①）。
-    /// </summary>
-    /// <remarks>
-    /// **拡張子を除いた名前全体が一致する場合だけ受理する。** 前後に何か付いた名前から
-    /// 数字列を拾いに行くと、無関係な数字を時刻と誤読して誤った既定値を入れてしまう。
-    /// 空欄のほうが害が小さい。
-    /// </remarks>
-    internal static bool TryParseRecordedFileNameTime(string fileName, out DateTime startTime)
-    {
-        startTime = default;
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            return false;
-        }
-
-        var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
-        return DateTime.TryParseExact(
-            stem, "yyyyMMdd_HHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out startTime);
-    }
-
-    /// <summary>
-    /// 開始時刻の初期値を推定する（REQ-TRX-FILE-15）。
-    /// ①ファイル名 → ②作成日時 → ③最終更新日時 − 音声の長さ の順に試す。
-    /// </summary>
-    /// <param name="fileName">対象ファイル名（パスを含んでいてもよい）。</param>
-    /// <param name="creationTime">作成日時。取れなければ <c>null</c>。</param>
-    /// <param name="lastWriteTime">最終更新日時。取れなければ <c>null</c>。</param>
-    /// <param name="durationProvider">
-    /// 音声全長の取得。**③に落ちたときにしか呼ばれない**（読み取りが重いため）。
-    /// </param>
-    /// <remarks>
-    /// ②を素直に使うと、ファイルが存在する限り常に値が取れて③へ届かない。
-    /// **作成日時が最終更新日時より後になっている場合だけ②を捨てる** — コピー・移動された
-    /// ファイルは作成日時が「コピーした日時」に書き換わるため、この逆転が
-    /// 「作成日時が当てにならない」ことの機械的に検出できる唯一の兆候である。
-    /// </remarks>
-    internal static StartTimeEstimate InferStartTime(
-        string fileName,
-        DateTime? creationTime,
-        DateTime? lastWriteTime,
-        Func<TimeSpan?> durationProvider)
-    {
-        ArgumentNullException.ThrowIfNull(durationProvider);
-
-        if (TryParseRecordedFileNameTime(fileName, out var fromName))
-        {
-            return new StartTimeEstimate(FormatStartTime(fromName), StartTimeSource.FileName);
-        }
-
-        // 逆転していなければ作成日時を信じる。
-        if (creationTime is { } created && (lastWriteTime is not { } written || created <= written))
-        {
-            return new StartTimeEstimate(FormatStartTime(created), StartTimeSource.CreationTime);
-        }
-
-        if (lastWriteTime is { } end && durationProvider() is { } duration)
-        {
-            return new StartTimeEstimate(
-                FormatStartTime(end - duration), StartTimeSource.LastWriteMinusDuration);
-        }
-
-        return new StartTimeEstimate(string.Empty, StartTimeSource.None);
-    }
-
-    /// <summary>
-    /// 入力欄の書式（REQ-TRX-FILE-10 の <c>hh:mm</c>）へ落とす。秒は切り捨てる。
-    /// </summary>
-    private static string FormatStartTime(DateTime value)
-        => value.ToString("HH\\:mm", CultureInfo.InvariantCulture);
-
-    /// <summary>
-    /// 実ファイルから材料を集めて <see cref="InferStartTime"/> に渡す（REQ-TRX-FILE-15）。
-    /// ファイルに触るのは Service 層の責務なので、読み取りは
-    /// <see cref="TranscriptionService"/> の静的ヘルパーへ委ねる。
-    /// </summary>
-    private static StartTimeEstimate EstimateStartTime(string filePath)
-    {
-        bool hasTimes = TranscriptionService.TryGetAudioFileTimes(filePath, out var created, out var written);
-        return InferStartTime(
-            filePath,
-            hasTimes ? created : null,
-            hasTimes ? written : null,
-            // ③に落ちたときだけ呼ばれる（読み取りが重いため）
-            () => TranscriptionService.TryGetAudioDuration(filePath, out var duration) ? duration : null);
-    }
-
-    /// <summary>
-    /// 推定の根拠を利用者へ見せる 1 行（REQ-TRX-FILE-15）。推定していなければ空文字列。
-    /// </summary>
-    internal static string StartTimeHintFor(StartTimeSource source) => source switch
-    {
-        StartTimeSource.FileName => "ファイル名から自動入力しました",
-        StartTimeSource.CreationTime => "ファイルの作成日時から自動入力しました",
-        StartTimeSource.LastWriteMinusDuration =>
-            "最終更新日時と音声の長さから逆算しました",
-        _ => string.Empty
-    };
-
     /// <summary>
     /// オプション指定ダイアログを閉じる前に見せる確認文言（REQ-TRX-FILE-13）。
     /// 処理中でなければ <c>null</c> を返し、確認せずに閉じてよいことを表す。
@@ -284,9 +251,10 @@ public partial class MainViewModel
             ? 0.0
             : Math.Clamp(processed / total * 100.0, 0.0, 100.0);
 
+    // REQ-TRX-FILE-01 / 17: 可否は「登録済みモデルが 1 つ以上ある」で決める。実際の読み込みは「開始」で行う。
     private bool CanTranscribeFromFile =>
         !IsRecording && !IsStopping && !IsTranscribingFile
-        && _transcriptionService.IsModelLoaded;
+        && WhisperModels.Count > 0;
 
     [RelayCommand(CanExecute = nameof(CanTranscribeFromFile))]
     private void TranscribeFromFile()
@@ -294,7 +262,7 @@ public partial class MainViewModel
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "文字起こしする音声ファイルを選択",
-            Filter = "音声ファイル (*.wav;*.mp3)|*.wav;*.mp3|すべてのファイル (*.*)|*.*"
+            Filter = "音声ファイル (*.wav;*.mp3;*.m4a)|*.wav;*.mp3;*.m4a|すべてのファイル (*.*)|*.*"
         };
         if (dialog.ShowDialog() != true)
         {
@@ -344,38 +312,70 @@ public partial class MainViewModel
         IsFileTranscriptionCancelRequested = false;
         FileTranscriptionCancelNotice = "";
         _isDiarizingFile = false;
+        // REQ-TRX-DIA-16: 開くたびに既定へ戻す。①有効なら ON（従来と同じ挙動）、②③は OFF 固定。
+        FileDiarizationEnabled = CanChooseFileDiarization;
+        // REQ-TRX-DIA-17: 話者人数も開くたびに設定値から入れ直す（通常は「指定なし」）。
+        SelectedSpeakerCount = SpeakerCountOptionFor(_settings.KnownSpeakerCount);
+        // REQ-TRX-FILE-17: モデルは保存名 → ライブ用 → 先頭。既定を入れるだけなので保存はしない。
+        _suppressFileWhisperModelWriteBack = true;
+        try
+        {
+            SelectedFileWhisperModel = FileWhisperModelFor(WhisperModels, _settings.FileWhisperModelName, SelectedWhisperModel);
+        }
+        finally
+        {
+            _suppressFileWhisperModelWriteBack = false;
+        }
+        FileTranscriptionModelError = "";
+        // REQ-TRX-FILE-18: メタデータ 3 項目は開くたびに空へ戻す（開始時刻 REQ-TRX-FILE-10 とは別の項目）
+        MetadataMeetingName = "";
+        MetadataHeldAt = "";
+        MetadataParticipantsText = "";
+        MetadataTargetName = FileTranscriptionFileName;
         FileTranscriptionRequested?.Invoke();
     }
 
     /// <summary>
     /// ダイアログの「開始」から呼ばれる。開始時刻を解析して本処理へ渡す。
     /// </summary>
-    public Task StartFileTranscriptionAsync()
+    /// <returns>
+    /// 処理を始めた（完了・失敗・中止のいずれかで終わった）なら <c>true</c>。モデルを読み込めず
+    /// 始めなかったなら <c>false</c> — 呼び出し元はダイアログを閉じない（REQ-TRX-FILE-17）。
+    /// </returns>
+    public Task<bool> StartFileTranscriptionAsync()
     {
         if (!TryParseStartTime(FileTranscriptionStartTime, out var startOffset))
         {
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
 
         // 走っている Task を掴んでおく。終了確認（REQ-TRX-FILE-14）で
         // 中止処理の完了を待つために要る。
-        _fileTranscriptionTask = RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
-        return _fileTranscriptionTask;
+        var task = RunFileTranscriptionAsync(_pendingTranscriptionFilePath, startOffset);
+        _fileTranscriptionTask = task;
+        return task;
     }
 
+    /// <summary>
+    /// 対応形式か（REQ-TRX-FILE-03）。`.wav` / `.mp3` / `.m4a`（AAC）の 3 つ。
+    /// デコードはいずれも <c>AudioFileReader</c> で行い、`.wav` 以外は Media Foundation に委ねる（T161）。
+    /// </summary>
     internal static bool IsSupportedAudioExtension(string filePath)
     {
         var ext = System.IO.Path.GetExtension(filePath);
         return string.Equals(ext, ".wav", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(ext, ".mp3", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".m4a", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task RunFileTranscriptionAsync(string filePath, TimeSpan startOffset)
+    private async Task<bool> RunFileTranscriptionAsync(string filePath, TimeSpan startOffset)
     {
         _fileTranscriptionCts = new CancellationTokenSource();
         IsTranscribingFile = true;
         IsFileTranscriptionCancelRequested = false;
         FileTranscriptionCancelNotice = "";
+        FileTranscriptionModelError = "";
+        _lastTranscriptionError = null;
         // 最初の進捗が届くまでは話者識別のフェーズではない（走るのはデコードで、ct で素早く止まる）
         _isDiarizingFile = false;
         FileTranscriptionStatus = "準備中...";
@@ -389,27 +389,48 @@ public partial class MainViewModel
             {
                 // 中止の注記をどちらにするかは、押した時点のフェーズで決まる（REQ-TRX-FILE-07）
                 _isDiarizingFile = IsDiarizationPhase(v.Phase);
-                FileTranscriptionStatus =
-                    $"{v.Phase}: {v.Processed:hh\\:mm\\:ss} / {v.Total:hh\\:mm\\:ss}";
+                // モデル読み込み中（REQ-TRX-FILE-17）は総時間が無いのでフェーズ名だけ出す
+                FileTranscriptionStatus = v.Total <= TimeSpan.Zero
+                    ? $"{v.Phase}..."
+                    : $"{v.Phase}: {v.Processed:hh\\:mm\\:ss} / {v.Total:hh\\:mm\\:ss}";
                 FileTranscriptionProgress = FileTranscriptionProgressFor(v.Processed, v.Total);
             });
             var token = _fileTranscriptionCts.Token;
             // ファイル I/O とリサンプル処理でUIスレッドをブロックしないようワーカーへ
-            // REQ-TRX-FILE-16: 「開始」を押した時点の選択を使う
-            var language = SelectedFileLanguage.Code;
-            var ok = await Task.Run(() => _transcriptionService.TranscribeFileAsync(
-                filePath, startOffset, language, _speakerDiarizationService, progress, token));
-            if (ok)
+            // REQ-TRX-FILE-16 / 17 / REQ-TRX-DIA-17: 「開始」を押した時点の選択を使う
+            var options = new FileTranscriptionOptions(
+                startOffset,
+                SelectedFileLanguage.Code,
+                SelectedSpeakerCount.Count,
+                SelectedFileWhisperModel?.ModelPath,
+                UseGpuForTranscription,
+                MetadataMeetingName);
+            // REQ-TRX-DIA-16: OFF なら無効時と同じ null を渡す。サービス側に切り替えの分岐は無い（REQ-TRX-DIA-03）。
+            var diarization = FileDiarizationEnabled ? _speakerDiarizationService : null;
+            var result = await Task.Run(() => _transcriptionService.TranscribeFileAsync(
+                filePath, options, diarization, progress, token));
+            if (result.Success)
             {
-                var txtPath = TranscriptionService.BuildTranscriptPath(filePath);
+                var txtPath = TranscriptionService.BuildTranscriptPath(filePath, MetadataMeetingName);
                 FileTranscriptionStatus = "完了";
                 StatusMessage = $"文字起こし完了: {txtPath}";
                 LastResultPath = txtPath;   // REQ-OPEN-01
+                WriteFileTranscriptionMetadata(txtPath);
+            }
+            else if (result.Outcome == FileTranscriptionOutcome.ModelLoadFailed)
+            {
+                // REQ-TRX-FILE-17: 処理を始めていない。理由をダイアログ内に出し、閉じない。
+                FileTranscriptionStatus = "";
+                FileTranscriptionModelError = result.Message ?? "モデルを読み込めませんでした";
+                StatusMessage = $"文字起こしを開始できません: {FileTranscriptionModelError}";
+                return false;
             }
             else
             {
                 FileTranscriptionStatus = "失敗";
-                StatusMessage = "文字起こしに失敗しました";
+                // T134: Error イベントが BeginInvoke で書いたステータスは、この継続が上書きしてしまう
+                // （同じ Dispatcher・同じ優先度の FIFO）。理由を併記して手がかりを残す（REQ-TRX-FILE-12）。
+                StatusMessage = FileTranscriptionFailureMessageFor(_lastTranscriptionError);
             }
         }
         catch (OperationCanceledException)
@@ -431,6 +452,40 @@ public partial class MainViewModel
             _fileTranscriptionCts?.Dispose();
             _fileTranscriptionCts = null;
             IsTranscribingFile = false;
+        }
+
+        return true;
+    }
+
+    /// <summary>失敗の 1 行（REQ-TRX-FILE-12）。理由が届いていれば併記する。</summary>
+    internal static string FileTranscriptionFailureMessageFor(string? reason)
+        => string.IsNullOrWhiteSpace(reason)
+            ? "文字起こしに失敗しました"
+            : $"文字起こしに失敗しました: {reason}";
+
+    /// <summary>
+    /// ファイル文字起こしの完了時に、3 項目のいずれかが入力されていればメタデータ JSON を書く
+    /// （REQ-TRX-FILE-18 / REQ-META-01）。3 項目とも空なら作らない。失敗はステータスに出すだけ。
+    /// </summary>
+    private void WriteFileTranscriptionMetadata(string transcriptPath)
+    {
+        if (IsMetadataEmpty(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText))
+        {
+            return;
+        }
+
+        var jsonPath = RecordingMetadataFile.BuildMetadataPath(transcriptPath);
+        try
+        {
+            RecordingMetadataFile.Write(
+                jsonPath,
+                BuildMetadata(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText,
+                    _settings.ParticipantDomainSortedLast));
+            StatusMessage = $"文字起こし完了: {transcriptPath} (メタデータ: {System.IO.Path.GetFileName(jsonPath)})";
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            StatusMessage = $"文字起こしは完了しましたが、メタデータの保存に失敗しました: {ex.Message}";
         }
     }
 

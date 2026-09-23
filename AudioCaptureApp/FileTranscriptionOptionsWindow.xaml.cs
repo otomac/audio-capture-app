@@ -68,7 +68,12 @@ public partial class FileTranscriptionOptionsWindow : Window
     // ここまで例外は伝播しない。
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
-        await _viewModel.StartFileTranscriptionAsync();
+        var started = await _viewModel.StartFileTranscriptionAsync();
+        if (!started)
+        {
+            // REQ-TRX-FILE-17: モデルを読み込めず処理を始めていない。理由はダイアログ内に出ている。
+            return;
+        }
 
         // 処理中に利用者がこのウィンドウを閉じていた場合、Close() は何もしない
         // （そのときはメインウィンドウ側の進捗表示が引き継いでいる。REQ-TRX-FILE-13）。

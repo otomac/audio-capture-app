@@ -118,9 +118,36 @@
                         <Button Grid.Column="0" Content="● 録音開始"
                                 Style="{StaticResource Button.Record}"
                                 Command="{Binding StartRecordingCommand}"/>
-                        <Button Grid.Column="1" Content="■ 停止" Margin="8,0,0,0"
-                                Style="{StaticResource Button.Stop}"
-                                Command="{Binding StopRecordingCommand}"/>
+                        <!-- 停止処理中は同じ位置・同じ寸法で「打ち切り」に置き換わる（REQ-REC-07 / REQ-TRX-LIVE-11、NFR-09）。
+                             打ち切りは滞留した文字起こしを捨てるため、Click で確認してから ViewModel を呼ぶ。 -->
+                        <Grid Grid.Column="1" Margin="8,0,0,0">
+                            <Button Content="■ 停止" Command="{Binding StopRecordingCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource Button.Stop}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsStopping}" Value="True">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="打ち切り" Click="AbortStopButton_Click">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource Button.Stop}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsStopping}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsStopAbortRequested}" Value="True">
+                                                <Setter Property="IsEnabled" Value="False"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Grid>
 
                         <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
                             <TextBlock Text="{Binding RecordingStatusText}"
@@ -184,9 +211,30 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"
-                           Style="{StaticResource Text.Label}"
-                           TextTrimming="CharacterEllipsis"/>
+                <Grid Grid.Column="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"
+                               Style="{StaticResource Text.Label}"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <!-- REQ-REC-07: 録音中に文字起こしが遅れていることを知らせる。遅れが小さいうちは畳む -->
+                    <TextBlock Grid.Column="1" Text="{Binding TranscriptionLagWarning}" Margin="8,0,0,0"
+                               ToolTip="録音は問題なく続いています。このまま停止すると、遅れている分を処理し終えるまで待つことになります（停止のときに、待つか捨てるかを選べます）。&#x0a;改善するには、設定でより軽い Whisper モデルを選ぶか、ライブ文字起こしを切って録音だけにし、あとから音声ファイルを文字起こししてください。">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Error}">
+                                <Setter Property="Visibility" Value="Visible"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding TranscriptionLagWarning}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
 
                 <!-- REQ-TRX-DIA-15: 話者識別の状態はここ 1 か所に出す。幅は固定（NFR-09） -->
                 <Border Grid.Column="1" Margin="8,0,0,0"

@@ -32,6 +32,13 @@ public class AppSettingsTests
         // 推論スレッド数の既定は環境依存（REQ-TRX-DIA-14）。結果は変わらず速度だけが変わる設定なので、
         // 論理コア数の少ない環境で 4 を強制しないよう min を取る。
         Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
+        // 録音の自動開始は既定で OFF（REQ-CFG-10）。勝手に録音が始まる既定にしてはならない
+        Assert.False(settings.AutoStartRecordingEnabled);
+        // 実測にもとづく既定（REQ-REC-12 / T176）
+        Assert.Equal(-15.0, settings.AutoStartThresholdDb);
+        Assert.Equal(1.0, settings.AutoStartSustainSeconds);
+        Assert.Equal(0.3, settings.AutoStartDipGraceSeconds);
+        Assert.Equal(10.0, settings.AutoStartCooldownSeconds);
     }
 
     [Fact]
@@ -78,6 +85,37 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void JsonRoundTrip_PreservesWhisperModelList()
+    {
+        // REQ-CFG-08: エイリアス付きの一覧が往復すること。既定は空（旧設定は読み込み時に移行する）
+        Assert.Empty(new AppSettings().WhisperModelList);
+
+        var original = new AppSettings();
+        original.WhisperModelList.Add(new WhisperModelEntry { ModelName = "small", ModelPath = @"C:\m\small.bin" });
+        original.WhisperModelList.Add(new WhisperModelEntry { ModelName = "large", ModelPath = @"C:\m\large.bin" });
+
+        var deserialized = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(original));
+
+        Assert.NotNull(deserialized);
+        Assert.Equal(2, deserialized.WhisperModelList.Count);
+        Assert.Equal("small", deserialized.WhisperModelList[0].ModelName);
+        Assert.Equal(@"C:\m\large.bin", deserialized.WhisperModelList[1].ModelPath);
+    }
+
+    [Fact]
+    public void JsonRoundTrip_PreservesFileWhisperModelName()
+    {
+        // REQ-CFG-09: 既定は null（＝ライブ用と同じ）。名前が往復すること
+        Assert.Null(new AppSettings().FileWhisperModelName);
+
+        var original = new AppSettings { FileWhisperModelName = "large" };
+        var deserialized = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(original));
+
+        Assert.NotNull(deserialized);
+        Assert.Equal("large", deserialized.FileWhisperModelName);
+    }
+
+    [Fact]
     public void JsonDeserialization_MissingFields_UsesDefaults()
     {
         var json = "{}";
@@ -98,5 +136,7 @@ public class AppSettingsTests
         Assert.False(settings.SpeakerDiarizationEnabled);
         Assert.Equal(0.5, settings.SpeakerClusteringThreshold);
         Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
+        // 既存の settings.json に自動開始のキーは無い。OFF のままであること
+        Assert.False(settings.AutoStartRecordingEnabled);
     }
 }

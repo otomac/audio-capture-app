@@ -89,15 +89,17 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` が既存の例） |
 | データの入れ物 | `Models/` の POCO | ロジックを入れない |
 | 再利用する UI 部品 | `Controls/` のユーザーコントロール | 依存プロパティで ViewModel とバインドする |
-| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` | `MainViewModel` を `DataContext` に共有し、自前の状態を持たない。生成は `MainWindow` が行い、`Owner` を設定する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。**5 枚目を足すときは先に [ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価を行う** |
+| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` | `MainViewModel` を `DataContext` に共有し、自前の状態を持たない。生成は `MainWindow` が行い、`Owner` を設定する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。**7 枚目を足すときは先に [ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価を行う**（5 枚目・6 枚目は ADR-0006 で処理済み） |
 
 ## 6. 構造が壊れかけているサイン
 
 以下に該当したら、その場で直さず **ADR を起票して構造変更を提案** する。
 
-- `MainViewModel` の **全ファイル合計**（`MainViewModel*.cs`）が **1,500 行** を超えた
-  → ウィンドウ単位の ViewModel 分割を検討（[ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価契機①）
-- **5 枚目のウィンドウ**を足すことになった → 同上（[ADR-0005](../adr/0005-mainviewmodel-split.md) の再評価契機②）
+- `MainViewModel` の **全ファイル合計**（`MainViewModel*.cs`）が **2,500 行** を超えた
+  → ウィンドウ単位の ViewModel 分割を検討（[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価契機①。
+  1,500 行の契機は ADR-0006 で処理済み）
+- **7 枚目のウィンドウ**を足すことになった → 同上（[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価契機②）
+- ただし **T170**（案 A の実施判断）は契機を待たずに 2026-09 のバッチ統合後に検討する（ADR-0006 規則 2）
 - 1 つの Service が **3 つ以上の無関係な外部リソース** を触っている → Service 分割を検討
 - View のコードビハインドに `if` による業務判断が現れた → ViewModel へ移す
 - テストを書くために `public` にした（本来 `private` でよい）メンバーが増えた

@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using AudioCaptureApp.Models;
 using AudioCaptureApp.Services;
 using AudioCaptureApp.ViewModels;
 
@@ -663,5 +664,298 @@ public class MainViewModelTests
 
         Assert.All(texts, t => Assert.False(string.IsNullOrWhiteSpace(t)));
         Assert.Equal(3, texts.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    // --- ダイアログの「話者識別を行う」 (T166 / REQ-TRX-DIA-16) ---
+
+    [Fact]
+    public void IsDiarizationSelectable_Available_ReturnsTrue()
+    {
+        // ①有効のときだけ操作できる（既定は ON = 従来と同じ挙動）
+        Assert.True(MainViewModel.IsDiarizationSelectable(MainViewModel.DiarizationAvailability.Available));
+    }
+
+    [Fact]
+    public void IsDiarizationSelectable_ModelMissingOrDisabled_ReturnsFalse()
+    {
+        // ②モデル未配置・③無効は OFF 固定（話者識別を試みない）
+        Assert.False(MainViewModel.IsDiarizationSelectable(MainViewModel.DiarizationAvailability.ModelMissing));
+        Assert.False(MainViewModel.IsDiarizationSelectable(MainViewModel.DiarizationAvailability.Disabled));
+    }
+
+    // --- ダイアログの話者人数の既定 (T167 / REQ-TRX-DIA-17) ---
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(9)]
+    public void SpeakerCountOptionFor_SettingsOneToNine_SelectsThatCount(int settingsValue)
+    {
+        var option = MainViewModel.SpeakerCountOptionFor(settingsValue);
+
+        Assert.Equal(settingsValue, option.Count);
+        Assert.Same(SpeakerCountOptions.All[settingsValue], option);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(-3)]
+    [InlineData(10)]
+    [InlineData(12)]
+    public void SpeakerCountOptionFor_NullZeroOrTenPlus_SelectsUnspecified(int? settingsValue)
+    {
+        // 通常（設定 null）は「指定なし」。10 以上も「指定なし」に倒す（設定値がそのまま効く従来の挙動を保つ）
+        Assert.Same(SpeakerCountOptions.Unspecified, MainViewModel.SpeakerCountOptionFor(settingsValue));
+    }
+
+    // --- Whisper モデルの登録一覧 (T162 / REQ-CFG-08 / REQ-MODELWIN-02〜03) ---
+
+    private static WhisperModelEntry Entry(string name, string path) => new() { ModelName = name, ModelPath = path };
+
+    [Fact]
+    public void MigrateWhisperModelList_NoListWithPath_CreatesOneEntryNamedByFileName()
+    {
+        // 旧バージョンの settings.json（一覧なし・パスだけ）は 1 件へ移行する
+        var list = MainViewModel.MigrateWhisperModelList(null, @"C:\models\ggml-small.bin");
+
+        var entry = Assert.Single(list);
+        Assert.Equal("ggml-small", entry.ModelName);
+        Assert.Equal(@"C:\models\ggml-small.bin", entry.ModelPath);
+    }
+
+    [Fact]
+    public void MigrateWhisperModelList_NoListNoPath_ReturnsEmpty()
+    {
+        Assert.Empty(MainViewModel.MigrateWhisperModelList(null, ""));
+        Assert.Empty(MainViewModel.MigrateWhisperModelList([], null));
+    }
+
+    [Fact]
+    public void MigrateWhisperModelList_ListContainsPath_IsUnchanged()
+    {
+        // 大文字小文字の違いだけなら同じファイルとみなし、足さない
+        var existing = Entry("small", @"C:\Models\GGML-SMALL.bin");
+
+        var list = MainViewModel.MigrateWhisperModelList([existing], @"c:\models\ggml-small.bin");
+
+        Assert.Same(existing, Assert.Single(list));
+    }
+
+    [Fact]
+    public void MigrateWhisperModelList_ListWithoutPath_AppendsEntry()
+    {
+        // 手編集で一覧に無いパスが選ばれていたら、選択を表現できるよう 1 件足す
+        var list = MainViewModel.MigrateWhisperModelList(
+            [Entry("small", @"C:\m\small.bin")], @"C:\m\large.bin");
+
+        Assert.Equal(2, list.Count);
+        Assert.Equal("large", list[1].ModelName);
+    }
+
+    [Fact]
+    public void MigrateWhisperModelList_DuplicateName_AppendsSuffix()
+    {
+        // 起動時に検証エラーで止まれないため、名前が重なったら連番を付ける
+        var list = MainViewModel.MigrateWhisperModelList(
+            [Entry("small", @"C:\a\small.bin"), Entry("small (2)", @"C:\b\small.bin")], @"C:\c\small.bin");
+
+        Assert.Equal("small (3)", list[2].ModelName);
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_BlankName_ReturnsError()
+    {
+        var error = MainViewModel.ValidateWhisperModelEntry([], "  ", @"C:\m\a.bin", null, _ => true);
+
+        Assert.NotNull(error);
+        Assert.Contains("名前", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_MissingFile_ReturnsError()
+    {
+        var error = MainViewModel.ValidateWhisperModelEntry([], "a", @"C:\m\a.bin", null, _ => false);
+
+        Assert.NotNull(error);
+        Assert.Contains("見つかりません", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_DuplicateName_ReturnsError()
+    {
+        var existing = new[] { Entry("small", @"C:\m\small.bin") };
+
+        var error = MainViewModel.ValidateWhisperModelEntry(existing, "small", @"C:\m\other.bin", null, _ => true);
+
+        Assert.NotNull(error);
+        Assert.Contains("同じ名前", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_DuplicatePathIgnoringCase_ReturnsError()
+    {
+        // 同じファイルを別の表記で 2 度登録させない（REQ-CFG-08）
+        var existing = new[] { Entry("small", @"C:\m\small.bin") };
+
+        var error = MainViewModel.ValidateWhisperModelEntry(existing, "small2", @"c:\M\SMALL.BIN", null, _ => true);
+
+        Assert.NotNull(error);
+        Assert.Contains("同じファイル", error, StringComparison.Ordinal);
+        Assert.Contains("small", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_Rename_IgnoresSelfForDuplicates()
+    {
+        // 名前変更では自分自身のパスを重複と数えない。他の要素の名前とは重ねられない
+        var self = Entry("small", @"C:\m\small.bin");
+        var other = Entry("large", @"C:\m\large.bin");
+
+        Assert.Null(MainViewModel.ValidateWhisperModelEntry([self, other], "small-v3", self.ModelPath, self, _ => true));
+        Assert.NotNull(MainViewModel.ValidateWhisperModelEntry([self, other], "large", self.ModelPath, self, _ => true));
+    }
+
+    [Fact]
+    public void ValidateWhisperModelEntry_Valid_ReturnsNull()
+    {
+        var existing = new[] { Entry("small", @"C:\m\small.bin") };
+
+        Assert.Null(MainViewModel.ValidateWhisperModelEntry(existing, "large", @"C:\m\large.bin", null, _ => true));
+    }
+
+    // --- ファイル文字起こしに使うモデルの既定 (T163 / REQ-TRX-FILE-17 / REQ-CFG-09) ---
+
+    [Fact]
+    public void FileWhisperModelFor_SavedNameExists_SelectsIt()
+    {
+        var small = Entry("small", @"C:\m\small.bin");
+        var large = Entry("large", @"C:\m\large.bin");
+
+        Assert.Same(large, MainViewModel.FileWhisperModelFor([small, large], "large", liveModel: small));
+    }
+
+    [Fact]
+    public void FileWhisperModelFor_SavedNameMissing_FallsBackToLive()
+    {
+        // 名前変更・削除で保存名が一覧に無くなったら、ライブ用と同じモデルへ倒す
+        var small = Entry("small", @"C:\m\small.bin");
+        var large = Entry("large", @"C:\m\large.bin");
+
+        Assert.Same(small, MainViewModel.FileWhisperModelFor([large, small], "gone", liveModel: small));
+        Assert.Same(small, MainViewModel.FileWhisperModelFor([large, small], null, liveModel: small));
+    }
+
+    [Fact]
+    public void FileWhisperModelFor_NoLive_FallsBackToFirst()
+    {
+        var small = Entry("small", @"C:\m\small.bin");
+
+        Assert.Same(small, MainViewModel.FileWhisperModelFor([small], null, liveModel: null));
+        Assert.Null(MainViewModel.FileWhisperModelFor([], null, liveModel: null));
+    }
+
+    // --- 停止処理中の残り表示と打ち切り (T165 / REQ-REC-07 / REQ-TRX-LIVE-11) ---
+
+    [Fact]
+    public void StoppingStatusFor_WithPending_ShowsCeiledSeconds()
+    {
+        Assert.Equal("停止処理中... 文字起こしの残り 114 秒分", MainViewModel.StoppingStatusFor(113.8));
+        Assert.Equal("停止処理中... 文字起こしの残り 1 秒分", MainViewModel.StoppingStatusFor(0.5));
+    }
+
+    [Fact]
+    public void StoppingStatusFor_NothingPending_IsPlain()
+    {
+        // 文字起こしが無効なら残りは常に 0 で、従来の文言のまま
+        Assert.Equal("停止処理中...", MainViewModel.StoppingStatusFor(0.0));
+        Assert.Equal("停止処理中...", MainViewModel.StoppingStatusFor(0.4));
+    }
+
+    [Fact]
+    public void AbortStopConfirmationMessage_MentionsPendingSeconds()
+    {
+        var message = MainViewModel.AbortStopConfirmationMessage(113.8);
+
+        Assert.Contains("114 秒分", message, StringComparison.Ordinal);
+        Assert.Contains("捨て", message, StringComparison.Ordinal);
+    }
+
+    // --- 遅れの警告と停止時の確認 (T175 / REQ-REC-07 / REQ-TRX-LIVE-11) ---
+
+    [Fact]
+    public void TranscriptionLagWarningFor_BelowThreshold_IsEmpty()
+    {
+        // 少しの遅れは通常運転。いちいち警告しない
+        Assert.Equal("", MainViewModel.TranscriptionLagWarningFor(0));
+        Assert.Equal("", MainViewModel.TranscriptionLagWarningFor(59.9));
+    }
+
+    [Fact]
+    public void TranscriptionLagWarningFor_OverThreshold_ShowsSecondsThenMinutes()
+    {
+        Assert.Equal("文字起こしが 60 秒遅れています", MainViewModel.TranscriptionLagWarningFor(60));
+        Assert.Equal("文字起こしが 119 秒遅れています", MainViewModel.TranscriptionLagWarningFor(119.9));
+        Assert.Equal("文字起こしが 2 分遅れています", MainViewModel.TranscriptionLagWarningFor(120));
+        Assert.Equal("文字起こしが 10 分遅れています", MainViewModel.TranscriptionLagWarningFor(600));
+    }
+
+    [Fact]
+    public void StopConfirmationMessage_SmallBacklog_IsNull()
+    {
+        // 残りが少なければ確認せず、従来どおり待って停止する
+        Assert.Null(MainViewModel.StopConfirmationMessage(0));
+        Assert.Null(MainViewModel.StopConfirmationMessage(59.9));
+    }
+
+    [Fact]
+    public void StopConfirmationMessage_LargeBacklog_AsksWithSeconds()
+    {
+        var message = MainViewModel.StopConfirmationMessage(113.8);
+
+        Assert.NotNull(message);
+        Assert.Contains("114 秒分", message, StringComparison.Ordinal);
+        Assert.Contains("音声ファイルは残ります", message, StringComparison.Ordinal);
+    }
+
+    // --- 失敗理由の併記 (T134 / REQ-TRX-FILE-12) ---
+
+    [Fact]
+    public void FileTranscriptionFailureMessageFor_WithReason_AppendsReason()
+    {
+        Assert.Equal(
+            "文字起こしに失敗しました: ファイル文字起こしエラー: x",
+            MainViewModel.FileTranscriptionFailureMessageFor("ファイル文字起こしエラー: x"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void FileTranscriptionFailureMessageFor_WithoutReason_IsPlain(string? reason)
+    {
+        Assert.Equal("文字起こしに失敗しました", MainViewModel.FileTranscriptionFailureMessageFor(reason));
+    }
+
+    // --- 対応形式 (T161 / REQ-TRX-FILE-03) ---
+
+    [Theory]
+    [InlineData(@"C:\a\meeting.wav")]
+    [InlineData(@"C:\a\meeting.mp3")]
+    [InlineData(@"C:\a\meeting.m4a")]
+    [InlineData(@"C:\a\MEETING.M4A")]
+    public void IsSupportedAudioExtension_SupportedFormats_ReturnsTrue(string path)
+    {
+        Assert.True(MainViewModel.IsSupportedAudioExtension(path));
+    }
+
+    [Theory]
+    [InlineData(@"C:\a\meeting.aac")]
+    [InlineData(@"C:\a\meeting.flac")]
+    [InlineData(@"C:\a\meeting.mp4")]
+    [InlineData(@"C:\a\meeting")]
+    public void IsSupportedAudioExtension_Unsupported_ReturnsFalse(string path)
+    {
+        Assert.False(MainViewModel.IsSupportedAudioExtension(path));
     }
 }

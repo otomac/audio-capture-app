@@ -75,6 +75,43 @@ public sealed record SpeakerDiarizationOptions
 }
 
 /// <summary>
+/// オプション指定ダイアログの話者人数の選択肢 1 つ（REQ-TRX-DIA-17）。
+/// <see cref="Count"/> が <c>null</c> なら「未選択」であり、設定値 <c>KnownSpeakerCount</c> に倒れる。
+/// </summary>
+public sealed record SpeakerCountOption(string DisplayName, int? Count);
+
+/// <summary>話者人数の選択肢一覧（REQ-TRX-DIA-17）。</summary>
+public static class SpeakerCountOptions
+{
+    /// <summary>ダイアログから指定できる人数の上限。これを超える人数は「10 人以上」＝未選択として扱う。</summary>
+    public const int MaxSelectableCount = 9;
+
+    /// <summary>
+    /// 「指定なし」「1 人」〜「9 人」「10 人以上」。先頭が「指定なし」で、末尾の「10 人以上」も
+    /// 「指定なし」と同じ扱い（どちらも <see cref="SpeakerCountOption.Count"/> は <c>null</c>）。
+    /// </summary>
+    public static IReadOnlyList<SpeakerCountOption> All { get; } = Build();
+
+    /// <summary>先頭の「指定なし」。</summary>
+    public static SpeakerCountOption Unspecified => All[0];
+
+    private static SpeakerCountOption[] Build()
+    {
+        var options = new SpeakerCountOption[MaxSelectableCount + 2];
+        options[0] = new SpeakerCountOption("指定なし", null);
+        for (int count = 1; count <= MaxSelectableCount; count++)
+        {
+            options[count] = new SpeakerCountOption(
+                string.Create(CultureInfo.CurrentCulture, $"{count} 人"), count);
+        }
+
+        options[MaxSelectableCount + 1] = new SpeakerCountOption(
+            string.Create(CultureInfo.CurrentCulture, $"{MaxSelectableCount + 1} 人以上"), null);
+        return options;
+    }
+}
+
+/// <summary>
 /// 話者ダイアライゼーションの失敗（REQ-TRX-DIA-11）。
 /// どの段階で何が起きたかがメッセージから分かるようにする。音声の内容や文字起こし本文は載せない。
 /// </summary>
@@ -121,6 +158,12 @@ public sealed class SpeakerDiarizationService : IDisposable
     private readonly Lock _gate = new();
 
     private OfflineSpeakerDiarization? _diarization;
+
+    /// <summary>
+    /// いま <see cref="_diarization"/> に適用しているクラスタリングの話者数（REQ-TRX-DIA-10）。
+    /// 次の実行で違う値が来たときだけ <c>SetConfig</c> で差し替える。
+    /// </summary>
+    private int? _appliedSpeakerCount;
     private bool _disposed;
 
     public SpeakerDiarizationService(SpeakerDiarizationOptions options)
@@ -130,9 +173,23 @@ public sealed class SpeakerDiarizationService : IDisposable
     }
 
     /// <summary>
+    /// 実際に使う話者数を決める（REQ-TRX-DIA-07）。ダイアログの選択を優先し、未選択（<c>null</c>）なら設定値。
+    /// 設定値も含めて 0 以下は未指定（<c>null</c>）に倒す。
+    /// </summary>
+    internal static int? EffectiveSpeakerCount(int? dialogSelection, int? settingsValue)
+    {
+        var chosen = dialogSelection ?? settingsValue;
+        return chosen is int count && count > 0 ? count : null;
+    }
+
+    /// <summary>
     /// 音声全体を解析して話者区間を返す。
     /// </summary>
     /// <param name="samples">16kHz モノラルの PCM。**音声全体**を渡すこと（部分では話者 ID が揃わない）。</param>
+    /// <param name="knownSpeakerCount">
+    /// この実行で指定された話者数（REQ-TRX-DIA-17）。<c>null</c> なら設定値
+    /// <see cref="SpeakerDiarizationOptions.KnownSpeakerCount"/> に倒れる（REQ-TRX-DIA-07）。
+    /// </param>
     /// <param name="progress">解析の進み具合（0.0〜1.0）。ネイティブの進捗コールバックから呼ばれる。</param>
     /// <param name="ct">
     /// 開始前と完了後にだけ評価する。ネイティブ処理は途中で止めない（REQ-TRX-DIA-12）。
@@ -142,7 +199,7 @@ public sealed class SpeakerDiarizationService : IDisposable
     /// モデル未配置・モデル破損・初期化失敗・サンプリングレート不一致・推論失敗。
     /// </exception>
     public IReadOnlyList<SpeakerSegment> Diarize(
-        float[] samples, IProgress<double>? progress, CancellationToken ct)
+        float[] samples, int? knownSpeakerCount, IProgress<double>? progress, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(samples);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -163,6 +220,17 @@ public sealed class SpeakerDiarizationService : IDisposable
                     $"話者識別モデルが要求するサンプリングレート ({diarization.SampleRate} Hz) が、" +
                     $"本アプリが渡す音声のレート ({RequiredSampleRate} Hz) と一致しません。" +
                     $"モデル: {_options.SegmentationModelPath}"));
+            }
+
+            // REQ-TRX-DIA-10: 話者数が前回と違うときだけ、モデルを読み込み直さずに
+            // クラスタリング設定を差し替える（T147 §7-4: SetConfig は 0.00 秒、結果は新規生成と一致）。
+            var speakerCount = EffectiveSpeakerCount(knownSpeakerCount, _options.KnownSpeakerCount);
+            if (speakerCount != _appliedSpeakerCount)
+            {
+                InvokeNative(
+                    () => { diarization.SetConfig(BuildConfig(speakerCount)); return true; },
+                    "話者識別のクラスタリング設定の差し替え");
+                _appliedSpeakerCount = speakerCount;
             }
 
             segments = Process(diarization, samples, progress);
@@ -232,13 +300,29 @@ public sealed class SpeakerDiarizationService : IDisposable
         EnsureModelFileExists(_options.SegmentationModelPath, "話者区間検出 (segmentation)");
         EnsureModelFileExists(_options.EmbeddingModelPath, "話者埋め込み (embedding)");
 
+        _diarization = InvokeNative(
+            () => new OfflineSpeakerDiarization(BuildConfig(_options.KnownSpeakerCount)),
+            "話者識別モデルの読み込み",
+            string.Create(CultureInfo.InvariantCulture,
+                $"segmentation: {_options.SegmentationModelPath} / embedding: {_options.EmbeddingModelPath}"));
+        _appliedSpeakerCount = _options.KnownSpeakerCount;
+
+        return _diarization;
+    }
+
+    /// <summary>
+    /// sherpa-onnx の設定を組み立てる。モデルとスレッド数は <see cref="_options"/> で固定し、
+    /// クラスタリング（話者数）だけを引数で受ける（REQ-TRX-DIA-07 / 10）。
+    /// </summary>
+    private OfflineSpeakerDiarizationConfig BuildConfig(int? knownSpeakerCount)
+    {
         var config = new OfflineSpeakerDiarizationConfig();
         config.Segmentation.Pyannote.Model = _options.SegmentationModelPath;
         config.Segmentation.NumThreads = _options.NumThreads;
         config.Embedding.Model = _options.EmbeddingModelPath;
         config.Embedding.NumThreads = _options.NumThreads;
 
-        if (_options.KnownSpeakerCount is int knownCount)
+        if (knownSpeakerCount is int knownCount)
         {
             // 話者数が分かっているときだけクラスタ数を固定する。
             config.Clustering.NumClusters = knownCount;
@@ -250,13 +334,7 @@ public sealed class SpeakerDiarizationService : IDisposable
             config.Clustering.Threshold = (float)_options.ClusteringThreshold;
         }
 
-        _diarization = InvokeNative(
-            () => new OfflineSpeakerDiarization(config),
-            "話者識別モデルの読み込み",
-            string.Create(CultureInfo.InvariantCulture,
-                $"segmentation: {_options.SegmentationModelPath} / embedding: {_options.EmbeddingModelPath}"));
-
-        return _diarization;
+        return config;
     }
 
     /// <summary>

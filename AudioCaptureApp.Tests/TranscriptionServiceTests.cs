@@ -221,6 +221,40 @@ public class TranscriptionServiceTests
             TranscriptionService.ChunkTakeCount(0, TimeSpan.FromSeconds(600), null, Endpoint));
     }
 
+    // --- 遅れているときは早期確定しない (T175 / REQ-TRX-LIVE-13) ---
+
+    [Fact]
+    public void ChunkTakeCount_BehindAndSilentTail_WaitsForFullChunk()
+    {
+        // 遅れているときに 5 秒のチャンクを量産すると、1 回あたりの効率が悪く遅れが広がる。
+        // 末尾無音で確定せず、20 秒たまるまで待つ
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(
+                16000 * 5, Supplying, Endpoint, Endpoint, suppressEndpointing: true));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BehindAndFullChunk_StillTakesThreshold()
+    {
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(
+                Threshold, Supplying, 0, Endpoint, suppressEndpointing: true));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BehindButSupplyStopped_StillTakesBuffer()
+    {
+        // ③（供給の途絶）は遅れていても残す。止まったソースを無期限に抱え込まないため
+        const int buffered = 16000 * 5;
+
+        Assert.Equal(
+            buffered,
+            TranscriptionService.ChunkTakeCount(
+                buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint, suppressEndpointing: true));
+    }
+
     // --- 末尾無音の検出 (T129) ---
 
     [Fact]
@@ -1131,5 +1165,58 @@ public class TranscriptionServiceTests
     public void Normalize_MixedCaseAndPadding_IsAccepted()
     {
         Assert.Equal(TranscriptionLanguages.English, TranscriptionLanguages.NormalizeForLive(" EN "));
+    }
+
+    // --- ファイル文字起こし用モデルの共有判定 (T163 / REQ-TRX-FILE-17) ---
+
+    [Fact]
+    public void ShouldShareLiveFactory_SamePathAndLoaded_IsTrue()
+    {
+        // 同じファイルなら読み込み直さない。表記の大文字小文字は問わない
+        Assert.True(TranscriptionService.ShouldShareLiveFactory(@"C:\m\small.bin", @"C:\m\small.bin", isLoaded: true));
+        Assert.True(TranscriptionService.ShouldShareLiveFactory(@"c:\M\SMALL.BIN", @"C:\m\small.bin", isLoaded: true));
+        // 指定なし（null）はライブ用をそのまま使う
+        Assert.True(TranscriptionService.ShouldShareLiveFactory(null, @"C:\m\small.bin", isLoaded: true));
+    }
+
+    [Fact]
+    public void ShouldShareLiveFactory_DifferentPathOrNotLoaded_IsFalse()
+    {
+        Assert.False(TranscriptionService.ShouldShareLiveFactory(@"C:\m\large.bin", @"C:\m\small.bin", isLoaded: true));
+        // ライブ用が未読み込みなら、同じパスでも共有できる相手がいない（2 つ目として読む）
+        Assert.False(TranscriptionService.ShouldShareLiveFactory(@"C:\m\small.bin", @"C:\m\small.bin", isLoaded: false));
+        Assert.False(TranscriptionService.ShouldShareLiveFactory(@"C:\m\small.bin", null, isLoaded: true));
+    }
+
+    // --- 音声ファイルを開けなかったときのメッセージ (T161 / REQ-TRX-FILE-03) ---
+
+    [Fact]
+    public void OpenFailureMessage_M4a_ContainsFormatAndMediaFeaturePackHint()
+    {
+        var message = TranscriptionService.OpenFailureMessage(@"C:\a\Meeting.M4A", "reason");
+
+        Assert.Contains("(形式: .M4A)", message, StringComparison.Ordinal);
+        Assert.Contains("reason", message, StringComparison.Ordinal);
+        Assert.Contains("Media Feature Pack", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenFailureMessage_Mp3_ContainsFormatWithoutHint()
+    {
+        var message = TranscriptionService.OpenFailureMessage(@"C:\a\meeting.mp3", "reason");
+
+        Assert.Contains("(形式: .mp3)", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Media Feature Pack", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenAudioFile_MissingM4a_ThrowsWithFormatInMessage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-{Guid.NewGuid():N}.m4a");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => TranscriptionService.OpenAudioFile(path));
+
+        Assert.Contains(".m4a", ex.Message, StringComparison.Ordinal);
+        Assert.NotNull(ex.InnerException);
     }
 }

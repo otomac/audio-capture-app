@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -134,6 +134,60 @@ public static class TranscriptionLanguages
 /// </param>
 public readonly record struct FileTranscriptionProgress(string Phase, TimeSpan Processed, TimeSpan Total);
 
+/// <summary>
+/// ファイル文字起こし 1 回分の指定。オプション指定ダイアログ（REQ-TRX-FILE-09）で「開始」を押した時点の値。
+/// </summary>
+/// <param name="StartOffset">
+/// 出力行のタイムスタンプの起点（REQ-TRX-FILE-10）。ファイル先頭がこの時刻に録音されたものとして扱う。
+/// 未指定なら <see cref="TimeSpan.Zero"/>（＝ファイル先頭からの経過時間になる）。
+/// </param>
+/// <param name="Language">
+/// Whisper へ渡す言語（REQ-TRX-FILE-16）。<c>auto</c> なら自動判定。話者識別の有無にかかわらず同じ値を使う。
+/// </param>
+/// <param name="KnownSpeakerCount">
+/// ダイアログで選んだ話者人数（REQ-TRX-DIA-17）。<c>null</c> なら未選択で、設定値に倒れる（REQ-TRX-DIA-07）。
+/// 話者識別を通さないときは使われない。
+/// </param>
+/// <param name="ModelPath">
+/// この実行で使う Whisper モデルの実パス（REQ-TRX-FILE-17）。ライブ用に読み込み済みのモデルと同じなら共有し、
+/// 違えば実行の間だけ 2 つ目の <c>WhisperFactory</c> を作る。<c>null</c> ならライブ用をそのまま使う。
+/// </param>
+/// <param name="UseGpu">2 つ目の factory を作るときの GPU 使用有無。ライブ側の設定に従う（REQ-GPU-01 / 02）。</param>
+/// <param name="MeetingName">
+/// 会議名（REQ-TRX-FILE-18）。空でなければ出力ファイル名に `_会議名` を挟む（REQ-TRX-FILE-05 / REQ-META-02）。
+/// </param>
+public sealed record FileTranscriptionOptions(
+    TimeSpan StartOffset,
+    string Language,
+    int? KnownSpeakerCount,
+    string? ModelPath = null,
+    bool UseGpu = true,
+    string? MeetingName = null);
+
+/// <summary>ファイル文字起こしの結末（REQ-TRX-FILE-17）。</summary>
+public enum FileTranscriptionOutcome
+{
+    /// <summary>最後まで書き出した。</summary>
+    Completed,
+
+    /// <summary>モデルを読み込めず、処理を始めなかった。ダイアログは閉じない。</summary>
+    ModelLoadFailed,
+
+    /// <summary>処理中に失敗した（理由は <c>Error</c> イベントにも出している）。</summary>
+    Failed
+}
+
+/// <summary>
+/// <see cref="TranscriptionService.TranscribeFileAsync"/> の戻り値。
+/// </summary>
+/// <param name="Outcome">結末。</param>
+/// <param name="Message"><see cref="FileTranscriptionOutcome.ModelLoadFailed"/> のときの理由。それ以外は <c>null</c>。</param>
+public sealed record FileTranscriptionResult(FileTranscriptionOutcome Outcome, string? Message = null)
+{
+    /// <summary>最後まで書き出せたか。</summary>
+    public bool Success => Outcome == FileTranscriptionOutcome.Completed;
+}
+
 public class TranscriptionService : IDisposable
 {
     /// <summary>
@@ -168,7 +222,20 @@ public class TranscriptionService : IDisposable
     }
 
     private WhisperFactory? _factory;
+
+    /// <summary>
+    /// <see cref="_factory"/> に読み込んだモデルの実パス（REQ-TRX-FILE-17 の共有判定に使う）。
+    /// 未読み込みなら <c>null</c>。
+    /// </summary>
+    private string? _loadedModelPath;
+
     private readonly Dictionary<AudioSourceType, SourceState> _sources = new();
+
+    /// <summary>
+    /// <see cref="_sources"/> の要素の増減（登録・セッション停止・破棄）を <see cref="PendingSeconds"/> の
+    /// 列挙と競合させないための錠。ワーカーは要素を増減しないので、ワーカーの列挙は錠を取らない。
+    /// </summary>
+    private readonly Lock _sourcesLock = new();
     private Thread? _thread;
     private volatile bool _isRunning;
     private CancellationTokenSource? _cts;
@@ -426,6 +493,7 @@ public class TranscriptionService : IDisposable
                 // ファイル文字起こしまで失敗が判明しない（T122）。
                 _ = _factory.CreateBuilder();
             }
+            _loadedModelPath = modelPath;
 
             var loaded = RuntimeOptions.LoadedLibrary;
 
@@ -449,6 +517,12 @@ public class TranscriptionService : IDisposable
 #pragma warning restore CA1031
     }
 
+    /// <summary>
+    /// 読み込み済みのモデルを破棄して「未読み込み」へ戻す（REQ-MODELWIN-04）。
+    /// 選択中のモデルが一覧から削除されたときに使う。セッション停止後にのみ呼ぶこと。
+    /// </summary>
+    public void UnloadModel() => DisposeProcessor();
+
     public void RegisterSource(AudioSourceType type, string label, int sourceRate, int sourceChannels)
     {
         // 既存のプロセッサがあれば破棄（登録はセッション開始前なのでワーカーは動いていない）
@@ -460,7 +534,7 @@ public class TranscriptionService : IDisposable
         // α = 2π·fc / (2π·fc + sourceRate),  fc = TargetRate / 2
         float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
 
-        _sources[type] = new SourceState
+        var state = new SourceState
         {
             SourceRate = sourceRate,
             SourceChannels = sourceChannels,
@@ -468,6 +542,10 @@ public class TranscriptionService : IDisposable
             Processor = WithLanguageOption(_factory!.CreateBuilder(), LiveLanguage).Build(),
             LpfAlpha = alpha
         };
+        lock (_sourcesLock)
+        {
+            _sources[type] = state;
+        }
     }
 
     public void StartSession(string mp3FilePath, DateTime startTime)
@@ -498,6 +576,7 @@ public class TranscriptionService : IDisposable
 
         _sessionClock.Restart();
         _cts = new CancellationTokenSource();
+        _abortRequested = false;
         _isRunning = true;
         _thread = new Thread(TranscriptionLoop) { IsBackground = true, Name = "WhisperTranscription" };
         _thread.Start();
@@ -628,42 +707,62 @@ public class TranscriptionService : IDisposable
     /// <summary>
     /// 音声ファイルを文字起こしする。
     /// </summary>
-    /// <param name="startOffset">
-    /// 出力行のタイムスタンプの起点（REQ-TRX-FILE-10）。ファイル先頭がこの時刻に録音されたものとして扱う。
-    /// 未指定なら <see cref="TimeSpan.Zero"/> を渡す（＝ファイル先頭からの経過時間になる）。
-    /// </param>
-    /// <param name="language">
-    /// Whisper へ渡す言語（REQ-TRX-FILE-16）。<c>auto</c> なら自動判定。
-    /// 話者識別の有無にかかわらず同じ値を使う。
-    /// </param>
+    /// <param name="options">開始時刻・言語・話者人数（<see cref="FileTranscriptionOptions"/>）。</param>
     /// <remarks>
-    /// <paramref name="startOffset"/> は進捗（<paramref name="progress"/>）には足さない。
+    /// <see cref="FileTranscriptionOptions.StartOffset"/> は進捗（<paramref name="progress"/>）には足さない。
     /// 進捗は残りの目安であって時刻ではないため、常にファイル先頭基準で報告する。
     /// </remarks>
-    public async Task<bool> TranscribeFileAsync(
+    public async Task<FileTranscriptionResult> TranscribeFileAsync(
         string audioFilePath,
-        TimeSpan startOffset,
-        string language,
+        FileTranscriptionOptions options,
         SpeakerDiarizationService? diarization,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
-        if (_factory == null)
+        ArgumentNullException.ThrowIfNull(options);
+
+        // REQ-TRX-FILE-17: ライブ用と同じモデルなら共有し、違えばこの実行の間だけ 2 つ目を作る。
+        WhisperFactory factory;
+        WhisperFactory? ownFactory = null;
+        if (ShouldShareLiveFactory(options.ModelPath, _loadedModelPath, _factory != null))
         {
-            Error?.Invoke("Whisperモデルが読み込まれていません。");
-            return false;
+            factory = _factory!;
+        }
+        else
+        {
+            var modelPath = options.ModelPath ?? _loadedModelPath;
+            if (string.IsNullOrEmpty(modelPath))
+            {
+                return new FileTranscriptionResult(
+                    FileTranscriptionOutcome.ModelLoadFailed, "Whisperモデルが選ばれていません。");
+            }
+
+            progress?.Report(new FileTranscriptionProgress(LoadModelPhase, TimeSpan.Zero, TimeSpan.Zero));
+            var (loaded, loadError) = TryCreateFactory(modelPath, options.UseGpu);
+            if (loaded == null)
+            {
+                return new FileTranscriptionResult(FileTranscriptionOutcome.ModelLoadFailed, loadError);
+            }
+            ownFactory = loaded;
+            factory = loaded;
         }
 
-        string outputPath = BuildTranscriptPath(audioFilePath);
+        string outputPath = BuildTranscriptPath(audioFilePath, options.MeetingName);
+        var startOffset = options.StartOffset;
+        var language = options.Language;
         try
         {
+            ct.ThrowIfCancellationRequested();
+
             // diarization が null なら従来どおりストリーミングで処理する（REQ-TRX-DIA-03）。
             // 非 null のときだけ、音声全体をメモリへ載せる経路へ分岐する（NFR-07）。
             var work = diarization == null
-                ? TranscribeFileCoreAsync(audioFilePath, outputPath, startOffset, language, progress, ct)
+                ? TranscribeFileCoreAsync(factory, audioFilePath, outputPath, startOffset, language, progress, ct)
                 : TranscribeFileWithDiarizationAsync(
-                    audioFilePath, outputPath, startOffset, language, diarization, progress, ct);
-            return await work.ConfigureAwait(false);
+                    factory, audioFilePath, outputPath, startOffset, language, options.KnownSpeakerCount,
+                    diarization, progress, ct);
+            var ok = await work.ConfigureAwait(false);
+            return new FileTranscriptionResult(ok ? FileTranscriptionOutcome.Completed : FileTranscriptionOutcome.Failed);
         }
         catch (OperationCanceledException)
         {
@@ -673,7 +772,7 @@ public class TranscriptionService : IDisposable
             throw;
         }
         // CA1031: キャンセル判定のため全例外をいったん見る必要がある（次行のコメント参照）。
-        //         キャンセル以外は Error イベントに変換して false を返す。
+        //         キャンセル以外は Error イベントに変換して Failed を返す。
 #pragma warning disable CA1031
         catch (Exception ex)
         {
@@ -685,7 +784,60 @@ public class TranscriptionService : IDisposable
                 throw new OperationCanceledException(ct);
             }
             Error?.Invoke($"ファイル文字起こしエラー: {ex.Message}");
+            return new FileTranscriptionResult(FileTranscriptionOutcome.Failed);
+        }
+#pragma warning restore CA1031
+        finally
+        {
+            // 2 つ目の factory はこの実行の間だけ（完了・失敗・中止のいずれでも破棄する）
+            ownFactory?.Dispose();
+        }
+    }
+
+    /// <summary>進捗表示に出すフェーズ名（REQ-TRX-FILE-17。2 つ目のモデルを読み込んでいる間）。</summary>
+    internal const string LoadModelPhase = "モデル読み込み中";
+
+    /// <summary>
+    /// ライブ用に読み込み済みの factory を共有できるか（REQ-TRX-FILE-17）。
+    /// 指定が無い（<c>null</c>）か、実パスが読み込み済みのモデルと同じで、かつ読み込み済みなら共有する。
+    /// </summary>
+    internal static bool ShouldShareLiveFactory(string? requestedPath, string? loadedPath, bool isLoaded)
+    {
+        if (!isLoaded || string.IsNullOrEmpty(loadedPath))
+        {
             return false;
+        }
+
+        return requestedPath == null
+            || string.Equals(requestedPath.Trim(), loadedPath.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ファイル文字起こし用の 2 つ目の factory を作る（REQ-TRX-FILE-17）。
+    /// ライブ用の <see cref="LoadModel"/> と同じく <c>CreateBuilder()</c> を 1 度呼んで失敗を確定させる（T122）。
+    /// </summary>
+    /// <returns>成功なら factory、失敗なら理由。</returns>
+    private static (WhisperFactory? Factory, string? Error) TryCreateFactory(string modelPath, bool useGpu)
+    {
+        if (!File.Exists(modelPath))
+        {
+            return (null, $"モデルファイルが見つかりません: {modelPath}");
+        }
+
+        WhisperFactory? factory = null;
+        try
+        {
+            factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = useGpu });
+            _ = factory.CreateBuilder();
+            return (factory, null);
+        }
+        // CA1031: Whisper のネイティブ読み込みは環境依存の任意の例外を投げる。
+        //         失敗は理由として呼び出し元へ返し、ダイアログに表示する。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            factory?.Dispose();
+            return (null, $"Whisperモデル読み込み失敗 ({Path.GetFileName(modelPath)}): {ex.Message}");
         }
 #pragma warning restore CA1031
     }
@@ -693,6 +845,7 @@ public class TranscriptionService : IDisposable
     // 破棄対象（reader / writer / processor）を using で束ねるために本体を切り出している。
     // 例外は using による破棄が完了してから呼び出し元へ伝播する。
     private async Task<bool> TranscribeFileCoreAsync(
+        WhisperFactory factory,
         string audioFilePath,
         string outputPath,
         TimeSpan startOffset,
@@ -700,14 +853,14 @@ public class TranscriptionService : IDisposable
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
     {
-        await using var reader = new AudioFileReader(audioFilePath);
+        await using var reader = OpenAudioFile(audioFilePath);
         int sourceRate = reader.WaveFormat.SampleRate;
         int channels = reader.WaveFormat.Channels;
         TimeSpan totalTime = reader.TotalTime;
         float alpha = (float)(Math.PI * TargetRate / (Math.PI * TargetRate + sourceRate));
 
         await using var writer = new StreamWriter(outputPath, append: false, Encoding.UTF8);
-        await using var processor = WithLanguageOption(_factory!.CreateBuilder(), language).Build();
+        await using var processor = WithLanguageOption(factory.CreateBuilder(), language).Build();
 
         // ファイル読み込みバッファ（約1秒分）
         var readBuffer = new float[sourceRate * channels];
@@ -788,10 +941,12 @@ public class TranscriptionService : IDisposable
     /// </para>
     /// </remarks>
     private async Task<bool> TranscribeFileWithDiarizationAsync(
+        WhisperFactory factory,
         string audioFilePath,
         string outputPath,
         TimeSpan startOffset,
         string language,
+        int? knownSpeakerCount,
         SpeakerDiarizationService diarization,
         IProgress<FileTranscriptionProgress>? progress,
         CancellationToken ct)
@@ -804,12 +959,12 @@ public class TranscriptionService : IDisposable
         var diarizeProgress = progress == null
             ? null
             : new FractionProgress(progress, DiarizePhase, totalTime);
-        var speakerSegments = diarization.Diarize(pcm, diarizeProgress, ct);
+        var speakerSegments = diarization.Diarize(pcm, knownSpeakerCount, diarizeProgress, ct);
         ct.ThrowIfCancellationRequested();
 
         // ② Whisper は同じ音声を独立に解析する。Diarization の結果で音声を切り分けない
         //    （切り分けると Whisper の認識コンテキストが失われる）。
-        var transcriptSegments = await CollectTranscriptSegmentsAsync(pcm, totalTime, language, progress, ct)
+        var transcriptSegments = await CollectTranscriptSegmentsAsync(factory, pcm, totalTime, language, progress, ct)
             .ConfigureAwait(false);
 
         // ③ タイムラインを突き合わせる。ここは純粋関数で、推論も I/O も行わない。
@@ -834,7 +989,7 @@ public class TranscriptionService : IDisposable
     /// </remarks>
     private static float[] DecodeToMono16k(string audioFilePath, CancellationToken ct, out TimeSpan totalTime)
     {
-        using var reader = new AudioFileReader(audioFilePath);
+        using var reader = OpenAudioFile(audioFilePath);
         int sourceRate = reader.WaveFormat.SampleRate;
         int channels = reader.WaveFormat.Channels;
         totalTime = reader.TotalTime;
@@ -868,6 +1023,7 @@ public class TranscriptionService : IDisposable
     /// <see cref="WriteAttributedSegmentsAsync"/> で行を整形する直前に足す。
     /// </remarks>
     private async Task<List<TranscriptSegment>> CollectTranscriptSegmentsAsync(
+        WhisperFactory factory,
         float[] pcm,
         TimeSpan totalTime,
         string language,
@@ -882,7 +1038,7 @@ public class TranscriptionService : IDisposable
         // 挙動を変えないため。DTW（UseDtwTimeStamps）は使わない — 有効化にはモデルごとの
         // alignment heads プリセットが要るが、本アプリはモデルパスを設定で差し替えられるため
         // 対応付けを保証できない。実測では DTW なしのトークン時刻で足りている。
-        await using var processor = WithLanguageOption(_factory!.CreateBuilder(), language)
+        await using var processor = WithLanguageOption(factory.CreateBuilder(), language)
             .WithTokenTimestamps()
             .Build();
 
@@ -1069,6 +1225,44 @@ public class TranscriptionService : IDisposable
             => inner.Report(new FileTranscriptionProgress(phase, total * Math.Clamp(value, 0.0, 1.0), total));
     }
 
+    /// <summary>
+    /// 音声ファイルを開く（REQ-TRX-FILE-03）。3 か所のデコード経路はすべてここを通る。
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AudioFileReader"/> は `.wav` 以外を Media Foundation（OS 標準デコーダー）へ委ねる。
+    /// Windows の N エディションでは AAC デコーダーが無く `.m4a` を開けないため、
+    /// 失敗の原因が環境かファイルかを切り分けられるよう、**メッセージに形式（拡張子）を含める**（T161）。
+    /// Media Foundation は形式ごとに異なる COM 例外を投げ、型を列挙できないため全例外を包む。
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">開けなかった。原因は内部例外。</exception>
+    internal static AudioFileReader OpenAudioFile(string audioFilePath)
+    {
+        try
+        {
+            return new AudioFileReader(audioFilePath);
+        }
+        // CA1031: 対象は利用者が選んだ任意のファイルで、NAudio / Media Foundation は形式ごとに
+        //         異なる例外（COMException・FileNotFoundException・ArgumentException 等）を投げる。
+        //         どれであっても「開けなかった」として形式名付きのメッセージに変換する。
+#pragma warning disable CA1031
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(OpenFailureMessage(audioFilePath, ex.Message), ex);
+        }
+#pragma warning restore CA1031
+    }
+
+    /// <summary>「音声ファイルを開けなかった」ときのメッセージ。形式（拡張子）を必ず含める。</summary>
+    internal static string OpenFailureMessage(string audioFilePath, string reason)
+    {
+        var ext = Path.GetExtension(audioFilePath);
+        var format = string.IsNullOrEmpty(ext) ? "拡張子なし" : ext;
+        var hint = string.Equals(format, ".m4a", StringComparison.OrdinalIgnoreCase)
+            ? " Windows の N エディションでは Media Feature Pack が必要です。"
+            : "";
+        return $"音声ファイルを開けませんでした (形式: {format}): {reason}{hint}";
+    }
+
     // {入力ファイル名}.transcript.txt を同じフォルダに配置
     // 例: audio.mp3 → audio.transcript.txt
     // （録音時に生成される audio.txt と名前衝突しないように）
@@ -1076,6 +1270,13 @@ public class TranscriptionService : IDisposable
     {
         return Path.ChangeExtension(audioFilePath, ".transcript.txt");
     }
+
+    /// <summary>
+    /// 会議名付きの出力パス（REQ-TRX-FILE-05 / REQ-META-02）。`audio.mp3` + `定例` → `audio_定例.transcript.txt`。
+    /// 会議名が空（または整形して空）なら会議名なしと同じ。
+    /// </summary>
+    internal static string BuildTranscriptPath(string audioFilePath, string? meetingName)
+        => RecordingMetadataFile.WithMeetingName(BuildTranscriptPath(audioFilePath), meetingName);
 
     /// <summary>
     /// 音声ファイルの作成日時・最終更新日時を読む（REQ-TRX-FILE-15 の②③）。
@@ -1117,7 +1318,7 @@ public class TranscriptionService : IDisposable
         duration = TimeSpan.Zero;
         try
         {
-            using var reader = new AudioFileReader(audioFilePath);
+            using var reader = OpenAudioFile(audioFilePath);
             duration = reader.TotalTime;
             return duration > TimeSpan.Zero;
         }
@@ -1237,7 +1438,7 @@ public class TranscriptionService : IDisposable
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
                     // 通常運転中。停止要求が来たらチャンクの途中（区間の切れ目）で抜ける。
-                    ProcessChunk(chunk, state, interruptible: true, token);
+                    ProcessChunkCounted(chunk, state, interruptible: true, token);
                 }
             }
         }
@@ -1252,8 +1453,8 @@ public class TranscriptionService : IDisposable
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
                     // 排出処理。ここは _isRunning が false の状態で走るため打ち切ってはならない。
-                    // 打ち切りたいときは token をキャンセルする（StopSession の 2 段目）。
-                    ProcessChunk(chunk, state, interruptible: false, token);
+                    // 打ち切りたいときは token をキャンセルする（StopSession の「打ち切り」）。
+                    ProcessChunkCounted(chunk, state, interruptible: false, token);
                 }
 
                 if (token.IsCancellationRequested)
@@ -1275,9 +1476,26 @@ public class TranscriptionService : IDisposable
 
                 if (tail != null)
                 {
-                    ProcessChunk(tail, state, interruptible: false, token);
+                    ProcessChunkCounted(tail, state, interruptible: false, token);
                 }
             }
+        }
+    }
+
+    /// <summary>処理中のチャンクのサンプル数（<see cref="PendingSeconds"/> に含めるため）。</summary>
+    private long _inFlightSamples;
+
+    /// <summary><see cref="ProcessChunk"/> を、処理中のサンプル数を数えながら呼ぶ。</summary>
+    private void ProcessChunkCounted(PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
+    {
+        Interlocked.Exchange(ref _inFlightSamples, chunk.Samples.Length);
+        try
+        {
+            ProcessChunk(chunk, state, interruptible, token);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _inFlightSamples, 0);
         }
     }
 
@@ -1300,12 +1518,22 @@ public class TranscriptionService : IDisposable
                 return null;
             }
 
+            // REQ-TRX-LIVE-13: 遅れているときは末尾無音での早期確定を使わない。
+            // 20 秒に満たないチャンクは 1 回あたりの効率が悪く（実測: 音声 1 秒あたり
+            // 20 秒入力 0.181 秒 / 5 秒入力 0.381 秒）、遅れをさらに広げるため。
+            long backlog = 0;
+            foreach (var ready in state.Ready)
+            {
+                backlog += ready.Samples.Length;
+            }
+
             var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
             int take = ChunkTakeCount(
                 state.Pcm16kBuffer.Count,
                 nowElapsed - state.BufferEndElapsed,
                 TrailingSilenceSamples(state.Pcm16kBuffer, options.RmsThreshold),
-                SecondsToSamples(options.MergeGapSeconds));
+                SecondsToSamples(options.MergeGapSeconds),
+                backlog >= BacklogSuppressEndpointingSamples);
             if (take == 0)
             {
                 return null;
@@ -1401,11 +1629,22 @@ public class TranscriptionService : IDisposable
         int bufferedSampleCount,
         TimeSpan supplyIdle,
         int? trailingSilenceSamples,
-        int endpointSilenceSamples)
+        int endpointSilenceSamples,
+        bool suppressEndpointing = false)
     {
         if (bufferedSampleCount >= BufferThresholdSamples)
         {
             return BufferThresholdSamples;
+        }
+
+        // REQ-TRX-LIVE-13: 遅れているときは②を使わない。20 秒たまるまで待って効率を優先する。
+        // ③（供給の途絶）は残す — 供給が止まったソースを無期限に抱え込まないための契機であり、
+        // 遅れているかどうかとは関係がない。
+        if (suppressEndpointing)
+        {
+            return supplyIdle >= StaleSupplyIdle && bufferedSampleCount >= MinTailSamples
+                ? bufferedSampleCount
+                : 0;
         }
 
         // null（＝全体が無音）はここで確定しない。1 で切り出され、有声区間 0 件として捨てられる。
@@ -1756,29 +1995,51 @@ public class TranscriptionService : IDisposable
         }
     }
 
-    /// <summary>停止要求後、ワーカーが残りを処理して自然に抜けるのを待つ時間。</summary>
-    internal static readonly TimeSpan StopGraceTimeout = TimeSpan.FromSeconds(30);
+    /// <summary>これ以上の滞留があれば「遅れている」とみなし、効率を優先する（REQ-TRX-LIVE-13）。</summary>
+    internal const int BacklogSuppressEndpointingSamples = TargetRate * 60;
 
-    /// <summary>キャンセル後、Whisper のネイティブ処理が抜けるのを待つ時間。</summary>
+    /// <summary>打ち切り要求後、Whisper のネイティブ処理が抜けるのを待つ時間。</summary>
     internal static readonly TimeSpan StopCancelTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>停止処理中に「打ち切り」が要求されたか。ワーカーの終了待ちをこの間隔で見直す。</summary>
+    private volatile bool _abortRequested;
+    private static readonly TimeSpan AbortPollInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// 停止処理の「打ち切り」（REQ-TRX-LIVE-11）。滞留分を捨ててキャンセルし、10 秒だけ待つ。
+    /// 停止処理中でなければ何もしない。UI スレッドから呼ばれ、待っている <see cref="StopSession"/> が拾う。
+    /// </summary>
+    public void RequestAbort() => _abortRequested = true;
+
+    /// <summary>
+    /// セッションを停止する。**滞留分を吐き切るまで待つ**（REQ-TRX-LIVE-11）。
+    /// <see cref="RequestAbort"/> が来たら、キャンセルして <see cref="StopCancelTimeout"/> だけ待つ。
+    /// </summary>
+    /// <remarks>
+    /// かつては 30 秒で打ち切っていた（T117 のクラッシュ対策）が、文字起こしが遅延した状態で止めると
+    /// 残りが黙って捨てられる（T165 の実測: 150 秒中 113.8 秒分）。上限を無くし、打ち切りは利用者の明示に限る。
+    /// </remarks>
     public void StopSession()
     {
         _isRunning = false;
 
-        // まず残りバッファ処理の完了を待つ
+        // 残りバッファ処理の完了を待つ（打ち切り要求が来るまで上限なし）
         bool workerExited = true;
         if (_thread != null)
         {
-            workerExited = _thread.Join(StopGraceTimeout);
-            if (!workerExited)
+            while (!(workerExited = _thread.Join(AbortPollInterval)))
             {
-                // タイムアウト時はキャンセルして終了を待ち直す
-                _cts?.Cancel();
-                workerExited = _thread.Join(StopCancelTimeout);
+                if (_abortRequested)
+                {
+                    // 打ち切り: キャンセルして終了を待ち直す
+                    _cts?.Cancel();
+                    workerExited = _thread.Join(StopCancelTimeout);
+                    break;
+                }
             }
         }
         _thread = null;
+        _abortRequested = false;
 
         _cts?.Dispose();
         _cts = null;
@@ -1787,7 +2048,38 @@ public class TranscriptionService : IDisposable
         {
             DisposeProcessorSafely(state, workerExited);
         }
-        _sources.Clear();
+        lock (_sourcesLock)
+        {
+            _sources.Clear();
+        }
+    }
+
+    /// <summary>
+    /// まだ Whisper に渡していない音声の長さ（秒。全ソースの確定済みチャンクと未確定バッファの合計）。
+    /// 停止処理中に「文字起こしの残り」を表示するために UI スレッドから読む（REQ-TRX-LIVE-11）。
+    /// </summary>
+    public double PendingSeconds
+    {
+        get
+        {
+            long samples = 0;
+            lock (_sourcesLock)
+            {
+                foreach (var state in _sources.Values)
+                {
+                    lock (state.BufferLock)
+                    {
+                        samples += state.Pcm16kBuffer.Count;
+                        foreach (var chunk in state.Ready)
+                        {
+                            samples += chunk.Samples.Length;
+                        }
+                    }
+                }
+            }
+
+            return (double)(samples + Interlocked.Read(ref _inFlightSamples)) / TargetRate;
+        }
     }
 
     /// <summary>
@@ -1838,9 +2130,13 @@ public class TranscriptionService : IDisposable
             // ここに来る時点でセッションは停止済み（ワーカーは動いていない）
             DisposeProcessorSafely(state, workerExited: true);
         }
-        _sources.Clear();
+        lock (_sourcesLock)
+        {
+            _sources.Clear();
+        }
         _factory?.Dispose();
         _factory = null;
+        _loadedModelPath = null;
     }
 
     public void Dispose()
@@ -1857,6 +2153,8 @@ public class TranscriptionService : IDisposable
         {
             return;
         }
+        // プロセス終了では滞留分を待たない（閉じる経路は ShutdownAsync が先に待っている）
+        RequestAbort();
         StopSession();
         DisposeProcessor();
     }

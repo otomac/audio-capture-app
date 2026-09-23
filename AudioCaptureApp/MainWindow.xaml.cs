@@ -35,6 +35,8 @@ public partial class MainWindow : Window, IDisposable
         _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
         _viewModel.LiveTranscriptRequested += ShowLiveTranscript;
         _viewModel.SettingsRequested += ShowSettings;
+        _viewModel.RecordingMetadataRequested += ShowRecordingMetadata;
+        _viewModel.StopConfirmationRequested += ConfirmStop;
         Closing += MainWindow_Closing;
         Closed += (_, _) => Dispose();
     }
@@ -74,8 +76,18 @@ public partial class MainWindow : Window, IDisposable
         }
 
         e.Cancel = true;
-        var answer = MessageBox.Show(
-            this, message, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        // REQ-REC-12: 確認ダイアログの背後で録音を自動開始させない
+        _viewModel.IsModalDialogOpen = true;
+        MessageBoxResult answer;
+        try
+        {
+            answer = MessageBox.Show(
+                this, message, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _viewModel.IsModalDialogOpen = false;
+        }
         if (answer != MessageBoxResult.Yes)
         {
             return;
@@ -88,12 +100,81 @@ public partial class MainWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// 停止する前に、残っている文字起こしを処理し切るかどうかを確認する（REQ-TRX-LIVE-11）。
+    /// </summary>
+    /// <returns>「はい」＝すべて処理してから停止する。「いいえ」＝残りを捨てて停止する。</returns>
+    private bool ConfirmStop(string message)
+    {
+        _viewModel.IsModalDialogOpen = true;
+        try
+        {
+            return MessageBox.Show(
+                this, message, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Question)
+                == MessageBoxResult.Yes;
+        }
+        finally
+        {
+            _viewModel.IsModalDialogOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// 停止処理の「打ち切り」（REQ-TRX-LIVE-11）。滞留した文字起こしを捨てるため、確認してから ViewModel へ渡す。
+    /// </summary>
+    private void AbortStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        var message = MainViewModel.AbortStopConfirmationMessage(_viewModel.TranscriptionPendingSeconds);
+        _viewModel.IsModalDialogOpen = true;
+        MessageBoxResult answer;
+        try
+        {
+            answer = MessageBox.Show(this, message, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _viewModel.IsModalDialogOpen = false;
+        }
+        if (answer == MessageBoxResult.Yes)
+        {
+            _viewModel.AbortStop();
+        }
+    }
+
+    /// <summary>
     /// ファイル文字起こしのオプション指定ダイアログをモーダルで開く（REQ-TRX-FILE-09）。
     /// </summary>
     private void ShowFileTranscriptionOptions()
     {
         var dialog = new FileTranscriptionOptionsWindow(_viewModel) { Owner = this };
-        dialog.ShowDialog();
+        ShowModal(dialog);
+    }
+
+    /// <summary>
+    /// モーダルで開き、開いている間は録音の自動開始（REQ-REC-12）を止める。
+    /// フラグの立て下げは View の責務（View → ViewModel の向き。ADR-0002）。
+    /// </summary>
+    private bool? ShowModal(Window dialog)
+    {
+        _viewModel.IsModalDialogOpen = true;
+        try
+        {
+            return dialog.ShowDialog();
+        }
+        finally
+        {
+            _viewModel.IsModalDialogOpen = false;
+        }
+    }
+
+    /// <summary>
+    /// 録音停止後のメタデータ入力ダイアログをモーダルで開き、結果を ViewModel へ返す（REQ-REC-13）。
+    /// <c>ShowDialog</c> は同期なので、停止処理の続き（終了確認の <c>Close()</c> を含む）はこの戻りを待つ。
+    /// </summary>
+    private void ShowRecordingMetadata()
+    {
+        var dialog = new RecordingMetadataWindow(_viewModel) { Owner = this };
+        var accepted = ShowModal(dialog) == true;
+        _viewModel.CompleteRecordingMetadata(accepted);
     }
 
     /// <summary>
@@ -104,7 +185,7 @@ public partial class MainWindow : Window, IDisposable
     private void ShowSettings()
     {
         var dialog = new SettingsWindow(_viewModel) { Owner = this };
-        dialog.ShowDialog();
+        ShowModal(dialog);
     }
 
     /// <summary>
