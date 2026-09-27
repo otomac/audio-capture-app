@@ -49,6 +49,21 @@
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.android-arm64" ExcludeAssets="all" />
   </ItemGroup>
 
+  <!--
+    self-contained 発行時: 同梱ランタイムから未使用の System.Net.Mail.dll を除く（T180）。
+    ウイルスバスターがこれを「メールクライアント機能」とみなして起動確認を出すため。
+    deps.json は RuntimePackAsset から、出力へのコピーは ResolveRuntimePackAssets が同時に積む
+    ReferenceCopyLocalPaths から作られるので、両方から除く
+    （ファイルだけ消すと deps.json の記載が残り起動に失敗する）。
+    System.Net.Mail を使う機能を足すときは、このターゲットを外すこと。
+  -->
+  <Target Name="ExcludeSystemNetMailFromRuntimePack" AfterTargets="ResolveRuntimePackAssets" Condition="'$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <RuntimePackAsset Remove="@(RuntimePackAsset)" Condition="'%(Filename)%(Extension)' == 'System.Net.Mail.dll'" />
+      <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)" Condition="'%(Filename)%(Extension)' == 'System.Net.Mail.dll'" />
+    </ItemGroup>
+  </Target>
+
   <!-- PublishSingleFile 時: 不要な runtimes (arm64/x86) と .pdb を削除 -->
   <Target Name="CleanPublishOutput" AfterTargets="Publish" Condition="'$(PublishSingleFile)' == 'true'">
     <RemoveDir Directories="$(PublishDir)runtimes\win-arm64" />
