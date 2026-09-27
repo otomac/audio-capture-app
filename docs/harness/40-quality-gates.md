@@ -66,7 +66,7 @@ dotnet format AudioCaptureApp.slnx
 ## 2. CI での強制
 
 [.github/workflows/build-desktop.yml](../../.github/workflows/build-desktop.yml) が
-`main` への push / PR / 手動実行で G1〜G3 と同じゲートを実行する。
+`main` / `develop` への push / PR / 手動実行で G1〜G3 と同じゲートを実行する。
 ローカルと CI で **同じコマンド・同じ設定** が走るようにしてある（設定はすべて
 `Directory.Build.props` と `.editorconfig` にあり、CI 側でフラグを上書きしない）。
 
