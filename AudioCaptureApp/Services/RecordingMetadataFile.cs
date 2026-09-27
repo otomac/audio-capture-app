@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AudioCaptureApp.Models;
 
 namespace AudioCaptureApp.Services;
@@ -50,7 +51,8 @@ internal static class RecordingMetadataFile
     /// <summary>
     /// パスの拡張子の前に `_会議名` を挟む（REQ-META-02）。`.transcript.txt` のような二重拡張子は
     /// 先頭の `.` より前に挟む（`a.transcript.txt` → `a_会議名.transcript.txt`）。
-    /// 会議名（整形後）が空ならそのまま返す。
+    /// 会議名（整形後）が空、または元の名前が既に `_会議名` で終わっていればそのまま返す
+    /// （録音時に改名された `yyyyMMdd_HHmmss_会議名.mp3` に二重に付けない。REQ-TRX-FILE-05 / 19）。
     /// </summary>
     public static string WithMeetingName(string path, string? meetingName)
     {
@@ -65,6 +67,11 @@ internal static class RecordingMetadataFile
         var dot = fileName.IndexOf('.', StringComparison.Ordinal);
         var stem = dot < 0 ? fileName : fileName[..dot];
         var extensions = dot < 0 ? "" : fileName[dot..];
+        if (stem.EndsWith("_" + name, StringComparison.Ordinal))
+        {
+            return path;
+        }
+
         return Path.Combine(directory, $"{stem}_{name}{extensions}");
     }
 
@@ -153,10 +160,66 @@ internal static class RecordingMetadataFile
         return plain;
     }
 
+    /// <summary>
+    /// 参加者を入力欄（REQ-META-03）の文字列へ戻す（REQ-TRX-FILE-19）。1 行に 1 人。空の要素は捨てる。
+    /// </summary>
+    public static string FormatParticipants(IEnumerable<string?> participants)
+    {
+        ArgumentNullException.ThrowIfNull(participants);
+        return string.Join(
+            Environment.NewLine,
+            participants.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p!.Trim()));
+    }
+
     /// <summary>メタデータを JSON として書き出す（REQ-META-01）。既存の同名ファイルは上書きする。</summary>
     public static void Write(string path, RecordingMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
         File.WriteAllText(path, JsonSerializer.Serialize(metadata, JsonOptions), new UTF8Encoding(false));
+    }
+
+    /// <summary>
+    /// 既存のメタデータ JSON を読む（REQ-TRX-FILE-19）。無い・読めない・JSON として不正なら <c>null</c>。
+    /// 欠けた項目は空として扱う。
+    /// </summary>
+    public static RecordingMetadata? TryRead(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<RecordingMetadata>(File.ReadAllText(path), JsonOptions);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // 読めなければ従来どおり空から入力してもらう（REQ-TRX-FILE-19）
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 既存のメタデータ JSON を更新する（REQ-TRX-FILE-19）。`会議名` / `実施日時` / `参加者` のキーだけを
+    /// 書き換え、それ以外のキー（利用者が手で書き足したもの）は位置も含めて残す。
+    /// </summary>
+    /// <exception cref="JsonException">既存のファイルが JSON オブジェクトとして読めない。ファイルは書き換えない。</exception>
+    public static void Update(string path, RecordingMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+
+        if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root)
+        {
+            throw new JsonException("既存のメタデータが JSON オブジェクトではありません");
+        }
+
+        var fresh = JsonSerializer.SerializeToNode(metadata, JsonOptions)!.AsObject();
+        foreach (var (key, value) in fresh)
+        {
+            root[key] = value?.DeepClone();
+        }
+
+        File.WriteAllText(path, root.ToJsonString(JsonOptions), new UTF8Encoding(false));
     }
 }

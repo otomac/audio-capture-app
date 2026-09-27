@@ -54,6 +54,18 @@ public class RecordingMetadataFileTests
     }
 
     [Fact]
+    public void WithMeetingName_AlreadySuffixed_ReturnsOriginal()
+    {
+        // 録音時に改名された音声に、JSON から読み込んだ同じ会議名を二重に付けない（REQ-TRX-FILE-05 / 19）
+        Assert.Equal(
+            @"C:\out\20260922_100000_定例.transcript.txt",
+            RecordingMetadataFile.WithMeetingName(@"C:\out\20260922_100000_定例.transcript.txt", "定例"));
+        Assert.Equal(
+            @"C:\out\20260922_100000_定例.mp3",
+            RecordingMetadataFile.WithMeetingName(@"C:\out\20260922_100000_定例.mp3", "定/例"));
+    }
+
+    [Fact]
     public void BuildMetadataPath_ReplacesExtensionWithJson()
     {
         // 音声（改名後）と同名の .json（REQ-META-01）
@@ -68,6 +80,18 @@ public class RecordingMetadataFileTests
     {
         Assert.Equal(@"C:\in\a_定例.transcript.txt", TranscriptionService.BuildTranscriptPath(@"C:\in\a.m4a", "定例"));
         Assert.Equal(@"C:\in\a.transcript.txt", TranscriptionService.BuildTranscriptPath(@"C:\in\a.m4a", null));
+    }
+
+    [Fact]
+    public void BuildTranscriptPath_RenamedRecording_SharesMetadataPathWithAudio()
+    {
+        // 改名済みの録音を同じ会議名で文字起こしすると、JSON の書き出し先は読み込み元と同じになる（REQ-TRX-FILE-19）
+        var audio = @"C:\out\20260922_100000_定例.mp3";
+        var transcript = TranscriptionService.BuildTranscriptPath(audio, "定例");
+
+        Assert.Equal(@"C:\out\20260922_100000_定例.transcript.txt", transcript);
+        Assert.Equal(
+            RecordingMetadataFile.BuildMetadataPath(audio), RecordingMetadataFile.BuildMetadataPath(transcript));
     }
 
     // --- 実施日時の既定 (REQ-REC-13) ---
@@ -151,6 +175,117 @@ public class RecordingMetadataFileTests
             Assert.NotNull(back);
             Assert.Equal("定例", back.MeetingName);
             Assert.Equal(["山田", "a"], back.Participants);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // --- 既存の JSON の読み込みと更新 (REQ-TRX-FILE-19) ---
+
+    [Fact]
+    public void TryRead_ExistingFile_ReturnsMetadata()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
+        try
+        {
+            RecordingMetadataFile.Write(path, MainViewModel.BuildMetadata("定例", "2026-09-22 10:00〜11:00", "山田\n佐藤", null));
+
+            var read = RecordingMetadataFile.TryRead(path);
+
+            Assert.NotNull(read);
+            Assert.Equal("定例", read.MeetingName);
+            Assert.Equal("2026-09-22 10:00〜11:00", read.HeldAt);
+            Assert.Equal(["山田", "佐藤"], read.Participants);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TryRead_MissingOrInvalid_ReturnsNull()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
+        Assert.Null(RecordingMetadataFile.TryRead(path));
+
+        try
+        {
+            File.WriteAllText(path, "{ not json");
+            Assert.Null(RecordingMetadataFile.TryRead(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TryRead_MissingFields_AreEmpty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{ \"会議名\": \"定例\" }");
+
+            var read = RecordingMetadataFile.TryRead(path);
+
+            Assert.NotNull(read);
+            Assert.Equal("定例", read.MeetingName);
+            Assert.Equal("", read.HeldAt);
+            Assert.Empty(read.Participants);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void FormatParticipants_OnePerLineAndRoundTripsThroughParse()
+    {
+        var text = RecordingMetadataFile.FormatParticipants(["山田", " ", "佐藤 ", null]);
+
+        Assert.Equal($"山田{Environment.NewLine}佐藤", text);
+        Assert.Equal(["山田", "佐藤"], RecordingMetadataFile.ParseParticipants(text));
+    }
+
+    [Fact]
+    public void Update_ReplacesMetadataKeysAndKeepsOthers()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "{ \"メモ\": \"手で書いた\", \"会議名\": \"旧\", \"参加者\": [\"古\"] }");
+
+            RecordingMetadataFile.Update(path, MainViewModel.BuildMetadata("新", "2026-09-22 10:00〜11:00", "山田", null));
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            Assert.Equal("手で書いた", root.GetProperty("メモ").GetString());
+            Assert.Equal("新", root.GetProperty("会議名").GetString());
+            Assert.Equal("2026-09-22 10:00〜11:00", root.GetProperty("実施日時").GetString());
+            Assert.Equal("山田", Assert.Single(root.GetProperty("参加者").EnumerateArray()).GetString());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Update_InvalidExisting_ThrowsAndLeavesFileUnchanged()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, "[1, 2]");
+
+            Assert.ThrowsAny<JsonException>(
+                () => RecordingMetadataFile.Update(path, MainViewModel.BuildMetadata("新", "", "", null)));
+            Assert.Equal("[1, 2]", File.ReadAllText(path));
         }
         finally
         {

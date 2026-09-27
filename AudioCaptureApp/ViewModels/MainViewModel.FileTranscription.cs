@@ -327,10 +327,12 @@ public partial class MainViewModel
             _suppressFileWhisperModelWriteBack = false;
         }
         FileTranscriptionModelError = "";
-        // REQ-TRX-FILE-18: メタデータ 3 項目は開くたびに空へ戻す（開始時刻 REQ-TRX-FILE-10 とは別の項目）
-        MetadataMeetingName = "";
-        MetadataHeldAt = "";
-        MetadataParticipantsText = "";
+        // REQ-TRX-FILE-18 / 19: メタデータ 3 項目は開くたびに入れ直す（開始時刻 REQ-TRX-FILE-10 とは別の項目）。
+        // 入力ファイルと同じ stem の .json（録音時に作られたもの）があればその内容、無ければ空。
+        var existing = RecordingMetadataFile.TryRead(RecordingMetadataFile.BuildMetadataPath(filePath));
+        MetadataMeetingName = existing?.MeetingName ?? "";
+        MetadataHeldAt = existing?.HeldAt ?? "";
+        MetadataParticipantsText = existing == null ? "" : RecordingMetadataFile.FormatParticipants(existing.Participants);
         MetadataTargetName = FileTranscriptionFileName;
         FileTranscriptionRequested?.Invoke();
     }
@@ -464,26 +466,36 @@ public partial class MainViewModel
             : $"文字起こしに失敗しました: {reason}";
 
     /// <summary>
-    /// ファイル文字起こしの完了時に、3 項目のいずれかが入力されていればメタデータ JSON を書く
-    /// （REQ-TRX-FILE-18 / REQ-META-01）。3 項目とも空なら作らない。失敗はステータスに出すだけ。
+    /// ファイル文字起こしの完了時にメタデータ JSON を書く（REQ-TRX-FILE-18 / 19 / REQ-META-01）。
+    /// 書き出し先が既にあれば 3 項目のキーだけを更新し、無ければ 3 項目のいずれかが入力されているときだけ作る。
+    /// 失敗はステータスに出すだけ。
     /// </summary>
     private void WriteFileTranscriptionMetadata(string transcriptPath)
     {
-        if (IsMetadataEmpty(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText))
+        var jsonPath = RecordingMetadataFile.BuildMetadataPath(transcriptPath);
+        var exists = System.IO.File.Exists(jsonPath);
+        if (!exists && IsMetadataEmpty(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText))
         {
             return;
         }
 
-        var jsonPath = RecordingMetadataFile.BuildMetadataPath(transcriptPath);
         try
         {
-            RecordingMetadataFile.Write(
-                jsonPath,
-                BuildMetadata(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText,
-                    _settings.ParticipantDomainSortedLast));
-            StatusMessage = $"文字起こし完了: {transcriptPath} (メタデータ: {System.IO.Path.GetFileName(jsonPath)})";
+            var metadata = BuildMetadata(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText,
+                _settings.ParticipantDomainSortedLast);
+            if (exists)
+            {
+                RecordingMetadataFile.Update(jsonPath, metadata);
+            }
+            else
+            {
+                RecordingMetadataFile.Write(jsonPath, metadata);
+            }
+
+            var verb = exists ? "メタデータを更新" : "メタデータ";
+            StatusMessage = $"文字起こし完了: {transcriptPath} ({verb}: {System.IO.Path.GetFileName(jsonPath)})";
         }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
             StatusMessage = $"文字起こしは完了しましたが、メタデータの保存に失敗しました: {ex.Message}";
         }
