@@ -207,12 +207,14 @@ sequenceDiagram
     else ドラッグ＆ドロップ
         User->>MW: 音声ファイルをドロップ
         MW->>MW: TryGetSingleDroppedFile()
+        MW->>MW: Dispatcher.BeginInvoke で後回しにして Drop ハンドラーを戻す（ドラッグ元を固めない。REQ-TRX-FILE-02）
         MW->>VM: TranscribeDroppedFile(filePath)
         VM->>VM: CanTranscribeFromFile / 拡張子チェック
     end
 
     Note over VM,OW: REQ-TRX-FILE-09: すぐに処理を始めず、オプション指定ダイアログを挟む
     VM->>VM: 対象パスを保持 / FileTranscriptionFileName を設定
+    VM->>VM: RecordingMetadataFile.TryRead(同じ stem の .json) → あればメタデータ 3 項目の初期値に（REQ-TRX-FILE-19）
     VM-->>MW: FileTranscriptionRequested イベント
     MW->>OW: new FileTranscriptionOptionsWindow(vm) { Owner = MainWindow }
     MW->>OW: ShowDialog()（モーダル）
@@ -260,6 +262,7 @@ sequenceDiagram
     else 正常完了
         TS-->>VM: true
         VM->>VM: StatusMessage に出力パスを表示
+        VM->>VM: 同名の .json が既にあれば RecordingMetadataFile.Update（3 項目のキーだけ書き換え）、無ければ入力がある時だけ Write（REQ-TRX-FILE-18 / 19）
     end
 
     VM->>VM: IsTranscribingFile = false

@@ -242,7 +242,9 @@ public partial class MainWindow : Window, IDisposable
         }
         e.Handled = true;
         // 処理はすぐには始まらない。オプション指定ダイアログの表示要求が上がるだけ（REQ-TRX-FILE-02）。
-        _viewModel.TranscribeDroppedFile(filePath);
+        // このハンドラーの中でモーダルダイアログを開くと、ドラッグ元（エクスプローラー）の DoDragDrop が
+        // ダイアログを閉じるまで戻らず、エクスプローラーが固まる。ハンドラーを先に戻してから開く（T177）。
+        Dispatcher.BeginInvoke(() => _viewModel.TranscribeDroppedFile(filePath));
     }
 
     public void Dispose()
