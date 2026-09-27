@@ -318,6 +318,8 @@ classDiagram
         +ParseParticipants(string) List~string~$
         +NormalizeParticipants(IEnumerable~string~, string) List~string~$
         +Write(string, RecordingMetadata)$
+        +TryRead(string) RecordingMetadata$
+        +Update(string, RecordingMetadata)$
     }
 
     class AutoStartTrigger {
@@ -456,7 +458,7 @@ classDiagram
     MainViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
     MainViewModel "1" --> "1" AutoStartTrigger : メーターの 50ms タイマーで Observe
     MainViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形
-    RecordingMetadataFile ..> RecordingMetadata : 書き出す
+    RecordingMetadataFile ..> RecordingMetadata : 書き出す・読み込む
     AutoStartTrigger "1" --> "1" AutoStartOptions
 
     MainViewModel "1" --> "0..1" SpeakerDiarizationService : 設定で有効なときだけ生成し Dispose する

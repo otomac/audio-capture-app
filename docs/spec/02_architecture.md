@@ -214,7 +214,7 @@ flowchart TB
 | 録音ファイル | `<OutputFolder>\yyyyMMdd_HHmmss.mp3`（既定 `%USERPROFILE%\Documents\AudioCapture`）。メタデータの会議名があれば停止後に `yyyyMMdd_HHmmss_会議名.mp3` へ改名 | `AudioCaptureService.StartRecording` / `RenameSessionFiles` |
 | ライブ文字起こし結果 | 録音ファイルと同名の `.txt` | `TranscriptionService.StartSession` |
 | ファイル文字起こし結果 | `{入力ファイル名}[_会議名].transcript.txt` | `TranscriptionService.BuildTranscriptPath` |
-| 録音のメタデータ | 音声（改名後）または `.transcript.txt` と同名の `.json`（`会議名` / `実施日時` / `参加者`） | `RecordingMetadataFile.Write` |
+| 録音のメタデータ | 音声（改名後）または `.transcript.txt` と同名の `.json`（`会議名` / `実施日時` / `参加者`）。ファイル文字起こしでは入力ファイルと同じ stem の `.json` を読み込み、既存の `.json` は更新する（REQ-TRX-FILE-19） | `RecordingMetadataFile.Write` / `TryRead` / `Update` |
 | Whisper モデル | 既定 `%APPDATA%\AudioCaptureApp\models\ggml-small.bin`（ユーザー変更可）。登録一覧は `settings.json` の `WhisperModelList` | `AppSettings.WhisperModelPath` / `WhisperModelList` |
 
 ## 7. エラーハンドリング方針
