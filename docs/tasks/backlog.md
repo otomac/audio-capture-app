@@ -12,7 +12,7 @@
 
 ## 進行中
 
-- [~] **T180** **リリース版の配布物から未使用の `System.Net.Mail.dll` を外す。** リリース版を起動するとウイルスバスターがメールクライアント機能を理由に起動確認を出す。アプリはメールを使っておらず、self-contained 発行で .NET ランタイムと一緒に同梱されているだけなので、発行物と `deps.json` の両方から除く。利用者の依頼 (2026-09-27) → [詳細](./T180-exclude-system-net-mail.md)
+（なし）
 
 ## 未着手
 
@@ -24,6 +24,7 @@
 
 ## 完了
 
+- [x] **T180** **リリース版の配布物から未使用の `System.Net.Mail.dll` を外す。** リリース版を起動するとウイルスバスターがメールクライアント機能を理由に起動確認を出す。アプリはメールを使っておらず、self-contained 発行で .NET ランタイムと一緒に同梱されているだけなので、発行物と `deps.json` の両方から除く。利用者の依頼 (2026-09-27)。品質ゲートは PR #52 の CI で確認（389 件成功）。実機での起動とウイルスバスターの反応は未確認 (2026-09-27) → [詳細](./T180-exclude-system-net-mail.md)
 - [x] **T179** **CI（`build-desktop`）のトリガー対象ブランチに `develop` を追加する。** PR の宛先は `develop`（[00-ways-of-working.md](../harness/00-ways-of-working.md#ブランチ運用)）なのに、ワークフローは `main` への push / PR でしか動かず、作業ブランチ → `develop` の PR で品質ゲートが CI 上で走っていなかった。`on.push.branches` と `on.pull_request.branches` に `develop` を追加し、[40-quality-gates.md §2](../harness/40-quality-gates.md) の記述を合わせた。利用者の依頼 (2026-09-27)
 - [x] **T177** **（不具合）音声ファイルをドラッグ＆ドロップして文字起こしを始めると、ダイアログを開いている間ドラッグ元のエクスプローラーが固まる。** `Window_Drop` の中で同期的に `TranscribeDroppedFile` → `FileTranscriptionRequested` → `ShowDialog` まで進むため、OLE の `DoDragDrop`（ドラッグ元のエクスプローラー側）がダイアログを閉じるまで戻らない。`Dispatcher.BeginInvoke` で後回しにして Drop ハンドラーを先に返す（REQ-TRX-FILE-02）。利用者の報告 (2026-09-27)。品質ゲートは CI（windows-latest）で実行: build 警告 0 / format 差分なし / test 389 件成功。実機確認は未実施 (2026-09-27) → [詳細](./T177-drop-freezes-explorer.md)
 - [x] **T178** **ファイル文字起こしで既存のメタデータ JSON を読み込み・更新する。** オプション指定ダイアログを開くとき、入力ファイルと同じ stem の `.json`（録音時に作られたもの）があれば 3 項目の初期値にする。完了時、書き出し先の `.json` が既にあれば上書きではなく 3 項目のキーだけを更新し、他のキーは残す。改名済みの録音（`…_会議名.mp3`）に同じ会議名を二重に付けないよう `WithMeetingName` を冪等にした（REQ-TRX-FILE-05 / 18 / 19・REQ-META-01 / 02）。利用者の依頼 (2026-09-27)。品質ゲートは T177 と同じ CI 実行で確認。実機確認は未実施 (2026-09-27) → [詳細](./T178-file-metadata-load-update.md)

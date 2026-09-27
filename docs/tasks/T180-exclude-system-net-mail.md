@@ -1,6 +1,6 @@
 # T180 — 配布物から未使用の `System.Net.Mail.dll` を外す
 
-> **状態:** 進行中 — 2026-09-27
+> **状態:** 完了 — 2026-09-27
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 
 ## 1. 目的
@@ -59,7 +59,7 @@ self-contained 発行で .NET ランタイムと一緒に同梱されている `
 ### グループ Z — 検証（必須・最後に置く）
 - [x] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件
 - [x] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功（Windows の CI で確認する）
+- [x] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功（Windows の CI で確認）
 - [x] **Z4** 仕様書（§4）の更新反映を読み直す
 - [ ] **Z5** CI の zip を Windows 実機で起動し、録音・文字起こしが動くこと、ウイルスバスターの警告の変化を確かめる（利用者）
 
@@ -88,5 +88,6 @@ self-contained 発行で .NET ランタイムと一緒に同梱されている `
 - 単一ファイル発行（README の手順）: 出力フォルダにも exe 内にも `System.Net.Mail.dll` なし
 - `dotnet build` : 警告 0 件 / エラー 0 件
 - `dotnet format`: 差分なし
-- `dotnet test`  : **未実測。** Linux には `Microsoft.WindowsDesktop.App` ランタイムが無くテストホストが起動しない。Windows の CI（`build-desktop`）で確認する
+- `dotnet test`  : 389 件成功 / 0 件失敗 / 0 件スキップ（Linux にはテストホストが起動する `Microsoft.WindowsDesktop.App` が無いため、PR #52 の CI `build-desktop` 実行 #64（windows-latest）で実測。同実行の G1 は警告 0 件 / エラー 0 件、G2 は差分なし）
+- CI の発行物一覧（win-x64 / self-contained）にも `System.Net.Mail.dll` なし
 - 計画からの逸脱: D1 の除外対象に `ReferenceCopyLocalPaths` を追加した（`RuntimePackAsset` だけでは `deps.json` からは消えるが DLL はコピーされ続けた）
