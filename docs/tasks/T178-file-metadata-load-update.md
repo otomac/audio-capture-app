@@ -1,6 +1,6 @@
 # T178 — ファイル文字起こしで既存のメタデータ JSON を読み込み・更新する
 
-> **状態:** 進行中 — 2026-09-27（実装済み・品質ゲート未実行）
+> **状態:** 完了 — 2026-09-27（完了 — 実機確認は未実施）
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 
 ## 1. 目的
@@ -61,6 +61,11 @@
 
 > **テストで守れない範囲:** ダイアログへの反映（`RequestFileTranscription` は `WhisperModels` 等の状態に依存する）。
 
-## 実行結果
+## 実行結果 (2026-09-27)
 
-- 未実行。作業環境（Linux コンテナ）に .NET SDK が無く、`builds.dotnet.microsoft.com` への接続もネットワーク制限で拒否された。Windows で G1〜G3 を実行して記録すること
+作業環境（Linux コンテナ）に .NET SDK が無いため、PR [#49](https://github.com/otomac/audio-capture-app/pull/49) の CI（`build-desktop` / windows-latest、**Release 構成**）で実行した。
+
+- dotnet build : 警告 0 / エラー 0
+- dotnet format: 差分なし
+- dotnet test  : 389 件成功 / 0 件失敗 / 0 件スキップ
+- 実機確認: 未実施
