@@ -12,7 +12,7 @@
 
 ## 進行中
 
-- [~] **T189** **リリース zip に `VERSION` と `README.md` を同梱する。** リポジトリ直下に `VERSION`（リリースバージョンを 1 行で書く。`release_*` タグから `release_` を除いた `YYYY.MM.DD[.N]`）を置き、`build-desktop` の zip 作成で `README.md` と一緒に zip の直下（`AudioCaptureApp.exe` と同じ階層）へ入れる。更新忘れで zip の `VERSION` が実際のリリースと食い違わないよう、`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI を失敗させる。利用者の依頼 (2026-09-28) → [詳細](./T189-version-file-in-release-zip.md)
+（なし）
 
 ## 未着手
 
@@ -31,6 +31,7 @@
 
 ## 完了
 
+- [x] **T189** **リリース zip に `VERSION` と `README.md` を同梱する。** リポジトリ直下に `VERSION`（リリースバージョンを 1 行で書く。`release_*` タグから `release_` を除いた `YYYY.MM.DD[.N]`）を置き、`build-desktop` の zip 作成で `README.md` と一緒に zip の直下（`AudioCaptureApp.exe` と同じ階層）へ入れる。更新忘れで zip の `VERSION` が実際のリリースと食い違わないよう、`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI を失敗させる。`VERSION` の初期値は `2026.09.28`（利用者の選択）。利用者の依頼 (2026-09-28)。品質ゲートは PR #55 の CI（windows-latest）で確認: build 警告 0 / format 差分なし / test 389 件成功。zip 作成も成功。実際の `release_*` タグでの動きは未確認 (2026-09-28) → [詳細](./T189-version-file-in-release-zip.md)
 - [x] **T181** **ライブ文字起こしを「速報 → 確定で置き換え」の 2 段にする設計。** 利用者の依頼 (2026-09-27): Zoom の文字起こしのように、ほぼリアルタイム・精度無視で速報を流し、後から文脈に従って補正したい。GPU（Vulkan / CUDA）で Zoom 会議中も実用的な性能を保つことが必須条件。**速報は Whisper の軽量モデル（tiny / base）、実行場所（GPU で直列／CPU で並列）は実測で決める。確定パスの区切り方と `.txt` の書式は変えず、速報はファイルに書かない。** [ADR-0007](../adr/0007-two-pass-live-transcription.md)（提案中）・仕様変更の提案・実測の手順（T182）を書き、実装を T182〜T188 に分けた。ViewModel に手を入れる T187 / T188 は T170 の後（利用者の判断）。ソース無変更 → [詳細](./T181-two-pass-live-transcription-design.md) (2026-09-27)
 - [x] **T180** **リリース版の配布物から未使用の `System.Net.Mail.dll` を外す。** リリース版を起動するとウイルスバスターがメールクライアント機能を理由に起動確認を出す。アプリはメールを使っておらず、self-contained 発行で .NET ランタイムと一緒に同梱されているだけなので、発行物と `deps.json` の両方から除く。利用者の依頼 (2026-09-27)。品質ゲートは PR #52 の CI で確認（389 件成功）。実機での起動とウイルスバスターの反応は未確認 (2026-09-27) → [詳細](./T180-exclude-system-net-mail.md)
 - [x] **T179** **CI（`build-desktop`）のトリガー対象ブランチに `develop` を追加する。** PR の宛先は `develop`（[00-ways-of-working.md](../harness/00-ways-of-working.md#ブランチ運用)）なのに、ワークフローは `main` への push / PR でしか動かず、作業ブランチ → `develop` の PR で品質ゲートが CI 上で走っていなかった。`on.push.branches` と `on.pull_request.branches` に `develop` を追加し、[40-quality-gates.md §2](../harness/40-quality-gates.md) の記述を合わせた。利用者の依頼 (2026-09-27)

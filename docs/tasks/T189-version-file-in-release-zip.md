@@ -1,6 +1,6 @@
 # T189 — リリース zip に `VERSION` と `README.md` を同梱する
 
-> **状態:** 進行中 — 2026-09-28
+> **状態:** 完了 — 2026-09-28
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 
 ## 1. 目的
@@ -68,11 +68,11 @@
 - [x] **B2** タグとの一致を確かめる手順を、一致・不一致・CRLF 改行の `VERSION` で実行し、不一致のときだけ失敗することを確かめる
 
 ### グループ Z — 検証（必須・最後に置く）
-- [ ] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件
-- [ ] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功
+- [x] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件（PR #55 の CI で確認）
+- [x] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし（同上）
+- [x] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功（同上）
 - [x] **Z4** 仕様書（§4）の更新反映を読み直す
-- [ ] **Z5** ブランチ上の CI（windows-latest）で zip 作成まで成功すること
+- [x] **Z5** ブランチ上の CI（windows-latest）で zip 作成まで成功すること
 - [ ] **Z6** 次のリリース（`release_*` タグ）で、zip に `VERSION` と `README.md` が入っていることを確かめる（利用者）
 
 ## 8. テスト一覧
@@ -93,7 +93,7 @@
 
 ---
 
-## 実行結果 (2026-09-28、途中経過)
+## 実行結果 (2026-09-28)
 
 作業環境（Linux）から `builds.dotnet.microsoft.com` への接続がネットワークポリシーで拒否され、.NET SDK を
 取得できない。G1〜G3 はブランチ上の CI（windows-latest）で実測して追記する。変更は CI 定義と文書と
@@ -108,3 +108,13 @@
   - 失敗（exit 1、`::error file=VERSION::` を出力）: `2026.09.23` 対 `release_2026.10.01`、`2026.03.22` 対 `release_2026.03.22.2`、`VERSION` が無い
 - CI 実行 #72（`develop` の d11db1e、windows-latest）の発行物一覧に `README.md` / `VERSION` は無い（名前の衝突なし）
 - `build-desktop.yml` は YAML として読める
+
+### CI（PR #55、`build-desktop` 実行 #73、windows-latest・Release 構成、head eccd05d）
+
+- `dotnet build` : 警告 0 件 / エラー 0 件
+- `dotnet format`: 差分なし（`--verify-no-changes` が成功。「ワークスペース読み込み時の警告」の 1 行は変更前の実行 #72 にも出ており、本変更とは無関係）
+- `dotnet test`  : 389 件成功 / 0 件失敗 / 0 件スキップ
+- zip 作成: 成功（`AudioCaptureApp-ci-73-win-x64.zip`、成果物 `desktop-package` 247,206,168 バイト）。発行物の直下 279 件に `README.md` / `VERSION` は無く、名前の衝突なし
+- タグ照合の手順: PR のビルドなのでスキップ（`release_*` タグでのみ動く設計どおり）
+- CI の zip そのものの中身は、作業環境から成果物のダウンロード先（`*.blob.core.windows.net`）への接続がネットワークポリシーで拒否されるため確認できていない。中身は B1 の再現で確認した。実物は実行 #73 の成果物 `desktop-package` か、次のリリースの zip で確かめる（Z6）
+- 計画からの逸脱: D2（`VERSION` の初期値）を利用者の選択で `2026.09.23` から `2026.09.28` へ変えた。それ以外はなし
