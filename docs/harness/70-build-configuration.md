@@ -14,6 +14,7 @@ audio-capture-app/                    ← リポジトリルート ＝ .NET ソ�
 │  Directory.Packages.props           Central Package Management（バージョン一元管理）
 │  .editorconfig                      root=true。書式・命名・ルール別 severity
 │  CLAUDE.md                          常時ロードされるプロジェクトの法
+│  VERSION                            リリースバージョン（release_* タグと一致させる。README.md と共に zip へ同梱）
 ├─ AudioCaptureApp/                   WPF 本体（net10.0-windows, WinExe）
 │  ├─ Models/ ViewModels/ Services/ Controls/ assets/
 ├─ AudioCaptureApp.Tests/             xUnit テスト（net10.0-windows）

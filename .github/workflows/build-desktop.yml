@@ -38,6 +38,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # リリースでは、zip に同梱する VERSION がタグと食い違わないことを先に確かめる (T189)。
+      # VERSION は手で書き換えるため、更新忘れをビルド・テストより前に落とす。
+      - name: Verify VERSION matches release tag
+        if: startsWith(github.ref, 'refs/tags/release_')
+        shell: pwsh
+        run: |
+          $expected = $env:GITHUB_REF_NAME.Substring('release_'.Length)
+          $actual = (Get-Content -LiteralPath ./VERSION -Raw).Trim()
+          if ($actual -ne $expected) {
+            "::error file=VERSION::VERSION ($actual) がタグ $($env:GITHUB_REF_NAME) と一致しません。VERSION を $expected にしてからタグを付けてください。"
+            exit 1
+          }
+          "VERSION: $actual"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -106,7 +120,8 @@ jobs:
           }
 
           $zipName = "$appName-$version-$($env:RUNTIME).zip"
-          Compress-Archive -Path "./publish/*" -DestinationPath "./$zipName" -Force
+          # VERSION と README.md は zip の直下 (AudioCaptureApp.exe と同じ階層) に入る (T189)
+          Compress-Archive -Path "./publish/*", "./VERSION", "./README.md" -DestinationPath "./$zipName" -Force
 
           "zip_name=$zipName" >> $env:GITHUB_OUTPUT
 
