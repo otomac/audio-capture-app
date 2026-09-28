@@ -12,7 +12,7 @@
 
 ## 進行中
 
-（なし）
+- [~] **T189** **リリース zip に `VERSION` と `README.md` を同梱する。** リポジトリ直下に `VERSION`（リリースバージョンを 1 行で書く。`release_*` タグから `release_` を除いた `YYYY.MM.DD[.N]`）を置き、`build-desktop` の zip 作成で `README.md` と一緒に zip の直下（`AudioCaptureApp.exe` と同じ階層）へ入れる。更新忘れで zip の `VERSION` が実際のリリースと食い違わないよう、`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI を失敗させる。利用者の依頼 (2026-09-28) → [詳細](./T189-version-file-in-release-zip.md)
 
 ## 未着手
 

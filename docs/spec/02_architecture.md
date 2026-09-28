@@ -12,7 +12,7 @@
 | 話者ダイアライゼーション | sherpa-onnx 1.13.5（`org.k2fsa.sherpa.onnx`、ネイティブランタイムは win-x64 のみ同梱）。ファイル文字起こし経路でのみ使用し、既定は無効（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md)） |
 | 設定永続化 | System.Text.Json（`settings.json`） |
 | テスト | xUnit（`AudioCaptureApp.Tests`） |
-| 配布 | win-x64 の self-contained 発行（.NET ランタイム同梱の zip）。同梱ランタイムのうち `System.Net.Mail.dll` は未使用のため除外する（ウイルスバスターがメールクライアント機能として警告するため。T180）。**`System.Net.Mail` 名前空間は使わない** — 使うなら `AudioCaptureApp.csproj` の除外ターゲットを外すこと |
+| 配布 | win-x64 の self-contained 発行（.NET ランタイム同梱の zip）。同梱ランタイムのうち `System.Net.Mail.dll` は未使用のため除外する（ウイルスバスターがメールクライアント機能として警告するため。T180）。**`System.Net.Mail` 名前空間は使わない** — 使うなら `AudioCaptureApp.csproj` の除外ターゲットを外すこと。zip の直下（`AudioCaptureApp.exe` と同じ階層）には発行物に加えて `VERSION` と `README.md` を同梱する（T189）。`VERSION` はリポジトリ直下のファイルで、リリースバージョンを 1 行で書く（リリースタグ `release_<バージョン>` の `<バージョン>` 部分。例 `2026.09.23`）。`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI が失敗する |
 
 ## 2. レイヤー構成
 
