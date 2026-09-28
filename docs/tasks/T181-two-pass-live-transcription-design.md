@@ -103,9 +103,9 @@ Zoom の字幕のように、話している最中から粗い文字（速報）
 | **T188** | 確定パスの文脈プロンプト（直前の確定文と用語集） | T170, T185, T182 の M6 |
 
 ### グループ Z — 検証（本タスク）
-- [ ] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 本タスクはソース無変更。このクラウド環境に dotnet が無いため、push 後に CI（Windows）で確認して「実行結果」に書く
-- [ ] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 同上
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 同上
+- [x] **Z1** `dotnet build` — 警告 0 件（CI・Release 構成。本タスクはソース無変更。「実行結果」を参照）
+- [x] **Z2** `dotnet format --verify-no-changes` — 差分なし（同上）
+- [x] **Z3** `dotnet test` — 389 件成功 / 0 件失敗（同上）
 - [x] **Z4** 文書の検査: 相対リンクが切れていない、要件 ID・タスク ID・ADR 番号を再利用していない
 
 ## 8. テスト一覧
@@ -198,8 +198,11 @@ T182 の実測後、ADR-0007 の承認と合わせて利用者の承認を得て
 
 ## 実行結果 (2026-09-27)
 
-- `dotnet build` : 未実行（このクラウド環境に dotnet が無い）。ソース（`.cs` / `.xaml` / `.csproj`）は無変更
-- `dotnet format`: 同上
-- `dotnet test`  : 同上
+- `dotnet build` : 警告 0 件 / エラー 0 件
+- `dotnet format`: 差分なし
+- `dotnet test`  : 389 件成功 / 0 件失敗 / 0 件スキップ
+- 実行場所: このクラウド環境には dotnet が無いため、ブランチ上で CI（`build-desktop`、windows-latest、workflow_dispatch）を動かして測った
+  （run 36337705105、commit `5c26102`）。**CI は Release 構成**で、ゲートの規定（Debug）とは構成が違う。
+  本タスクはソース（`.cs` / `.xaml` / `.csproj`）を 1 行も変えていないため、結果は `develop` と同じになる
 - 文書の検査: 相対リンク切れ 0 件、ID の再利用なし（T181〜T188・ADR-0007・REQ 新設分はいずれも未使用だったことを確認）
 - 計画からの逸脱: 計画時に T177〜T184 としていた ID を、`develop` で T177〜T180 が先に使われていたため **T181〜T188 へ振り直した**
