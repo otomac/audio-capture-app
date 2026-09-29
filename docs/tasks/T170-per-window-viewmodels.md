@@ -103,7 +103,7 @@
 ### グループ Z — 検証（必須・最後に置く）
 - [x] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件（「実行結果」）
 - [x] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし（同上）
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功（CI で確認する。同上）
+- [x] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功（CI で確認した。同上）
 - [x] **Z4** 仕様書（§4）の更新を読み直し、文書中の `クラス名.メンバー名` がすべて実在することを機械的に確かめた
 - [ ] **Z5** 画面の操作確認（§8 の一覧）— **利用者の手元で行う**
 
@@ -163,11 +163,15 @@
 
 このクラウド環境（Linux）に .NET SDK 10.0.112 を入れて G1 / G2 を実行した。
 WPF のビルドには `-p:EnableWindowsTargeting=true`（`dotnet format` は環境変数 `EnableWindowsTargeting=true`）が要る。
-G3 は WindowsDesktop のランタイムが無いため Linux では実行できず、CI（windows-latest）で確かめる。
+G3 は WindowsDesktop のランタイムが無いため Linux では実行できず、CI（windows-latest）で確かめた。
 
-- `dotnet build` : 警告 0 件 / エラー 0 件（Debug、Linux）
+- `dotnet build` : 警告 0 件 / エラー 0 件（Debug、Linux。`--no-incremental` で 2 プロジェクトとも再コンパイル）
 - `dotnet format`: 差分なし（終了コード 0、Linux）
-- `dotnet test`  : **未記入（CI の結果を待つ）**
+- `dotnet test`  : **389 件成功 / 0 件失敗 / 0 件スキップ**（CI）
+
+CI は `build-desktop` の run 36624738792（windows-latest、workflow_dispatch、commit `0707bda`）。
+同じ実行で G1 は警告 0 件 / エラー 0 件、G2 は成功（差分なし）。**CI は Release 構成**で、ゲートの規定（Debug）とは構成が違う。
+テストの件数は分割前（`develop`、T189 の CI）と同じ 389 件。
 
 ### 分割後の行数
 
