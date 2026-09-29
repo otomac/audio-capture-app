@@ -3,9 +3,9 @@ using AudioCaptureApp.Services;
 
 namespace AudioCaptureApp.ViewModels;
 
-// MainViewModel のうち、ファイル文字起こしの開始時刻の自動入力（REQ-TRX-FILE-15）を担当する部分。
-// MainViewModel.FileTranscription.cs が 500 行を超えたため切り出した（ADR-0006 規則 3）。
-public partial class MainViewModel
+// FileTranscriptionViewModel のうち、開始時刻の自動入力（REQ-TRX-FILE-15）を担当する部分。
+// 本体（FileTranscriptionViewModel.cs）が 500 行を超えるため、機能単位で partial に割っている（ADR-0008）。
+public sealed partial class FileTranscriptionViewModel
 {
     // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
 

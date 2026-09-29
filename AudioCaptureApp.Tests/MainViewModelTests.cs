@@ -147,7 +147,7 @@ public class MainViewModelTests
     public void TryParseStartTime_Blank_ReturnsZero(string text)
     {
         // 空欄は「未指定」。これまでどおりファイル先頭を 00:00:00 として出力する
-        Assert.True(MainViewModel.TryParseStartTime(text, out var startTime));
+        Assert.True(FileTranscriptionViewModel.TryParseStartTime(text, out var startTime));
         Assert.Equal(TimeSpan.Zero, startTime);
     }
 
@@ -159,7 +159,7 @@ public class MainViewModelTests
     [InlineData(" 14:30 ", 14, 30)]
     public void TryParseStartTime_ValidForms_AreAccepted(string text, int hours, int minutes)
     {
-        Assert.True(MainViewModel.TryParseStartTime(text, out var startTime));
+        Assert.True(FileTranscriptionViewModel.TryParseStartTime(text, out var startTime));
         Assert.Equal(new TimeSpan(hours, minutes, 0), startTime);
     }
 
@@ -173,7 +173,7 @@ public class MainViewModelTests
     public void TryParseStartTime_InvalidForms_AreRejected(string text)
     {
         // 拒否できないと、不正な時刻のまま文字起こしが走り出す
-        Assert.False(MainViewModel.TryParseStartTime(text, out _));
+        Assert.False(FileTranscriptionViewModel.TryParseStartTime(text, out _));
     }
 
     // --- ファイル文字起こしの進捗率 (T113 / REQ-TRX-FILE-06) ---
@@ -182,7 +182,7 @@ public class MainViewModelTests
     public void FileTranscriptionProgress_ZeroTotal_ReturnsZero()
     {
         // 総時間を取れないファイルでゼロ除算しない
-        var value = MainViewModel.FileTranscriptionProgressFor(
+        var value = FileTranscriptionViewModel.FileTranscriptionProgressFor(
             TimeSpan.FromSeconds(5), TimeSpan.Zero);
 
         Assert.Equal(0.0, value);
@@ -191,7 +191,7 @@ public class MainViewModelTests
     [Fact]
     public void FileTranscriptionProgress_HalfProcessed_ReturnsFifty()
     {
-        var value = MainViewModel.FileTranscriptionProgressFor(
+        var value = FileTranscriptionViewModel.FileTranscriptionProgressFor(
             TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(10));
 
         Assert.Equal(50.0, value);
@@ -201,7 +201,7 @@ public class MainViewModelTests
     public void FileTranscriptionProgress_ProcessedExceedsTotal_ClampsTo100()
     {
         // 最終チャンクは総時間を跨ぐことがある（20 秒単位で切り出すため）
-        var value = MainViewModel.FileTranscriptionProgressFor(
+        var value = FileTranscriptionViewModel.FileTranscriptionProgressFor(
             TimeSpan.FromMinutes(11), TimeSpan.FromMinutes(10));
 
         Assert.Equal(100.0, value);
@@ -214,8 +214,8 @@ public class MainViewModelTests
     {
         var lines = new List<string>();
 
-        MainViewModel.AppendLiveTranscriptLine(lines, "1 行目", maxLines: 10);
-        MainViewModel.AppendLiveTranscriptLine(lines, "2 行目", maxLines: 10);
+        LiveTranscriptViewModel.AppendLiveTranscriptLine(lines, "1 行目", maxLines: 10);
+        LiveTranscriptViewModel.AppendLiveTranscriptLine(lines, "2 行目", maxLines: 10);
 
         Assert.Equal(["1 行目", "2 行目"], lines);
     }
@@ -226,7 +226,7 @@ public class MainViewModelTests
         // 捨てるのは先頭（古い行）。末尾から捨てると最新の行が消えて用を成さない
         var lines = new List<string> { "古", "中", "新" };
 
-        MainViewModel.AppendLiveTranscriptLine(lines, "最新", maxLines: 3);
+        LiveTranscriptViewModel.AppendLiveTranscriptLine(lines, "最新", maxLines: 3);
 
         Assert.Equal(["中", "新", "最新"], lines);
     }
@@ -239,8 +239,8 @@ public class MainViewModelTests
         var lines = new List<string>();
         for (int i = 0; i < 150; i++)
         {
-            MainViewModel.AppendLiveTranscriptLine(
-                lines, $"行 {i}", MainViewModel.MaxLiveTranscriptLines);
+            LiveTranscriptViewModel.AppendLiveTranscriptLine(
+                lines, $"行 {i}", LiveTranscriptViewModel.MaxLiveTranscriptLines);
         }
 
         Assert.Equal(100, lines.Count);
@@ -254,7 +254,7 @@ public class MainViewModelTests
         // ちょうど上限。境界で 1 行余計に捨てないことを固定する
         var lines = new List<string> { "1", "2" };
 
-        MainViewModel.AppendLiveTranscriptLine(lines, "3", maxLines: 3);
+        LiveTranscriptViewModel.AppendLiveTranscriptLine(lines, "3", maxLines: 3);
 
         Assert.Equal(["1", "2", "3"], lines);
     }
@@ -269,7 +269,7 @@ public class MainViewModelTests
         var lines = new List<string>();
         var batch = Enumerable.Range(0, 250).Select(i => $"行 {i}").ToList();
 
-        MainViewModel.AppendLiveTranscriptLines(lines, batch, maxLines: 100);
+        LiveTranscriptViewModel.AppendLiveTranscriptLines(lines, batch, maxLines: 100);
 
         Assert.Equal(100, lines.Count);
         Assert.Equal("行 150", lines[0]);
@@ -287,10 +287,10 @@ public class MainViewModelTests
 
         foreach (var line in batch)
         {
-            MainViewModel.AppendLiveTranscriptLine(oneByOne, line, maxLines: 100);
+            LiveTranscriptViewModel.AppendLiveTranscriptLine(oneByOne, line, maxLines: 100);
         }
 
-        MainViewModel.AppendLiveTranscriptLines(batched, batch, maxLines: 100);
+        LiveTranscriptViewModel.AppendLiveTranscriptLines(batched, batch, maxLines: 100);
 
         Assert.Equal(oneByOne, batched);
     }
@@ -301,7 +301,7 @@ public class MainViewModelTests
         // 上限より短いバッチでは 1 行も捨てず、既存の行と合わせて上限で切ること
         var lines = new List<string> { "既存 1", "既存 2", "既存 3" };
 
-        MainViewModel.AppendLiveTranscriptLines(lines, ["新 1", "新 2"], maxLines: 4);
+        LiveTranscriptViewModel.AppendLiveTranscriptLines(lines, ["新 1", "新 2"], maxLines: 4);
 
         Assert.Equal(["既存 2", "既存 3", "新 1", "新 2"], lines);
     }
@@ -312,7 +312,7 @@ public class MainViewModelTests
         // ライブ文字起こしは 1 行ずつ届く。その経路の挙動が変わらないことを固定する
         var lines = new List<string> { "既存" };
 
-        MainViewModel.AppendLiveTranscriptLines(lines, ["新"], maxLines: 10);
+        LiveTranscriptViewModel.AppendLiveTranscriptLines(lines, ["新"], maxLines: 10);
 
         Assert.Equal(["既存", "新"], lines);
     }
@@ -324,7 +324,7 @@ public class MainViewModelTests
         // そのとき既存の表示を壊さないこと
         var lines = new List<string> { "既存 1", "既存 2" };
 
-        MainViewModel.AppendLiveTranscriptLines(lines, [], maxLines: 10);
+        LiveTranscriptViewModel.AppendLiveTranscriptLines(lines, [], maxLines: 10);
 
         Assert.Equal(["既存 1", "既存 2"], lines);
     }
@@ -393,7 +393,7 @@ public class MainViewModelTests
     [Fact]
     public void TryParseRecordedFileNameTime_RecordedName_Parses()
     {
-        var ok = MainViewModel.TryParseRecordedFileNameTime("20260823_140530.mp3", out var startTime);
+        var ok = FileTranscriptionViewModel.TryParseRecordedFileNameTime("20260823_140530.mp3", out var startTime);
 
         Assert.True(ok);
         Assert.Equal(new DateTime(2026, 8, 23, 14, 5, 30), startTime);
@@ -403,93 +403,93 @@ public class MainViewModelTests
     public void TryParseRecordedFileNameTime_NameWithSuffix_Rejects()
     {
         // 名前全体が一致しない限り採らない。無関係な数字を時刻と誤読するより空欄が良い
-        Assert.False(MainViewModel.TryParseRecordedFileNameTime("会議_20260823_140530.mp3", out _));
-        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20260823_140530_edited.mp3", out _));
+        Assert.False(FileTranscriptionViewModel.TryParseRecordedFileNameTime("会議_20260823_140530.mp3", out _));
+        Assert.False(FileTranscriptionViewModel.TryParseRecordedFileNameTime("20260823_140530_edited.mp3", out _));
     }
 
     [Fact]
     public void TryParseRecordedFileNameTime_InvalidDate_Rejects()
     {
         // 13 月・25 時は存在しない
-        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20261332_140530.mp3", out _));
-        Assert.False(MainViewModel.TryParseRecordedFileNameTime("20260823_250000.mp3", out _));
+        Assert.False(FileTranscriptionViewModel.TryParseRecordedFileNameTime("20261332_140530.mp3", out _));
+        Assert.False(FileTranscriptionViewModel.TryParseRecordedFileNameTime("20260823_250000.mp3", out _));
     }
 
     [Fact]
     public void InferStartTime_RecordedFileName_UsesFileName()
     {
         // ①が取れたら②③は見ない（作成日時が食い違っていても①を優先する）
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "20260823_140530.mp3",
             creationTime: new DateTime(2026, 8, 24, 9, 0, 0),
             lastWriteTime: new DateTime(2026, 8, 24, 10, 0, 0),
             NeverCalled());
 
         Assert.Equal("14:05", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.FileName, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.FileName, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_FullPath_UsesFileNamePart()
     {
         // 呼び出し側はフルパスを渡す（RequestFileTranscription）。パスが付いても①が効くこと
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             Path.Combine("C:", "rec", "20260823_140530.mp3"),
             creationTime: null,
             lastWriteTime: null,
             NeverCalled());
 
         Assert.Equal("14:05", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.FileName, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.FileName, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_PlainName_UsesCreationTime()
     {
         // ①が無く、作成日時 <= 更新日時（＝コピーの形跡が無い）なら②
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "interview.wav",
             creationTime: new DateTime(2026, 8, 23, 9, 5, 0),
             lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
             NeverCalled());
 
         Assert.Equal("09:05", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.CreationTime, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.CreationTime, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_CopiedFile_UsesLastWriteMinusDuration()
     {
         // 作成日時 > 更新日時 は「コピーした日時」に書き換わった証拠。②を捨てて③へ落とす
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "interview.wav",
             creationTime: new DateTime(2026, 8, 24, 18, 0, 0),
             lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
             () => TimeSpan.FromMinutes(90));
 
         Assert.Equal("09:00", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_CopiedFileWithoutDuration_ReturnsEmpty()
     {
         // ③の材料（音声長）も取れなければ空欄。エラーにはしない
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "broken.mp3",
             creationTime: new DateTime(2026, 8, 24, 18, 0, 0),
             lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
             () => null);
 
         Assert.Equal("", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.None, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.None, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_LastWriteMinusDurationCrossesMidnight_WrapsToPreviousDay()
     {
         // 日付をまたいでも時刻だけを採る（00:30 の 2 時間前は前日の 22:30）
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "night.wav",
             creationTime: new DateTime(2026, 8, 25, 12, 0, 0),
             lastWriteTime: new DateTime(2026, 8, 24, 0, 30, 0),
@@ -502,25 +502,25 @@ public class MainViewModelTests
     public void InferStartTime_NoFileTimes_ReturnsEmpty()
     {
         // 日時がまったく取れない（ファイルへアクセスできない）場合は空欄のまま
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "interview.wav", creationTime: null, lastWriteTime: null, () => TimeSpan.FromMinutes(10));
 
         Assert.Equal("", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.None, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.None, estimate.Source);
     }
 
     [Fact]
     public void InferStartTime_NoCreationTime_FallsBackToLastWriteMinusDuration()
     {
         // 作成日時だけ取れない場合も③で救う
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             "interview.wav",
             creationTime: null,
             lastWriteTime: new DateTime(2026, 8, 23, 10, 30, 0),
             () => TimeSpan.FromMinutes(30));
 
         Assert.Equal("10:00", estimate.Text);
-        Assert.Equal(MainViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
+        Assert.Equal(FileTranscriptionViewModel.StartTimeSource.LastWriteMinusDuration, estimate.Source);
     }
 
     [Theory]
@@ -532,24 +532,24 @@ public class MainViewModelTests
     {
         // 自動入力した値は、必ず入力欄の書式（REQ-TRX-FILE-10）として受理されなければならない。
         // ここが崩れると「開始」が押せないダイアログが出る
-        var estimate = MainViewModel.InferStartTime(
+        var estimate = FileTranscriptionViewModel.InferStartTime(
             fileName,
             creation == null ? null : DateTime.Parse(creation, CultureInfo.InvariantCulture),
             lastWrite == null ? null : DateTime.Parse(lastWrite, CultureInfo.InvariantCulture),
             () => TimeSpan.FromMinutes(90));
 
-        Assert.True(MainViewModel.TryParseStartTime(estimate.Text, out _));
+        Assert.True(FileTranscriptionViewModel.TryParseStartTime(estimate.Text, out _));
     }
 
     [Fact]
     public void StartTimeHintFor_None_IsEmpty()
     {
         // 推定していないときに注意書きだけ残らないこと
-        Assert.Equal("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.None));
-        Assert.NotEqual("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.FileName));
-        Assert.NotEqual("", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.CreationTime));
+        Assert.Equal("", FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.None));
+        Assert.NotEqual("", FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.FileName));
+        Assert.NotEqual("", FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.CreationTime));
         Assert.NotEqual(
-            "", MainViewModel.StartTimeHintFor(MainViewModel.StartTimeSource.LastWriteMinusDuration));
+            "", FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.LastWriteMinusDuration));
     }
 
     // --- ダイアログを閉じるときの確認 (T151 / REQ-TRX-FILE-13) ---
@@ -558,14 +558,14 @@ public class MainViewModelTests
     public void FileTranscriptionCloseConfirmation_Idle_ReturnsNull()
     {
         // 開始前・完了後は確認せずに閉じる（キャンセルボタン・自動クローズの経路）
-        Assert.Null(MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: false));
+        Assert.Null(FileTranscriptionViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: false));
     }
 
     [Fact]
     public void FileTranscriptionCloseConfirmation_Transcribing_AsksToCancel()
     {
         // 処理中に閉じる操作は中止と同義になる。Esc でも閉じうるため、黙って捨てない
-        var message = MainViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: true);
+        var message = FileTranscriptionViewModel.FileTranscriptionCloseConfirmation(isTranscribingFile: true);
 
         Assert.NotNull(message);
         Assert.Contains("中止して閉じますか", message, StringComparison.Ordinal);
@@ -577,7 +577,7 @@ public class MainViewModelTests
     public void IsDiarizationPhase_DiarizePhase_IsTrue()
     {
         // フェーズ名は TranscriptionService だけが持ち、ViewModel は写しを作らない
-        Assert.True(MainViewModel.IsDiarizationPhase(TranscriptionService.DiarizePhase));
+        Assert.True(FileTranscriptionViewModel.IsDiarizationPhase(TranscriptionService.DiarizePhase));
     }
 
     [Fact]
@@ -585,7 +585,7 @@ public class MainViewModelTests
     {
         // T160 の不具合そのもの。話者識別が有効でも Whisper のフェーズは通るため、
         // ここを true にすると「処理中」に「話者識別が終わるまで待て」と出てしまう
-        Assert.False(MainViewModel.IsDiarizationPhase(TranscriptionService.TranscribePhase));
+        Assert.False(FileTranscriptionViewModel.IsDiarizationPhase(TranscriptionService.TranscribePhase));
     }
 
     [Fact]
@@ -593,7 +593,7 @@ public class MainViewModelTests
     {
         // 話者識別中は、中止が効くのは推論が終わったあと（REQ-TRX-DIA-12）。
         // 数十秒〜数分待たされるので、何を待っているのかを名指しする。
-        var notice = MainViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: true);
+        var notice = FileTranscriptionViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: true);
 
         Assert.Contains("中止を要求しました", notice, StringComparison.Ordinal);
         Assert.Contains("話者識別", notice, StringComparison.Ordinal);
@@ -604,7 +604,7 @@ public class MainViewModelTests
     {
         // Whisper の「処理中」や準備中に「話者識別の完了を待て」と言うのは事実に反する。
         // Whisper はチャンクと有声区間の境目ごとにキャンセルを見るので数秒で止まる
-        var notice = MainViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: false);
+        var notice = FileTranscriptionViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: false);
 
         Assert.Contains("中止を要求しました", notice, StringComparison.Ordinal);
         Assert.DoesNotContain("話者識別", notice, StringComparison.Ordinal);
@@ -691,7 +691,7 @@ public class MainViewModelTests
     [InlineData(9)]
     public void SpeakerCountOptionFor_SettingsOneToNine_SelectsThatCount(int settingsValue)
     {
-        var option = MainViewModel.SpeakerCountOptionFor(settingsValue);
+        var option = FileTranscriptionViewModel.SpeakerCountOptionFor(settingsValue);
 
         Assert.Equal(settingsValue, option.Count);
         Assert.Same(SpeakerCountOptions.All[settingsValue], option);
@@ -706,7 +706,7 @@ public class MainViewModelTests
     public void SpeakerCountOptionFor_NullZeroOrTenPlus_SelectsUnspecified(int? settingsValue)
     {
         // 通常（設定 null）は「指定なし」。10 以上も「指定なし」に倒す（設定値がそのまま効く従来の挙動を保つ）
-        Assert.Same(SpeakerCountOptions.Unspecified, MainViewModel.SpeakerCountOptionFor(settingsValue));
+        Assert.Same(SpeakerCountOptions.Unspecified, FileTranscriptionViewModel.SpeakerCountOptionFor(settingsValue));
     }
 
     // --- Whisper モデルの登録一覧 (T162 / REQ-CFG-08 / REQ-MODELWIN-02〜03) ---
@@ -717,7 +717,7 @@ public class MainViewModelTests
     public void MigrateWhisperModelList_NoListWithPath_CreatesOneEntryNamedByFileName()
     {
         // 旧バージョンの settings.json（一覧なし・パスだけ）は 1 件へ移行する
-        var list = MainViewModel.MigrateWhisperModelList(null, @"C:\models\ggml-small.bin");
+        var list = SettingsViewModel.MigrateWhisperModelList(null, @"C:\models\ggml-small.bin");
 
         var entry = Assert.Single(list);
         Assert.Equal("ggml-small", entry.ModelName);
@@ -727,8 +727,8 @@ public class MainViewModelTests
     [Fact]
     public void MigrateWhisperModelList_NoListNoPath_ReturnsEmpty()
     {
-        Assert.Empty(MainViewModel.MigrateWhisperModelList(null, ""));
-        Assert.Empty(MainViewModel.MigrateWhisperModelList([], null));
+        Assert.Empty(SettingsViewModel.MigrateWhisperModelList(null, ""));
+        Assert.Empty(SettingsViewModel.MigrateWhisperModelList([], null));
     }
 
     [Fact]
@@ -737,7 +737,7 @@ public class MainViewModelTests
         // 大文字小文字の違いだけなら同じファイルとみなし、足さない
         var existing = Entry("small", @"C:\Models\GGML-SMALL.bin");
 
-        var list = MainViewModel.MigrateWhisperModelList([existing], @"c:\models\ggml-small.bin");
+        var list = SettingsViewModel.MigrateWhisperModelList([existing], @"c:\models\ggml-small.bin");
 
         Assert.Same(existing, Assert.Single(list));
     }
@@ -746,7 +746,7 @@ public class MainViewModelTests
     public void MigrateWhisperModelList_ListWithoutPath_AppendsEntry()
     {
         // 手編集で一覧に無いパスが選ばれていたら、選択を表現できるよう 1 件足す
-        var list = MainViewModel.MigrateWhisperModelList(
+        var list = SettingsViewModel.MigrateWhisperModelList(
             [Entry("small", @"C:\m\small.bin")], @"C:\m\large.bin");
 
         Assert.Equal(2, list.Count);
@@ -757,7 +757,7 @@ public class MainViewModelTests
     public void MigrateWhisperModelList_DuplicateName_AppendsSuffix()
     {
         // 起動時に検証エラーで止まれないため、名前が重なったら連番を付ける
-        var list = MainViewModel.MigrateWhisperModelList(
+        var list = SettingsViewModel.MigrateWhisperModelList(
             [Entry("small", @"C:\a\small.bin"), Entry("small (2)", @"C:\b\small.bin")], @"C:\c\small.bin");
 
         Assert.Equal("small (3)", list[2].ModelName);
@@ -766,7 +766,7 @@ public class MainViewModelTests
     [Fact]
     public void ValidateWhisperModelEntry_BlankName_ReturnsError()
     {
-        var error = MainViewModel.ValidateWhisperModelEntry([], "  ", @"C:\m\a.bin", null, _ => true);
+        var error = WhisperModelsViewModel.ValidateWhisperModelEntry([], "  ", @"C:\m\a.bin", null, _ => true);
 
         Assert.NotNull(error);
         Assert.Contains("名前", error, StringComparison.Ordinal);
@@ -775,7 +775,7 @@ public class MainViewModelTests
     [Fact]
     public void ValidateWhisperModelEntry_MissingFile_ReturnsError()
     {
-        var error = MainViewModel.ValidateWhisperModelEntry([], "a", @"C:\m\a.bin", null, _ => false);
+        var error = WhisperModelsViewModel.ValidateWhisperModelEntry([], "a", @"C:\m\a.bin", null, _ => false);
 
         Assert.NotNull(error);
         Assert.Contains("見つかりません", error, StringComparison.Ordinal);
@@ -786,7 +786,7 @@ public class MainViewModelTests
     {
         var existing = new[] { Entry("small", @"C:\m\small.bin") };
 
-        var error = MainViewModel.ValidateWhisperModelEntry(existing, "small", @"C:\m\other.bin", null, _ => true);
+        var error = WhisperModelsViewModel.ValidateWhisperModelEntry(existing, "small", @"C:\m\other.bin", null, _ => true);
 
         Assert.NotNull(error);
         Assert.Contains("同じ名前", error, StringComparison.Ordinal);
@@ -798,7 +798,7 @@ public class MainViewModelTests
         // 同じファイルを別の表記で 2 度登録させない（REQ-CFG-08）
         var existing = new[] { Entry("small", @"C:\m\small.bin") };
 
-        var error = MainViewModel.ValidateWhisperModelEntry(existing, "small2", @"c:\M\SMALL.BIN", null, _ => true);
+        var error = WhisperModelsViewModel.ValidateWhisperModelEntry(existing, "small2", @"c:\M\SMALL.BIN", null, _ => true);
 
         Assert.NotNull(error);
         Assert.Contains("同じファイル", error, StringComparison.Ordinal);
@@ -812,8 +812,8 @@ public class MainViewModelTests
         var self = Entry("small", @"C:\m\small.bin");
         var other = Entry("large", @"C:\m\large.bin");
 
-        Assert.Null(MainViewModel.ValidateWhisperModelEntry([self, other], "small-v3", self.ModelPath, self, _ => true));
-        Assert.NotNull(MainViewModel.ValidateWhisperModelEntry([self, other], "large", self.ModelPath, self, _ => true));
+        Assert.Null(WhisperModelsViewModel.ValidateWhisperModelEntry([self, other], "small-v3", self.ModelPath, self, _ => true));
+        Assert.NotNull(WhisperModelsViewModel.ValidateWhisperModelEntry([self, other], "large", self.ModelPath, self, _ => true));
     }
 
     [Fact]
@@ -821,7 +821,7 @@ public class MainViewModelTests
     {
         var existing = new[] { Entry("small", @"C:\m\small.bin") };
 
-        Assert.Null(MainViewModel.ValidateWhisperModelEntry(existing, "large", @"C:\m\large.bin", null, _ => true));
+        Assert.Null(WhisperModelsViewModel.ValidateWhisperModelEntry(existing, "large", @"C:\m\large.bin", null, _ => true));
     }
 
     // --- ファイル文字起こしに使うモデルの既定 (T163 / REQ-TRX-FILE-17 / REQ-CFG-09) ---
@@ -832,7 +832,7 @@ public class MainViewModelTests
         var small = Entry("small", @"C:\m\small.bin");
         var large = Entry("large", @"C:\m\large.bin");
 
-        Assert.Same(large, MainViewModel.FileWhisperModelFor([small, large], "large", liveModel: small));
+        Assert.Same(large, FileTranscriptionViewModel.FileWhisperModelFor([small, large], "large", liveModel: small));
     }
 
     [Fact]
@@ -842,8 +842,8 @@ public class MainViewModelTests
         var small = Entry("small", @"C:\m\small.bin");
         var large = Entry("large", @"C:\m\large.bin");
 
-        Assert.Same(small, MainViewModel.FileWhisperModelFor([large, small], "gone", liveModel: small));
-        Assert.Same(small, MainViewModel.FileWhisperModelFor([large, small], null, liveModel: small));
+        Assert.Same(small, FileTranscriptionViewModel.FileWhisperModelFor([large, small], "gone", liveModel: small));
+        Assert.Same(small, FileTranscriptionViewModel.FileWhisperModelFor([large, small], null, liveModel: small));
     }
 
     [Fact]
@@ -851,8 +851,8 @@ public class MainViewModelTests
     {
         var small = Entry("small", @"C:\m\small.bin");
 
-        Assert.Same(small, MainViewModel.FileWhisperModelFor([small], null, liveModel: null));
-        Assert.Null(MainViewModel.FileWhisperModelFor([], null, liveModel: null));
+        Assert.Same(small, FileTranscriptionViewModel.FileWhisperModelFor([small], null, liveModel: null));
+        Assert.Null(FileTranscriptionViewModel.FileWhisperModelFor([], null, liveModel: null));
     }
 
     // --- 停止処理中の残り表示と打ち切り (T165 / REQ-REC-07 / REQ-TRX-LIVE-11) ---
@@ -925,7 +925,7 @@ public class MainViewModelTests
     {
         Assert.Equal(
             "文字起こしに失敗しました: ファイル文字起こしエラー: x",
-            MainViewModel.FileTranscriptionFailureMessageFor("ファイル文字起こしエラー: x"));
+            FileTranscriptionViewModel.FileTranscriptionFailureMessageFor("ファイル文字起こしエラー: x"));
     }
 
     [Theory]
@@ -934,7 +934,7 @@ public class MainViewModelTests
     [InlineData("  ")]
     public void FileTranscriptionFailureMessageFor_WithoutReason_IsPlain(string? reason)
     {
-        Assert.Equal("文字起こしに失敗しました", MainViewModel.FileTranscriptionFailureMessageFor(reason));
+        Assert.Equal("文字起こしに失敗しました", FileTranscriptionViewModel.FileTranscriptionFailureMessageFor(reason));
     }
 
     // --- 対応形式 (T161 / REQ-TRX-FILE-03) ---
@@ -946,7 +946,7 @@ public class MainViewModelTests
     [InlineData(@"C:\a\MEETING.M4A")]
     public void IsSupportedAudioExtension_SupportedFormats_ReturnsTrue(string path)
     {
-        Assert.True(MainViewModel.IsSupportedAudioExtension(path));
+        Assert.True(FileTranscriptionViewModel.IsSupportedAudioExtension(path));
     }
 
     [Theory]
@@ -956,6 +956,6 @@ public class MainViewModelTests
     [InlineData(@"C:\a\meeting")]
     public void IsSupportedAudioExtension_Unsupported_ReturnsFalse(string path)
     {
-        Assert.False(MainViewModel.IsSupportedAudioExtension(path));
+        Assert.False(FileTranscriptionViewModel.IsSupportedAudioExtension(path));
     }
 }

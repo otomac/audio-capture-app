@@ -9,6 +9,7 @@ sequenceDiagram
     actor User
     participant MW as MainWindow
     participant VM as MainViewModel
+    participant SVM as SettingsViewModel
     participant SS as SettingsService
     participant ACS as AudioCaptureService
     participant TS as TranscriptionService
@@ -17,14 +18,17 @@ sequenceDiagram
     MW->>VM: new MainViewModel()
     VM->>SS: Load()
     SS-->>VM: AppSettings
-    VM->>VM: OutputFolder / TranscriptionEnabled / WhisperModelPath / UseGpuForTranscription を復元
-    VM->>VM: WhisperModelList を復元（無ければ WhisperModelPath から 1 件へ移行。REQ-CFG-08）<br/>WhisperModelPath と一致する要素を SelectedWhisperModel にする
+    VM->>SVM: new SettingsViewModel(this)（子 ViewModel。ADR-0008）
+    SVM->>SVM: OutputFolder / UseGpuForTranscription / 自動開始の ON/OFF / ライブの言語 を復元
+    SVM->>SVM: WhisperModelList を復元（無ければ WhisperModelPath から 1 件へ移行。REQ-CFG-08）<br/>WhisperModelPath と一致する要素を SelectedWhisperModel にする
+    VM->>VM: 残りの子 ViewModel（ファイル文字起こし・メタデータ入力・文字起こし表示）を生成
+    VM->>VM: TranscriptionEnabled を復元
 
     alt WhisperModelPath が設定済み
-        VM->>VM: TryLoadWhisperModel() (非同期)
-        VM->>TS: LoadModel(path, useGpu)
-        TS-->>VM: (Success, GpuAvailable)
-        VM->>VM: GpuAvailable 反映 / 必要ならUseGpuForTranscriptionを強制OFF
+        VM->>SVM: TryLoadWhisperModel() (非同期)
+        SVM->>TS: LoadModel(path, useGpu)
+        TS-->>SVM: (Success, GpuAvailable)
+        SVM->>SVM: GpuAvailable 反映 / 必要ならUseGpuForTranscriptionを強制OFF
     end
 
     VM->>ACS: RefreshDevices()
@@ -83,7 +87,7 @@ sequenceDiagram
     participant Mic as WasapiCapture (マイク)
     participant ACS as AudioCaptureService
     participant TS as TranscriptionService
-    participant VM as MainViewModel
+    participant LTVM as LiveTranscriptViewModel
 
     Mic->>ACS: DataAvailable(buffer)
     alt IsMicMuted
@@ -104,9 +108,9 @@ sequenceDiagram
     loop 有声区間ごと
         TS->>TS: WhisperProcessor.ProcessAsync(region)
         TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
-        TS-->>VM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
-        VM->>VM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（100 行超は先頭から破棄）
-        Note over VM: 文字起こし表示ウィンドウが開いていれば最新行が見える（REQ-LIVEVIEW-03）
+        TS-->>LTVM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
+        LTVM->>LTVM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（100 行超は先頭から破棄）
+        Note over LTVM: 文字起こし表示ウィンドウが開いていれば最新行が見える（REQ-LIVEVIEW-03）
     end
     Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る
     TS->>TS: AppendTranscriptLines(outputPath, results)（results が空でなければ）
@@ -118,6 +122,7 @@ sequenceDiagram
 sequenceDiagram
     actor User
     participant VM as MainViewModel
+    participant RMVM as RecordingMetadataViewModel
     participant ACS as AudioCaptureService
     participant TS as TranscriptionService
 
@@ -146,14 +151,15 @@ sequenceDiagram
     VM->>VM: CurrentSession を参照し StatusMessage 更新（保存完了 / 文字起こしファイルの有無）
 
     opt CurrentSession != null（REQ-REC-13）
+        VM->>RMVM: Prepare(session)（既定値を入れる）
         VM-->>User: RecordingMetadataRequested → MainWindow が RecordingMetadataWindow を ShowDialog
         alt OK
-            VM->>VM: CompleteRecordingMetadata(true)
-            VM->>ACS: RenameSessionFiles(会議名) ※会議名があるとき。.mp3 と .txt を改名
-            VM->>VM: RecordingMetadataFile.Write(同名の .json)
-            VM->>VM: LastResultPath を改名後のパスへ
+            User->>RMVM: Complete(true)（ダイアログが閉じたら MainWindow が呼ぶ）
+            RMVM->>ACS: RenameSessionFiles(会議名) ※会議名があるとき。.mp3 と .txt を改名
+            RMVM->>RMVM: RecordingMetadataFile.Write(同名の .json)
+            RMVM->>VM: LastResultPath を改名後のパスへ / StatusMessage 更新
         else キャンセル
-            VM->>VM: 何も残さない
+            RMVM->>RMVM: 何も残さない
         end
     end
 ```
@@ -196,6 +202,7 @@ sequenceDiagram
     actor User
     participant MW as MainWindow
     participant VM as MainViewModel
+    participant FVM as FileTranscriptionViewModel
     participant TS as TranscriptionService
 
     participant OW as FileTranscriptionOptionsWindow
@@ -213,10 +220,11 @@ sequenceDiagram
     end
 
     Note over VM,OW: REQ-TRX-FILE-09: すぐに処理を始めず、オプション指定ダイアログを挟む
-    VM->>VM: 対象パスを保持 / FileTranscriptionFileName を設定
-    VM->>VM: RecordingMetadataFile.TryRead(同じ stem の .json) → あればメタデータ 3 項目の初期値に（REQ-TRX-FILE-19）
+    VM->>FVM: Prepare(filePath)
+    FVM->>FVM: 対象パスを保持 / FileTranscriptionFileName を設定 / 入力を開くたびの既定へ戻す
+    FVM->>FVM: RecordingMetadataFile.TryRead(同じ stem の .json) → あればメタデータ 3 項目の初期値に（REQ-TRX-FILE-19）
     VM-->>MW: FileTranscriptionRequested イベント
-    MW->>OW: new FileTranscriptionOptionsWindow(vm) { Owner = MainWindow }
+    MW->>OW: new FileTranscriptionOptionsWindow(vm.FileTranscription) { Owner = MainWindow }
     MW->>OW: ShowDialog()（モーダル）
 
     alt 「キャンセル」または ✕（開始前）
@@ -226,15 +234,15 @@ sequenceDiagram
         User->>OW: 開始時刻 hh:mm を入力（空欄可）
         Note over OW: 書式が不正な間は「開始」を無効化（REQ-TRX-FILE-10）
         User->>OW: 「開始」クリック
-        OW->>VM: StartFileTranscriptionAsync()
+        OW->>FVM: StartFileTranscriptionAsync()
     end
 
-    VM->>VM: TryParseStartTime() → startOffset
-    VM->>VM: RunFileTranscriptionAsync(filePath, startOffset)
-    VM->>VM: IsTranscribingFile = true（ダイアログが進捗表示へ切り替わる）
-    VM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token) ※Task.Run上
+    FVM->>FVM: TryParseStartTime() → startOffset
+    FVM->>FVM: RunFileTranscriptionAsync(filePath, startOffset)
+    FVM->>VM: IsTranscribingFile = true（SetTranscribing。ダイアログが進捗表示へ切り替わる）
+    FVM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token) ※Task.Run上
     alt options.ModelPath がライブ用の読み込み済みモデルと異なる（REQ-TRX-FILE-17）
-        TS->>TS: 2 つ目の WhisperFactory を作る（失敗なら ModelLoadFailed を返し、VM はダイアログ内に理由を出して閉じない）
+        TS->>TS: 2 つ目の WhisperFactory を作る（失敗なら ModelLoadFailed を返し、FVM はダイアログ内に理由を出して閉じない）
     end
 
     Note over TS: diarization が null（＝話者ダイアライゼーション無効）なら以下の従来経路。<br/>非 null のときは §6.1 の経路を通る
@@ -247,26 +255,26 @@ sequenceDiagram
             TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
         end
         TS->>TS: FlushAsync()
-        TS-->>VM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）
-        VM->>VM: FileTranscriptionStatus / FileTranscriptionProgress 更新
+        TS-->>FVM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）
+        FVM->>FVM: FileTranscriptionStatus / FileTranscriptionProgress 更新
     end
 
     alt ユーザーが「中止」をクリック（オプション指定ダイアログのみ。REQ-TRX-FILE-07）
-        User->>VM: CancelFileTranscription()
-        VM->>VM: IsFileTranscriptionCancelRequested = true（「中止」を無効化し、注記を出す。REQ-TRX-FILE-07）
-        VM->>TS: CancellationTokenSource.Cancel()
-        Note over VM,TS: 実際に止まるのは推論の境界（REQ-TRX-DIA-12）。<br/>それまで進捗の報告は続き、注記は別の行なので消えない。
+        User->>FVM: CancelFileTranscription()
+        FVM->>FVM: IsFileTranscriptionCancelRequested = true（「中止」を無効化し、注記を出す。REQ-TRX-FILE-07）
+        FVM->>TS: CancellationTokenSource.Cancel()
+        Note over FVM,TS: 実際に止まるのは推論の境界（REQ-TRX-DIA-12）。<br/>それまで進捗の報告は続き、注記は別の行なので消えない。
         TS->>TS: OperationCanceledException 捕捉 → 出力ファイル削除
-        TS-->>VM: throw OperationCanceledException
-        VM->>VM: FileTranscriptionStatus = "中止しました"
+        TS-->>FVM: throw OperationCanceledException
+        FVM->>FVM: FileTranscriptionStatus = "中止しました"
     else 正常完了
-        TS-->>VM: true
-        VM->>VM: StatusMessage に出力パスを表示
-        VM->>VM: 同名の .json が既にあれば RecordingMetadataFile.Update（3 項目のキーだけ書き換え）、無ければ入力がある時だけ Write（REQ-TRX-FILE-18 / 19）
+        TS-->>FVM: true
+        FVM->>VM: StatusMessage に出力パスを表示 / LastResultPath を更新
+        FVM->>FVM: 同名の .json が既にあれば RecordingMetadataFile.Update（3 項目のキーだけ書き換え）、無ければ入力がある時だけ Write（REQ-TRX-FILE-18 / 19）
     end
 
-    VM->>VM: IsTranscribingFile = false
-    VM-->>OW: StartFileTranscriptionAsync() の await が完了
+    FVM->>VM: IsTranscribingFile = false（SetTranscribing）
+    FVM-->>OW: StartFileTranscriptionAsync() の await が完了
     OW->>OW: Close()（完了・失敗・中止のいずれでも自動で閉じる。REQ-TRX-FILE-12）
 
     Note over MW,OW: 処理中にダイアログを ✕ で閉じようとしたら「中止して閉じるか」を確認する。<br/>はいならその時点で中止し、完了は待たずに閉じる（REQ-TRX-FILE-13）。<br/>メインウィンドウに進捗表示と「中止」は無い（T151 で削除。REQ-TRX-FILE-06 / 07）。<br/>閉じたあと中止が完了するまでの経過はステータスバーの 1 行で分かる
@@ -278,12 +286,12 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant VM as MainViewModel
+    participant FVM as FileTranscriptionViewModel
     participant TS as TranscriptionService
     participant SD as SpeakerDiarizationService
     participant M as TranscriptDiarizationMerger
 
-    VM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token)
+    FVM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token)
 
     Note over TS: ① デコード（1 回だけ）
     TS->>TS: AudioFileReader → ダウンミックス+LPF+リサンプル → 16kHz モノラル PCM 全体（NFR-07）
@@ -297,7 +305,7 @@ sequenceDiagram
     SD->>SD: SampleRate == 16000 を検証（REQ-TRX-DIA-09）
     SD->>SD: ProcessWithCallback(pcm, 進捗コールバック)
     SD-->>TS: 進捗コールバック（0.0〜1.0）
-    TS-->>VM: progress.Report("話者識別中", processed, total)
+    TS-->>FVM: progress.Report("話者識別中", processed, total)
     SD-->>TS: SpeakerSegment[]（Start / End / 0 始まりの SpeakerId）
     TS->>TS: token.ThrowIfCancellationRequested()
 
@@ -306,7 +314,7 @@ sequenceDiagram
         TS->>TS: WhisperProcessor.ProcessAsync(region)
         TS->>TS: トークン時刻から発話時間帯を作る（特殊トークン・長さ0を除き、重なりは結合）
         TS->>TS: TranscriptSegment（ファイル先頭基準の時刻＋発話時間帯）として溜める
-        TS-->>VM: progress.Report("処理中", processed, total)
+        TS-->>FVM: progress.Report("処理中", processed, total)
     end
 
     Note over TS,M: ④ タイムラインを突き合わせる
@@ -317,8 +325,8 @@ sequenceDiagram
 
     Note over TS: ⑤ ここで初めてファイルへ書く（確定処理。ここではキャンセルを見ない）
     TS->>TS: [時刻] [ファイル] [話者N] テキスト を .transcript.txt へ書き出す
-    TS-->>VM: SegmentTranscribed（行ごと。表示ウィンドウへ）
-    TS-->>VM: true
+    TS-->>FVM: SegmentTranscribed（行ごと。LiveTranscriptViewModel が受けて表示ウィンドウへ）
+    TS-->>FVM: true
 ```
 
 > **逐次表示のタイミングが変わる。** 話者の割り当てはタイムライン全体が揃うまで確定できないため、
@@ -357,16 +365,16 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     actor User
-    participant VM as MainViewModel
+    participant SVM as SettingsViewModel
     participant TS as TranscriptionService
     participant ACS as AudioCaptureService
 
-    User->>VM: 「文字起こしにGPUを使用する」チェックボックス変更
-    VM->>VM: OnUseGpuForTranscriptionChanged(value)
-    VM->>VM: SaveSettings()
-    VM->>VM: TryLoadWhisperModel() ※Task.Run上
+    User->>SVM: 「文字起こしにGPUを使用する」チェックボックス変更
+    SVM->>SVM: OnUseGpuForTranscriptionChanged(value)
+    SVM->>SVM: SaveSettings()（保存は親の MainViewModel.SaveSettings）
+    SVM->>SVM: TryLoadWhisperModel() ※Task.Run上
 
-    VM->>TS: LoadModel(modelPath, requestGpu)
+    SVM->>TS: LoadModel(modelPath, requestGpu)
     TS->>TS: DisposeProcessor() (既存モデル破棄)
     TS->>TS: RuntimeLibraryOrder = GPU優先順<br/>※実際に効くのはプロセス内で最初の読み込みのみ
     TS->>TS: LogProvider.AddLogger(...) で読み込み中だけネイティブログを購読
@@ -374,18 +382,18 @@ sequenceDiagram
     TS->>TS: CreateBuilder() を 1 度呼ぶ<br/>※FromPath は読み込み失敗を例外にしないため
     TS->>TS: 購読解除。ログから backends 数と重みの配置先を取得
     TS->>TS: GpuAvailable = GPU版ランタイム かつ backends >= 2<br/>実行先 = 重みの配置先が CPU 以外か
-    TS-->>VM: RuntimeInfo("GPU (Vulkan)" / "CPU")
-    TS-->>VM: (Success, GpuAvailable)
+    TS-->>SVM: RuntimeInfo("GPU (Vulkan)" / "CPU")（購読するのは MainViewModel。StatusMessage に出す）
+    TS-->>SVM: (Success, GpuAvailable)
 
     alt Success
-        VM->>VM: GpuAvailable 反映
+        SVM->>SVM: GpuAvailable 反映
         alt GPU要求だが利用不可
-            VM->>VM: UseGpuForTranscription を強制 false（書き戻し抑止フラグ使用）
-            VM->>VM: SaveSettings()
+            SVM->>SVM: UseGpuForTranscription を強制 false（書き戻し抑止フラグ使用）
+            SVM->>SVM: SaveSettings()（保存は親の MainViewModel.SaveSettings）
         end
-        VM->>VM: TranscriptionStatus = "モデル読み込み完了"
+        SVM->>SVM: TranscriptionStatus = "モデル読み込み完了"
     else Failure
-        VM->>VM: TranscriptionStatus = "モデル読み込み失敗"
-        VM->>ACS: SetTranscriptionService(null)
+        SVM->>SVM: TranscriptionStatus = "モデル読み込み失敗"
+        SVM->>ACS: SetTranscriptionService(null)
     end
 ```

@@ -6,7 +6,7 @@ using CommunityToolkit.Mvvm.Input;
 namespace AudioCaptureApp.ViewModels;
 
 // MainViewModel のうち、録音の開始／停止、録音状態の表示、終了時の確認と後始末を担当する部分。
-// クラスは 1 つのままで、ファイルだけを機能単位に割っている（ADR-0005 案 D）。
+// MainViewModel はファイルを機能単位で partial に割っている（ADR-0008 が引き継ぐ ADR-0005 規則 2）。
 public partial class MainViewModel
 {
     private static readonly SolidColorBrush RecordingBrush = new(Color.FromRgb(0xCC, 0x00, 0x00));
@@ -37,14 +37,11 @@ public partial class MainViewModel
     {
         try
         {
-            _recordingStartTime = _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, OutputFolder);
+            _recordingStartTime = _audioCaptureService.StartRecording(SelectedCaptureDevice, SelectedRenderDevice, Settings.OutputFolder);
 
             // REQ-LIVEVIEW-08: 前のセッションの行が新しいセッションの行に混ざらないようにする。
             // 開始に成功したあとで消すこと。失敗したのに消すと、失敗の前後を見比べられなくなる。
-            // 引き取り待ちのキュー（REQ-LIVEVIEW-09）も一緒に空にする。消し忘れると
-            // 前のセッションの行がクリアの直後に画面へ現れる。
-            _pendingTranscriptLines.Clear();
-            LiveTranscriptLines.Clear();
+            LiveTranscript.Clear();
 
             IsRecording = true;
             // 手動で始めた録音。自動開始のときは呼び出し元（ObserveAutoStart）が直後に true へ上書きする
@@ -180,11 +177,6 @@ public partial class MainViewModel
     /// </summary>
     private Task? _stopRecordingTask;
 
-    /// <summary>
-    /// 実行中のファイル文字起こし（REQ-TRX-FILE-14）。同じく完了を待つために保持する。
-    /// </summary>
-    private Task? _fileTranscriptionTask;
-
     // 停止処理そのものは Core 側にある。ここを薄いラッパーにしているのは、
     // 走っている Task を掴んでおかないと終了確認（REQ-REC-11）が完了を待てないためである。
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
@@ -222,7 +214,7 @@ public partial class MainViewModel
         var transcriptionEnabled = TranscriptionEnabled;
         // 停止中の Error イベント（打ち切りのタイムアウト等）は BeginInvoke で書かれた直後にこの継続が
         // 上書きしてしまう（T134 と同じ順序）。控えておいて完了の 1 行に併記する。
-        _lastTranscriptionError = null;
+        LastTranscriptionError = null;
         try
         {
             await Task.Run(() => _audioCaptureService.StopRecording());
@@ -252,7 +244,7 @@ public partial class MainViewModel
             StatusMessage = hasTxt
                 ? $"保存完了: {session.FilePath} (文字起こし: {txtPath})"
                 : $"保存完了: {session.FilePath}";
-            if (_lastTranscriptionError is { } stopError)
+            if (LastTranscriptionError is { } stopError)
             {
                 StatusMessage += $" — {stopError}";
             }
@@ -260,7 +252,7 @@ public partial class MainViewModel
             LastResultPath = hasTxt ? txtPath : session.FilePath;
 
             // REQ-REC-13: 停止処理が完了してからメタデータの入力を促す。
-            // MainWindow が同期的にダイアログを出し、閉じたら CompleteRecordingMetadata を呼ぶ。
+            // MainWindow が同期的にダイアログを出し、閉じたら RecordingMetadataViewModel.Complete を呼ぶ。
             // 終了確認（REQ-REC-11）の経路でも、この戻りを待ってから Close() に進む。
             RequestRecordingMetadata(session);
         }
@@ -327,11 +319,7 @@ public partial class MainViewModel
     {
         if (IsTranscribingFile)
         {
-            CancelFileTranscription();
-            if (_fileTranscriptionTask is { } fileTask)
-            {
-                await fileTask;
-            }
+            await FileTranscription.CancelAndWaitAsync();
         }
 
         if (IsStopping)

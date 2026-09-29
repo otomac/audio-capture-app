@@ -16,7 +16,7 @@
 
 ## 2. レイヤー構成
 
-[CLAUDE.md](../../CLAUDE.md) の方針に従い、Models / ViewModels / Services の 3 層構成を採用する。ViewModel は `MainViewModel` **1 クラス**に集約している。ファイルは機能単位で `partial` に割っている（[ADR-0005](../adr/0005-mainviewmodel-split.md)。シンプル優先）。
+[CLAUDE.md](../../CLAUDE.md) の方針に従い、Models / ViewModels / Services の 3 層構成を採用する。ViewModel は**ウィンドウ 1 枚に 1 クラス**で、`MainViewModel` が親として子（補助ウィンドウの ViewModel）を生成・保持する。各クラスのファイルは機能単位で `partial` に割っている（[ADR-0008](../adr/0008-per-window-viewmodels.md)）。
 
 ```mermaid
 graph TB
@@ -35,6 +35,12 @@ Styles/Controls.xaml"]
     subgraph ViewModel["ViewModel層"]
         MVM["MainViewModel
 (partial・6 ファイル)"]
+        SVM["SettingsViewModel"]
+        WMVM["WhisperModelsViewModel"]
+        FTVM["FileTranscriptionViewModel
+(partial・3 ファイル)"]
+        RMVM["RecordingMetadataViewModel"]
+        LTVM["LiveTranscriptViewModel"]
     end
 
     subgraph Service["Service層"]
@@ -66,13 +72,23 @@ Styles/Controls.xaml"]
     MW -->|"生成・表示 (ShowDialog)"| SW
     SW -->|"生成・表示 (ShowDialog, Owner=SettingsWindow)"| WMW
     MW -->|"生成・表示 (ShowDialog)"| RMW
-    FTW -->|"DataContext (同一インスタンス)"| MVM
-    LTW -->|"DataContext (同一インスタンス)"| MVM
-    SW -->|"DataContext (同一インスタンス)"| MVM
-    WMW -->|"DataContext (同一インスタンス)"| MVM
-    RMW -->|"DataContext (同一インスタンス)"| MVM
+    FTW -->|"DataContext"| FTVM
+    LTW -->|"DataContext"| LTVM
+    SW -->|"DataContext"| SVM
+    WMW -->|"DataContext"| WMVM
+    RMW -->|"DataContext"| RMVM
     MW --> LMC
     LMC -->|"Level (dB) バインド"| MVM
+
+    MVM -->|"生成・保持"| SVM
+    MVM -->|"生成・保持"| FTVM
+    MVM -->|"生成・保持"| RMVM
+    MVM -->|"生成・保持"| LTVM
+    SVM -->|"生成・保持"| WMVM
+    SVM -.->|"親の状態を読み書き"| MVM
+    WMVM -.->|"一覧を編集"| SVM
+    FTVM -.->|"親の状態を読み書き"| MVM
+    RMVM -.->|"親の状態を読み書き"| MVM
 
     MVM --> ACS
     MVM --> TS
@@ -95,31 +111,34 @@ Styles/Controls.xaml"]
 ### 各層の責務
 
 - **View層**（`MainWindow.xaml(.cs)`, `FileTranscriptionOptionsWindow`, `LiveTranscriptWindow`, `SettingsWindow`, `WhisperModelsWindow`, `RecordingMetadataWindow`, `Controls/LevelMeterControl`, `Styles/`）
-  UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、`MainViewModel` へのバインディングのみを持ち、業務ロジックは持たない。
-  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow`）は**自前の状態を持たず**、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` だけは、モーダルな `SettingsWindow` の上に出すため `SettingsWindow` のコードビハインドが生成し `Owner` にする）、`MainViewModel` は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `WhisperModelsRequested` / `RecordingMetadataRequested` イベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)。
+  UI 表示とユーザー操作の受け付け。ドラッグ＆ドロップのイベントハンドリングと、それぞれの ViewModel へのバインディングのみを持ち、業務ロジックは持たない。
+  補助ウィンドウ（`FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow`）は**自前の状態を持たず**、`MainViewModel` が保持するそれぞれの ViewModel（子）を `DataContext` にする。生成・表示・アクティブ化は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` だけは、モーダルな `SettingsWindow` の上に出すため `SettingsWindow` のコードビハインドが生成し `Owner` にする）、ViewModel は「開いてほしい」を `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `RecordingMetadataRequested`（`MainViewModel`）と `WhisperModelsRequested`（`SettingsViewModel`）のイベントで通知するだけである（依存方向 View → ViewModel を守るため）。詳細と根拠は [ADR-0008](../adr/0008-per-window-viewmodels.md)（イベントと生成の規則は [ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md) から引き継いだもの）。
   `Styles/` は `App.xaml` の `MergedDictionaries` から読み込む `ResourceDictionary` で、コントロールの `Style` と `ControlTemplate` だけを持つ。UI ライブラリは導入していない（`CLAUDE.md`「ライブラリ追加は個別承認制」）。
-- **ViewModel層**（`ViewModels/MainViewModel*.cs`）
+- **ViewModel層**（`ViewModels/*ViewModel*.cs`）
   UI 状態（録音中／設定値／進捗等）の保持、コマンド（`[RelayCommand]`）によるユーザー操作のハンドリング、Service 層の呼び出しオーケストレーション、`DispatcherTimer` による定期更新（メーター 50ms／経過時間 1s）を担う。
-  **クラスもインスタンスも `MainViewModel` 1 つで、ファイルだけを機能単位に `partial` で割っている**（[ADR-0005](../adr/0005-mainviewmodel-split.md) 案 D）。
-  したがってファイル間で状態を同期する仕組みは存在しない — 同じオブジェクトだからである。
+  **ウィンドウ 1 枚に ViewModel 1 つ**で、`MainViewModel`（メインウィンドウ）が親として子を 1 度だけ生成し、アプリの終了まで保持する（[ADR-0008](../adr/0008-per-window-viewmodels.md)）。
 
-  | ファイル | 担当 |
-  |---|---|
-  | `MainViewModel.cs` | Service の保持、コンストラクター、`IsRecording` / `IsStopping` / `IsTranscribingFile` と `IsNotBusy`、`StatusMessage`、`LastResultPath`、保存先フォルダ、成果物フォルダを開く、設定の保存、`Dispose` |
-  | `MainViewModel.Devices.cs` | デバイスの一覧・選択・モニタリング、ミュート、レベルメーター |
-  | `MainViewModel.Recording.cs` | 録音の開始／停止、録音状態の表示、終了時の確認と後始末 |
-  | `MainViewModel.Transcription.cs` | Whisper モデルの読み込み、GPU 切り替え、言語の選択、話者識別の状態表示 |
-  | `MainViewModel.FileTranscription.cs` | 音声ファイルからの文字起こし（オプション指定ダイアログ・モデル／話者識別／メタデータの選択を含む） |
-  | `MainViewModel.FileTranscription.StartTime.cs` | ファイル文字起こしの開始時刻の自動入力（REQ-TRX-FILE-15） |
-  | `MainViewModel.LiveTranscript.cs` | 文字起こし表示ウィンドウへ流す行の蓄積と反映 |
-  | `MainViewModel.WhisperModels.cs` | Whisper モデルの登録一覧（エイリアス）、ライブ用の選択、モデル管理ダイアログの編集状態 |
-  | `MainViewModel.AutoStart.cs` | 録音の自動開始（マイク音量の監視。レベルメーターのタイマーに相乗りする） |
-  | `MainViewModel.RecordingMetadata.cs` | 録音停止時のメタデータ入力（会議名・実施日時・参加者）、JSON の書き出しと改名の指示 |
+  | ViewModel（ファイル） | ウィンドウ | 担当 |
+  |---|---|---|
+  | `MainViewModel`（`MainViewModel.cs`） | `MainWindow` | Service・設定の実体と子 ViewModel の保持、コンストラクター、**共有状態**（`IsRecording` / `IsStopping` / `IsTranscribingFile` と `IsNotBusy`、`StatusMessage`、`LastResultPath`、`LastTranscriptionError`）、成果物フォルダを開く、設定の保存（子の担当する項目も集める）、`Dispose` |
+  | 〃（`MainViewModel.Devices.cs`） | 〃 | デバイスの一覧・選択・モニタリング、ミュート、レベルメーター |
+  | 〃（`MainViewModel.Recording.cs`） | 〃 | 録音の開始／停止、録音状態の表示、終了時の確認と後始末 |
+  | 〃（`MainViewModel.Transcription.cs`） | 〃 | 話者識別の状態表示、ライブ文字起こしの ON/OFF |
+  | 〃（`MainViewModel.AutoStart.cs`） | 〃 | 録音の自動開始（マイク音量の監視。レベルメーターのタイマーに相乗りする） |
+  | 〃（`MainViewModel.Windows.cs`） | 〃 | 補助ウィンドウを開く入口（子に対象を渡してから表示を要求する） |
+  | `SettingsViewModel` | `SettingsWindow` | 保存先フォルダ、録音の自動開始の ON/OFF、ライブ文字起こしの言語、GPU の使用、**Whisper モデルの登録一覧とライブ用の選択**、モデルの読み込み |
+  | `WhisperModelsViewModel` | `WhisperModelsWindow` | モデル管理ダイアログの編集状態（追加・名前変更・削除・並び替え）。一覧そのものは `SettingsViewModel` のもの |
+  | `FileTranscriptionViewModel`（`.cs` / `.Run.cs` / `.StartTime.cs`） | `FileTranscriptionOptionsWindow` | 音声ファイルからの文字起こしの入力（開始時刻・言語・モデル・話者識別・メタデータ）、処理の進行（進捗・中止）、開始時刻の自動入力（REQ-TRX-FILE-15） |
+  | `RecordingMetadataViewModel` | `RecordingMetadataWindow` | 録音停止時のメタデータ入力（会議名・実施日時・参加者）、JSON の書き出しと改名の指示 |
+  | `LiveTranscriptViewModel` | `LiveTranscriptWindow` | 文字起こし表示ウィンドウへ流す行の蓄積と反映 |
 
-  **`ViewModels/` に `MainViewModel` 以外のクラスは置かない**（ADR-0005 の規則 3）。
-  ウィンドウ単位の ViewModel へ分ける案は、①全ファイル合計が 2,500 行を超えたとき、
-  ②7 枚目のウィンドウを足すとき に再評価する（1,500 行・5 枚目の契機は
-  [ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) で処理済み。案 A の実施判断は T170）。
+  **共有する状態は 1 か所に置き、写しを持たない**（ADR-0008 規則 3）。子はコンストラクターで親を受け取り、親の値を読み書きする。
+  子が親の値を画面に出すときは読み取り専用の転送プロパティ（例: `SettingsViewModel.IsNotBusy`）で、**XAML のバインド名は子へ移しても変えていない**（規則 5）。
+  状態の変化の中継は次の 2 か所だけである（規則 4）。
+  - `FileTranscriptionViewModel.SetTranscribing` — `IsTranscribingFile` の唯一の書き手。親のフラグを書き、ダイアログ側の通知もまとめて出す。
+  - `SettingsViewModel.OnMainPropertyChanged` — 親の `IsNotBusy` の変化を、設定ウィンドウの表示と操作の可否へ中継する。
+
+  再評価の契機は、①1 つの ViewModel の全ファイル合計が 1,500 行を超えたとき、②中継が 3 か所目になったとき（ADR-0008 規則 8）。
 - **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`, `AutoStartTrigger`, `RecordingMetadataFile`（static））
   NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
 - **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `WhisperModelEntry`, `RecordingMetadata`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
@@ -127,8 +146,8 @@ Styles/Controls.xaml"]
 
 ## 3. コンポーネント間の主要な依存関係
 
-- `MainWindow` は `MainViewModel` を直接 `new` して `DataContext` に設定する（DI コンテナは使用しない、シンプル優先の方針）。補助ウィンドウにも同じインスタンスを渡す（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。補助ウィンドウは `Owner` に `MainWindow` を設定するため、メインウィンドウを閉じると WPF の既定動作で一緒に閉じる。
-- `MainViewModel` は `AudioCaptureService` / `TranscriptionService` / `SettingsService` をフィールドとして保持し、直接インスタンス化する。
+- `MainWindow` は `MainViewModel` を直接 `new` して `DataContext` に設定する（DI コンテナは使用しない、シンプル優先の方針）。補助ウィンドウには `MainViewModel` が保持する子 ViewModel（`Settings` / `FileTranscription` / `RecordingMetadata` / `LiveTranscript`）を渡す（[ADR-0008](../adr/0008-per-window-viewmodels.md)）。補助ウィンドウは `Owner` に `MainWindow` を設定するため、メインウィンドウを閉じると WPF の既定動作で一緒に閉じる。
+- `MainViewModel` は `AudioCaptureService` / `TranscriptionService` / `SettingsService` をフィールドとして保持し、直接インスタンス化する。子 ViewModel はこれらを親の `internal` プロパティ経由で使い、自分では生成しない。
 - `AudioCaptureService` はライブ文字起こしのために `TranscriptionService` への参照を `SetTranscriptionService` で受け取る（null 許容、疎結合）。録音中のみ音声サンプルを `AddSamples` で渡す。
 - `TranscriptionService` は `AudioCaptureService` を一切参照しない（一方向依存）。
 - `MainViewModel` は話者ダイアライゼーションが有効な設定のときだけ `SpeakerDiarizationService` を生成して保持し、`Dispose` で解放する。無効なら `null` のままにする。
@@ -147,7 +166,7 @@ Styles/Controls.xaml"]
 | `AudioMixerWriter` | `AudioCaptureService.WriterLoop`（録音中のみ起動する専用 `Thread`） | 20ms 周期でミキサーから読み出し、MP3 へストリーミング書き込み |
 | `WhisperTranscription` | `TranscriptionService.TranscriptionLoop`（ライブ文字起こしセッション中のみ起動する専用 `Thread`） | 1 秒周期で各音声ソースのバッファを確認し、閾値到達分を Whisper で処理 |
 | ハードウェアミュート通知 | `AudioEndpointVolume.OnVolumeNotification`（OS コールバック） | OS 側のミュート変更をアプリへ通知（非 UI スレッド） |
-| `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `TryLoadWhisperModel` / `RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
+| `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `SettingsViewModel.TryLoadWhisperModel` / `FileTranscriptionViewModel.RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
 | sherpa-onnx ネイティブ推論 | `SpeakerDiarizationService.Diarize`（上記 `Task.Run` ワーカーから同期的に呼ぶ） | 話者ダイアライゼーション。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`lock` で 1 度に 1 呼び出しへ直列化する（REQ-TRX-DIA-10） |
 
 UI スレッド以外からプロパティを更新する箇所（`MicMuteChangedExternally`、`TranscriptionService.Error`/`RuntimeInfo`、`AudioCaptureService.RecordingError`）はすべて `Application.Current.Dispatcher.BeginInvoke` を介して UI スレッドに戻す（[CLAUDE.md](../../CLAUDE.md) の開発ルールに準拠）。
