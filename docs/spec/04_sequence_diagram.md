@@ -103,7 +103,7 @@ sequenceDiagram
     end
 
     Note over TS: 別スレッド (WhisperTranscription) が1秒毎にポーリング
-    TS->>TS: 確定条件を満たしたソースを検出（20秒到達 / 末尾に2秒の無音 / 供給が5秒途絶）
+    TS->>TS: 確定条件を満たしたソースを検出（10秒到達（遅れているときは20秒） / 末尾に2秒の無音 / 供給が5秒途絶）
     TS->>TS: SplitVoicedRegions() で有声区間に分割
     loop 有声区間ごと
         TS->>TS: WhisperProcessor.ProcessAsync(region)

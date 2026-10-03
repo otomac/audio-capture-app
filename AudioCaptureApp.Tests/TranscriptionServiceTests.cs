@@ -102,10 +102,11 @@ public class TranscriptionServiceTests
 
     // --- チャンクの確定契機 (T117 / T120 / T129) ---
     //
-    // 契機は 3 つ。①20 秒分たまった ②末尾に発話終了とみなせる無音が積まれた
-    // ③供給が途絶えた。この優先順で判定する（REQ-TRX-LIVE-04）。
+    // 契機は 3 つ。①上限（遅れていなければ 10 秒、遅れていれば 20 秒）までたまった
+    // ②末尾に発話終了とみなせる無音が積まれた ③供給が途絶えた。この優先順で判定する（REQ-TRX-LIVE-04）。
 
-    private const int Threshold = 16000 * 20;   // BufferThresholdSamples
+    private const int Threshold = 16000 * 20;   // BufferThresholdSamples（遅れているときの上限）
+    private const int LiveChunk = 16000 * 10;   // LiveChunkSamples（遅れていないときの上限。T190）
     private const int Endpoint = 16000 * 2;     // 既定 MergeGapSeconds = 2.0 秒
 
     /// <summary>供給が続いている（最後のパケットを受け取った直後）状態。</summary>
@@ -114,31 +115,31 @@ public class TranscriptionServiceTests
     private static readonly double Rms = SilenceCutOptions.Default.RmsThreshold;
 
     [Fact]
-    public void ChunkTakeCount_ReachedThreshold_TakesExactlyThreshold()
+    public void ChunkTakeCount_ReachedLiveChunk_TakesExactlyLiveChunk()
     {
-        // 20 秒分に達していれば、それ以上溜まっていても 20 秒分だけ（T117）
+        // 遅れていなければ、話し続けていても 10 秒分で確定する（T190）
         Assert.Equal(
-            Threshold,
-            TranscriptionService.ChunkTakeCount(Threshold, Supplying, 0, Endpoint));
+            LiveChunk,
+            TranscriptionService.ChunkTakeCount(LiveChunk, Supplying, 0, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_FarOverThresholdAndIdle_StillTakesOnlyThreshold()
+    public void ChunkTakeCount_FarOverLiveChunkAndIdle_StillTakesOnlyLiveChunk()
     {
-        // バックログが積んでいても 1 回の Whisper 呼び出しは 20 秒分に制限する
+        // 溜まっていても 1 回の Whisper 呼び出しは上限の分に制限する（T117）
         Assert.Equal(
-            Threshold,
+            LiveChunk,
             TranscriptionService.ChunkTakeCount(
                 Threshold * 6, TimeSpan.FromSeconds(600), null, Endpoint));
     }
 
     [Fact]
-    public void ChunkTakeCount_OverThresholdWithSilentTail_StillTakesOnlyThreshold()
+    public void ChunkTakeCount_OverLiveChunkWithSilentTail_StillTakesOnlyLiveChunk()
     {
         // 末尾無音の契機が同時に成立していても、上限（①）を優先する
         Assert.Equal(
-            Threshold,
-            TranscriptionService.ChunkTakeCount(Threshold + 1, Supplying, Endpoint, Endpoint));
+            LiveChunk,
+            TranscriptionService.ChunkTakeCount(LiveChunk + 1, Supplying, Endpoint, Endpoint));
     }
 
     [Fact]
@@ -147,7 +148,7 @@ public class TranscriptionServiceTests
         // まだ溜め続けるべき状態（発話の途中）
         Assert.Equal(
             0,
-            TranscriptionService.ChunkTakeCount(16000 * 16, Supplying, 0, Endpoint));
+            TranscriptionService.ChunkTakeCount(LiveChunk - 1, Supplying, 0, Endpoint));
     }
 
     [Fact]
@@ -172,11 +173,11 @@ public class TranscriptionServiceTests
     [Fact]
     public void ChunkTakeCount_AllSilenceBelowThreshold_TakesNothing()
     {
-        // バッファ全体が無音（null）では末尾無音で確定しない。20 秒たまってから切り出され、
+        // バッファ全体が無音（null）では末尾無音で確定しない。上限までたまってから切り出され、
         // 有声区間 0 件として Whisper を呼ばずに捨てられる
         Assert.Equal(
             0,
-            TranscriptionService.ChunkTakeCount(16000 * 19, Supplying, null, Endpoint));
+            TranscriptionService.ChunkTakeCount(LiveChunk - 1, Supplying, null, Endpoint));
     }
 
     [Fact]
@@ -191,8 +192,8 @@ public class TranscriptionServiceTests
     [Fact]
     public void ChunkTakeCount_SupplyIdleAtThreshold_TakesWholeBuffer()
     {
-        // 報告事象の再現条件: 16 秒分たまった直後にミュートされ、次のパケットが来ない
-        const int buffered = 16000 * 16;
+        // 報告事象（T120）の再現条件: 上限に届く前にミュートされ、次のパケットが来ない
+        const int buffered = 16000 * 8;
 
         Assert.Equal(
             buffered,
@@ -231,7 +232,27 @@ public class TranscriptionServiceTests
         Assert.Equal(
             0,
             TranscriptionService.ChunkTakeCount(
-                16000 * 5, Supplying, Endpoint, Endpoint, suppressEndpointing: true));
+                16000 * 5, Supplying, Endpoint, Endpoint, behind: true));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BehindAndOverLiveChunk_WaitsFor20Seconds()
+    {
+        // 遅れているときは 10 秒で切らず、20 秒たまるまで待つ（T190。短い呼び出しは割高）
+        Assert.Equal(
+            0,
+            TranscriptionService.ChunkTakeCount(
+                Threshold - 1, Supplying, 0, Endpoint, behind: true));
+    }
+
+    [Fact]
+    public void ChunkTakeCount_BehindAndFarOverThreshold_TakesOnlyThreshold()
+    {
+        // 遅れていても 1 回の Whisper 呼び出しは 20 秒分が上限（REQ-TRX-LIVE-10）
+        Assert.Equal(
+            Threshold,
+            TranscriptionService.ChunkTakeCount(
+                Threshold * 6, Supplying, 0, Endpoint, behind: true));
     }
 
     [Fact]
@@ -240,7 +261,7 @@ public class TranscriptionServiceTests
         Assert.Equal(
             Threshold,
             TranscriptionService.ChunkTakeCount(
-                Threshold, Supplying, 0, Endpoint, suppressEndpointing: true));
+                Threshold, Supplying, 0, Endpoint, behind: true));
     }
 
     [Fact]
@@ -252,7 +273,7 @@ public class TranscriptionServiceTests
         Assert.Equal(
             buffered,
             TranscriptionService.ChunkTakeCount(
-                buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint, suppressEndpointing: true));
+                buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint, behind: true));
     }
 
     // --- 遅れの判定は全ソースの滞留で行う (T183 / REQ-TRX-LIVE-13) ---
@@ -296,6 +317,34 @@ public class TranscriptionServiceTests
 
         Assert.Null(chunk);
         Assert.Equal(16000 * 5 + Endpoint, state.Pcm16kBuffer.Count);
+    }
+
+    [Fact]
+    public void TakeNextChunk_NotBehindAndTalkingContinuously_TakesLiveChunk()
+    {
+        // 話し続けて 12 秒分たまった。遅れていなければ 10 秒分で確定し、残りは次へ回す（T190）
+        var state = StateWithSpeech(16000 * 12, 0);
+
+        var chunk = TranscriptionService.TakeNextChunk(
+            state, state.BufferEndElapsed, SilenceCutOptions.Default,
+            TranscriptionService.BufferedSamples(state));
+
+        Assert.NotNull(chunk);
+        Assert.Equal(LiveChunk, chunk.Samples.Length);
+        Assert.Equal(16000 * 2, state.Pcm16kBuffer.Count);
+    }
+
+    [Fact]
+    public void TakeNextChunk_BehindAndTalkingContinuously_WaitsFor20Seconds()
+    {
+        // 同じ 12 秒分でも、遅れているときは 20 秒たまるまで待つ（T190）
+        var state = StateWithSpeech(16000 * 12, 0);
+        long pending = TranscriptionService.BufferedSamples(state) + Backlog;
+
+        var chunk = TranscriptionService.TakeNextChunk(
+            state, state.BufferEndElapsed, SilenceCutOptions.Default, pending);
+
+        Assert.Null(chunk);
     }
 
     [Fact]

@@ -192,8 +192,8 @@ flowchart LR
 flowchart LR
     MicBuf2["マイクコールバック"] -->|"AddSamples(Mic)"| SrcMic["SourceState (Mic)\nダウンミックス+LPF+リサンプル"]
     LoopBuf2["スピーカーコールバック"] -->|"AddSamples(Speaker)"| SrcSpk["SourceState (Speaker)"]
-    SrcMic -->|20秒分たまったら| Whisper1["WhisperProcessor"]
-    SrcSpk -->|20秒分たまったら| Whisper2["WhisperProcessor"]
+    SrcMic -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper1["WhisperProcessor"]
+    SrcSpk -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper2["WhisperProcessor"]
     Whisper1 --> Txt["*.txt (同名, 追記)"]
     Whisper2 --> Txt
 ```
