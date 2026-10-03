@@ -7,9 +7,8 @@ namespace AudioCaptureApp;
 /// 設定ウィンドウ（REQ-SETWIN-01〜06）。
 /// </summary>
 /// <remarks>
-/// 自前の状態を持たず、<c>MainWindow</c> と同じ <see cref="MainViewModel"/> インスタンスを
-/// <c>DataContext</c> として共有する（<c>docs/adr/0002-secondary-windows-share-mainviewmodel.md</c>、
-/// および <c>docs/adr/0005-mainviewmodel-split.md</c>）。
+/// <c>DataContext</c> は <see cref="SettingsViewModel"/>（<see cref="MainViewModel.Settings"/>。
+/// <c>docs/adr/0008-per-window-viewmodels.md</c>）。
 /// コードビハインドに持ってよいのはウィンドウ自身の生存管理だけで、業務判断は置かない。
 /// 変更は変更した時点で保存済み（REQ-CFG-05）なので、取り消しの手段は設けない（REQ-SETWIN-06）。
 /// <para>
@@ -20,9 +19,9 @@ namespace AudioCaptureApp;
 /// </remarks>
 public partial class SettingsWindow : Window
 {
-    private readonly MainViewModel _viewModel;
+    private readonly SettingsViewModel _viewModel;
 
-    public SettingsWindow(MainViewModel viewModel)
+    public SettingsWindow(SettingsViewModel viewModel)
     {
         InitializeComponent();
         _viewModel = viewModel;
@@ -34,7 +33,7 @@ public partial class SettingsWindow : Window
     /// <summary>モデル管理ダイアログをモーダルで開く（REQ-MODELWIN-01）。</summary>
     private void ShowWhisperModels()
     {
-        var dialog = new WhisperModelsWindow(_viewModel) { Owner = this };
+        var dialog = new WhisperModelsWindow(_viewModel.WhisperModelsManager) { Owner = this };
         dialog.ShowDialog();
     }
 }

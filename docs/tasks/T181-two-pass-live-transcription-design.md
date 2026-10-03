@@ -175,7 +175,7 @@ Zoom の字幕のように、話している最中から粗い文字（速報）
 | `REQ-CFG-12`（新規） | 速報の設定: `LiveProvisionalEnabled`（既定 `false`。設定ウィンドウ）、`ProvisionalWhisperModelName`（設定ウィンドウ）、区切り・間隔・duty・スレッド数・対象音源（`settings.json` のみ）、計測ログの有効化（`settings.json` のみ。数値だけを書き、本文は書かない） | `AppSettings` |
 | `REQ-CFG-13`（新規） | 用語集 `TranscriptionGlossary`（複数行の文字列。既定は空。設定ウィンドウ）。上限を超えた分は使わない | `AppSettings`, `SettingsWindow.xaml` |
 | `REQ-GPU-06`（新規） | 速報パスの実行先（案 B なら常に CPU で、GPU 設定に関係しない。案 A なら確定と同じ GPU で直列）。T182 で確定 | `TranscriptionService` |
-| `NFR-11`（新規） | **Zoom 会議中の性能目標。** ADR-0007「決定」の合格線（速報の遅れ p95 ≤ 2.0 秒、確定の処理能力 90% 以上、`PendingSeconds` が増え続けない、クラッシュ 0、Zoom のフレーム落ち 10% 以下、CPU 25% 以下、MP3 の音飛び無し） | T182 の計測 |
+| `NFR-11`（新規） | **Zoom 会議中の性能目標。** ADR-0007「決定」の合格線（速報の遅れ p95 ≤ 2.0 秒、確定の処理能力 90% 以上、`PendingSeconds` が増え続けない、クラッシュ 0、GPU ドライバーのリセット 0（2026-09-29 追記）、Zoom のフレーム落ち 10% 以下、CPU 25% 以下、MP3 の音飛び無し） | T182 の計測 |
 
 ### 11-4. 更新する章
 

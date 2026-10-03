@@ -4,7 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace AudioCaptureApp.ViewModels;
 
 // MainViewModel のうち、録音の自動開始（マイク音量の監視）を担当する部分。
-// クラスは 1 つのままで、ファイルだけを機能単位に割っている（ADR-0005 案 D / ADR-0006）。
+// MainViewModel はファイルを機能単位で partial に割っている（ADR-0008 が引き継ぐ ADR-0005 規則 2）。
 public partial class MainViewModel
 {
     // --- 録音の自動開始 (T168 / REQ-REC-12 / REQ-CFG-10) ---
@@ -18,19 +18,12 @@ public partial class MainViewModel
     /// <summary>レベルメーターのタイマー間隔。判定器に渡す経過時間として使う。</summary>
     private static readonly TimeSpan MeterTick = TimeSpan.FromMilliseconds(50);
 
-    /// <summary>「マイクの音量で録音を自動で開始する」（REQ-SETWIN-03 ⑥）。変えた時点で保存する。</summary>
-    [ObservableProperty]
-    private bool _autoStartRecordingEnabled;
-
-    partial void OnAutoStartRecordingEnabledChanged(bool value)
-    {
-        // OFF → ON にした瞬間に、以前の積算で即発火しないよう 0 から数え直す
-        _autoStartTrigger.Reset();
-        if (!_initializing)
-        {
-            SaveSettings();
-        }
-    }
+    /// <summary>
+    /// 判定の積算を 0 に戻す。「マイクの音量で録音を自動で開始する」（REQ-SETWIN-03 ⑥）の ON/OFF は
+    /// 設定ウィンドウの ViewModel（<see cref="SettingsViewModel.AutoStartRecordingEnabled"/>）が持ち、
+    /// 変わるたびにここを呼ぶ — OFF → ON にした瞬間に、以前の積算で即発火しないよう 0 から数え直すため。
+    /// </summary>
+    internal void ResetAutoStart() => _autoStartTrigger.Reset();
 
     /// <summary>
     /// いまの録音が自動開始によるものか（REQ-REC-12）。録音状態の文言を「自動録音中」にする。
@@ -63,7 +56,7 @@ public partial class MainViewModel
     private void ObserveAutoStart(double micLevelDb)
     {
         var canStart = CanAutoStartFor(
-            AutoStartRecordingEnabled, IsNotBusy, SelectedCaptureDevice != null, IsModalDialogOpen);
+            Settings.AutoStartRecordingEnabled, IsNotBusy, SelectedCaptureDevice != null, IsModalDialogOpen);
         if (!_autoStartTrigger.Observe(micLevelDb, MeterTick, canStart))
         {
             return;

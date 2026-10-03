@@ -14,7 +14,7 @@
 
 - 層の追加・削除、依存方向の変更
 - DI コンテナの導入
-- `MainViewModel` の分割
+- ViewModel の構成の変更（現在はウィンドウ 1 枚に 1 クラス、`MainViewModel` が親。ADR-0008）
 - Service 層へのインターフェース抽象の導入
 - 新しい外部ライブラリの採用
 - スレッドモデルの変更
@@ -26,9 +26,10 @@
 | # | 決定 | 状態 | 日付 |
 |---|---|---|---|
 | [0001](./0001-baseline-architecture.md) | ベースラインアーキテクチャ（3 層 / DI なし / 抽象化なし） | 承認済み | 2026-08-14 |
-| [0002](./0002-secondary-windows-share-mainviewmodel.md) | 補助ウィンドウは `MainViewModel` を共有する View として追加する | 承認済み | 2026-08-20 |
+| [0002](./0002-secondary-windows-share-mainviewmodel.md) | 補助ウィンドウは `MainViewModel` を共有する View として追加する | 置換済み（→ 0008） | 2026-08-20 |
 | [0003](./0003-speaker-diarization-with-sherpa-onnx.md) | 話者ダイアライゼーションを sherpa-onnx で行い、ファイル文字起こし経路にだけ載せる | 承認済み | 2026-08-22 |
 | [0004](./0004-speaker-id-assignment-strategy.md) | 話者 ID の付け方を sherpa-onnx に任せ続ける（自前クラスタリングは今回採らない） | 承認済み | 2026-08-23 |
-| [0005](./0005-mainviewmodel-split.md) | `MainViewModel` を分割するか（ADR-0002 の再評価） | 承認済み | 2026-08-27 |
-| [0006](./0006-mainviewmodel-split-reevaluation.md) | `MainViewModel` 分割の再評価（契機①②到達。案 D を続け、案 A は T170 へ） | 暫定承認 | 2026-09-22 |
+| [0005](./0005-mainviewmodel-split.md) | `MainViewModel` を分割するか（ADR-0002 の再評価） | 置換済み（→ 0008） | 2026-08-27 |
+| [0006](./0006-mainviewmodel-split-reevaluation.md) | `MainViewModel` 分割の再評価（契機①②到達。案 D を続け、案 A は T170 へ） | 置換済み（→ 0008） | 2026-09-22 |
 | [0007](./0007-two-pass-live-transcription.md) | ライブ文字起こしを速報パスと確定パスの 2 段にする（速報の実行場所は実測で決める） | 提案中 | 2026-09-27 |
+| [0008](./0008-per-window-viewmodels.md) | ウィンドウごとに ViewModel を持たせ、`MainViewModel` を親にする | 承認済み | 2026-09-29 |

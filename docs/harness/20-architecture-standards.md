@@ -19,7 +19,7 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 | 層 | 場所 | 責務 | 禁止 |
 |---|---|---|---|
 | **View** | `MainWindow.xaml(.cs)` / 補助ウィンドウ（`*Window.xaml(.cs)`） / `Controls/` | 表示とユーザー操作の受付、バインディング | 業務ロジック、Service の直接呼び出し |
-| **ViewModel** | `ViewModels/MainViewModel*.cs`（`partial`） | UI 状態の保持、コマンド、Service のオーケストレーション | NAudio / Whisper.net / `System.IO` の直接使用 |
+| **ViewModel** | `ViewModels/*ViewModel*.cs`（ウィンドウ 1 枚に 1 クラス。`partial`） | UI 状態の保持、コマンド、Service のオーケストレーション | NAudio / Whisper.net / `System.IO` の直接使用 |
 | **Service** | `Services/` | 外部リソース（NAudio・Whisper.net・ファイル I/O）の操作 | View / ViewModel への参照、`MessageBox` 等の UI 呼び出し |
 | **Model** | `Models/` | データ保持のみの POCO | ロジック、外部依存 |
 
@@ -44,8 +44,8 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 | 項目 | 現状 | 理由 |
 |---|---|---|
-| **DI コンテナ** | 不使用。`MainWindow` が `MainViewModel` を直接 `new` し、ViewModel が Service を直接生成する | 単一ウィンドウ・単一 ViewModel の規模では、コンテナの間接性が理解のコストに見合わない |
-| **ViewModel のクラス分割** | `MainViewModel` **1 クラス**に集約（ファイルは `partial` で機能単位に割る） | シンプル優先（`CLAUDE.md` の方針）。クラスを増やすかの再評価の契機は §6 と [ADR-0005](../adr/0005-mainviewmodel-split.md) |
+| **DI コンテナ** | 不使用。`MainWindow` が `MainViewModel` を直接 `new` し、`MainViewModel` が Service と子 ViewModel を直接生成する | ViewModel は 6 つだが親子の 1 本の木で、生成の順序はコンストラクターを読めば分かる。コンテナの間接性が理解のコストに見合わない |
+| **ViewModel 間のメッセンジャー** | 不使用。子はコンストラクターで親を受け取り、親の値を直接読み書きする（[ADR-0008](../adr/0008-per-window-viewmodels.md) 規則 2〜4） | 通知の経路を追えなくなるため。中継は書き手の側で 1 か所に集める |
 | **Service のインターフェース抽象** | 具象クラスを直接使用。NAudio・Whisper.net・sherpa-onnx も独自ラップせず直接使う | 実装が 1 つしかない抽象は害。テスト容易性は `InternalsVisibleTo` ＋ 純粋関数の切り出しで確保する。差し替え可能性が要求された場合も、抽象ではなく**依存を 1 クラスに閉じ込める**ことで満たす（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md) 争点 3） |
 | **リポジトリ／永続化層** | `SettingsService` が直接 JSON を読み書き | 永続化対象が設定ファイル 1 つのみ |
 
@@ -83,23 +83,22 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 
 | 追加したいもの | 置き場所 | 補足 |
 |---|---|---|
-| 画面に出す値・状態 | `MainViewModel` のプロパティ | `[ObservableProperty]` を使う |
-| ボタン等の操作 | `MainViewModel` のコマンド | `[RelayCommand]` を使う |
+| 画面に出す値・状態 | その画面の ViewModel のプロパティ | `[ObservableProperty]` を使う。複数の画面が見る状態は 1 か所に置き、他の画面は転送プロパティで出す（[ADR-0008](../adr/0008-per-window-viewmodels.md) 規則 3） |
+| ボタン等の操作 | そのボタンがある画面の ViewModel のコマンド | `[RelayCommand]` を使う |
 | 外部リソースを触る処理 | 既存 Service のメソッド | 3 つのどれにも属さないなら新規 Service を検討（ADR 対象） |
 | 副作用のない計算 | Service の `internal static` メソッド | テスト対象にする（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` が既存の例） |
 | データの入れ物 | `Models/` の POCO | ロジックを入れない |
 | 再利用する UI 部品 | `Controls/` のユーザーコントロール | 依存プロパティで ViewModel とバインドする |
-| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` | `MainViewModel` を `DataContext` に共有し、自前の状態を持たない。生成は `MainWindow` が行い、`Owner` を設定する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)）。**7 枚目を足すときは先に [ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価を行う**（5 枚目・6 枚目は ADR-0006 で処理済み） |
+| 新しいウィンドウ | プロジェクト直下の `<名前>Window.xaml(.cs)` と `ViewModels/<名前>ViewModel.cs` | ViewModel は `MainViewModel`（または開く元の補助ウィンドウの ViewModel）が 1 度だけ生成して保持する。開く要求は ViewModel がイベントで上げ、生成はコードビハインドが行い `Owner` を設定する（[ADR-0008](../adr/0008-per-window-viewmodels.md) 規則 1・2・6） |
 
 ## 6. 構造が壊れかけているサイン
 
 以下に該当したら、その場で直さず **ADR を起票して構造変更を提案** する。
 
-- `MainViewModel` の **全ファイル合計**（`MainViewModel*.cs`）が **2,500 行** を超えた
-  → ウィンドウ単位の ViewModel 分割を検討（[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価契機①。
-  1,500 行の契機は ADR-0006 で処理済み）
-- **7 枚目のウィンドウ**を足すことになった → 同上（[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md) の再評価契機②）
-- ただし **T170**（案 A の実施判断）は契機を待たずに 2026-09 のバッチ統合後に検討する（ADR-0006 規則 2）
+- 1 つの ViewModel の **全ファイル合計**（`<名前>ViewModel*.cs`）が **1,500 行** を超えた
+  → その ViewModel の分け方を見直す（[ADR-0008](../adr/0008-per-window-viewmodels.md) の再評価契機①）
+- ViewModel 間の状態の中継（子 → 親、親 → 子）が **3 か所目** になった
+  → 共有状態の置き場所を見直す（[ADR-0008](../adr/0008-per-window-viewmodels.md) の再評価契機②。現在は 2 か所）
 - 1 つの Service が **3 つ以上の無関係な外部リソース** を触っている → Service 分割を検討
 - View のコードビハインドに `if` による業務判断が現れた → ViewModel へ移す
 - テストを書くために `public` にした（本来 `private` でよい）メンバーが増えた

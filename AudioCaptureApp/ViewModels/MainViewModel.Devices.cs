@@ -7,7 +7,7 @@ using CommunityToolkit.Mvvm.Input;
 namespace AudioCaptureApp.ViewModels;
 
 // MainViewModel のうち、デバイスの選択・モニタリング・ミュート・レベルメーターを担当する部分。
-// クラスは 1 つのままで、ファイルだけを機能単位に割っている（ADR-0005 案 D）。
+// MainViewModel はファイルを機能単位で partial に割っている（ADR-0008 が引き継ぐ ADR-0005 規則 2）。
 public partial class MainViewModel
 {
     // --- マイク入力デバイス ---
