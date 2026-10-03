@@ -12,7 +12,7 @@
 
 ## 進行中
 
-- [~] **T184** **（不具合・未検証）通常の停止で、処理中チャンクの残りの区間が捨てられる。** `TranscriptionLoop` は通常運転中のチャンクを `interruptible: true` で処理し、`ProcessChunk` の区間ループは `_isRunning == false`（停止要求）で抜ける。チャンクは `TakeNextChunk` でバッファから取り除き済みなので、残りの区間は `.txt` に届かない。`interruptible` は停止に 30 秒の上限があった頃の T127 の対策で、T165 で上限を外して「捨てない」（REQ-TRX-LIVE-11）にした後も残っている。打ち切り（`RequestAbort`）以外では捨てないように直す。T117 の「ワーカーが生きている間は processor を破棄しない」は維持する。コードを読んで見つけたもので、実機では未確認 (2026-09-27) → [詳細](./T184-stop-drains-in-flight-chunk.md)
+（なし）
 
 ## 未着手
 
@@ -30,6 +30,7 @@
 
 ## 完了
 
+- [x] **T184** **（不具合・未検証）通常の停止で、処理中チャンクの残りの区間が捨てられる。** `TranscriptionLoop` は通常運転中のチャンクを `interruptible: true` で処理し、`ProcessChunk` の区間ループは `_isRunning == false`（停止要求）で抜ける。チャンクは `TakeNextChunk` でバッファから取り除き済みなので、残りの区間は `.txt` に届かない。`interruptible` は停止に 30 秒の上限があった頃の T127 の対策で、T165 で上限を外して「捨てない」（REQ-TRX-LIVE-11）にした後も残っている。打ち切り（`RequestAbort`）以外では捨てないように直す。T117 の「ワーカーが生きている間は processor を破棄しない」は維持する。コードを読んで見つけたもので、実機では未確認 (2026-09-27) → [詳細](./T184-stop-drains-in-flight-chunk.md) **完了 (2026-10-03):** 区間ループは停止要求では抜けず、キャンセル（打ち切り・`Dispose`）でだけ抜ける。`interruptible` と `ShouldStopRegionLoop` を削除
 - [x] **T189** **リリース zip に `VERSION` と `README.md` を同梱する。** リポジトリ直下に `VERSION`（リリースバージョンを 1 行で書く。`release_*` タグから `release_` を除いた `YYYY.MM.DD[.N]`）を置き、`build-desktop` の zip 作成で `README.md` と一緒に zip の直下（`AudioCaptureApp.exe` と同じ階層）へ入れる。更新忘れで zip の `VERSION` が実際のリリースと食い違わないよう、`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI を失敗させる。`VERSION` の初期値は `2026.09.28`（利用者の選択）。利用者の依頼 (2026-09-28)。品質ゲートは PR #55 の CI（windows-latest）で確認: build 警告 0 / format 差分なし / test 389 件成功。zip 作成も成功。実際の `release_*` タグでの動きは未確認 (2026-09-28) → [詳細](./T189-version-file-in-release-zip.md)
 - [x] **T181** **ライブ文字起こしを「速報 → 確定で置き換え」の 2 段にする設計。** 利用者の依頼 (2026-09-27): Zoom の文字起こしのように、ほぼリアルタイム・精度無視で速報を流し、後から文脈に従って補正したい。GPU（Vulkan / CUDA）で Zoom 会議中も実用的な性能を保つことが必須条件。**速報は Whisper の軽量モデル（tiny / base）、実行場所（GPU で直列／CPU で並列）は実測で決める。確定パスの区切り方と `.txt` の書式は変えず、速報はファイルに書かない。** [ADR-0007](../adr/0007-two-pass-live-transcription.md)（提案中）・仕様変更の提案・実測の手順（T182）を書き、実装を T182〜T188 に分けた。ViewModel に手を入れる T187 / T188 は T170 の後（利用者の判断）。ソース無変更 → [詳細](./T181-two-pass-live-transcription-design.md) (2026-09-27)
 - [x] **T180** **リリース版の配布物から未使用の `System.Net.Mail.dll` を外す。** リリース版を起動するとウイルスバスターがメールクライアント機能を理由に起動確認を出す。アプリはメールを使っておらず、self-contained 発行で .NET ランタイムと一緒に同梱されているだけなので、発行物と `deps.json` の両方から除く。利用者の依頼 (2026-09-27)。品質ゲートは PR #52 の CI で確認（389 件成功）。実機での起動とウイルスバスターの反応は未確認 (2026-09-27) → [詳細](./T180-exclude-system-net-mail.md)

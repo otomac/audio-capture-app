@@ -1,6 +1,6 @@
 # T184 — 通常の停止で、処理中チャンクの残りの区間が捨てられる
 
-> **状態:** 進行中 — 2026-10-03
+> **状態:** 完了 — 2026-10-03
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 
 ## 1. 目的
@@ -65,9 +65,9 @@ T117 の「破棄見送り」経路に入るのを避けるためだった。T16
 - [x] **A3** `ShouldStopRegionLoop` のテストを削除する (`TranscriptionServiceTests.cs`)
 
 ### グループ Z — 検証（必須・最後に置く）
-- [ ] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件
-- [ ] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功
+- [x] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件（CI・Release 構成。「実行結果」を参照）
+- [x] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし（同上）
+- [x] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 385 件成功 / 0 件失敗（同上）
 - [x] **Z4** 仕様書（§5）の更新反映を読み直す
 
 ## 9. テスト一覧
@@ -91,3 +91,12 @@ T117 の「破棄見送り」経路に入るのを避けるためだった。T16
 - `StopSession` は打ち切り要求が来るまで上限なしで待つ（T165）。処理中のチャンクを回し切っても停止がタイムアウトしない
 - 1 チャンクは最大 20 秒（REQ-TRX-LIVE-10）なので、停止時に増える待ち時間は最大でチャンク 1 つ分。ただし T183 ②のとおり、
   遅れているときはギャップ分割で 20 秒を超えるチャンクができうる。その場合も「捨てない」が仕様であり、待てなければ打ち切りを使う
+
+## 実行結果 (2026-10-03)
+
+- `dotnet build` : 警告 0 件 / エラー 0 件
+- `dotnet format`: 差分なし
+- `dotnet test`  : 385 件成功 / 0 件失敗 / 0 件スキップ（変更前 389 件から、削除した `ShouldStopRegionLoop` のテスト 4 件が減った）
+- 実行場所: このクラウド環境には dotnet が無いため、ブランチ上で CI（`build-desktop`、windows-latest、workflow_dispatch）を動かして測った
+  （run 37096295810、commit `ca42873`）。**CI は Release 構成**で、ゲートの規定（Debug）とは構成が違う。
+- 実機での確認（停止直前まで話し続けた録音で、最後の発話が `.txt` に残るか）は未実施。利用者の手元で行う
