@@ -1,23 +1,21 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
-using System.Windows.Threading;
 using AudioCaptureApp.Services;
-using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace AudioCaptureApp.ViewModels;
 
-// MainViewModel のうち、文字起こし表示ウィンドウへ流す行の蓄積と反映を担当する部分。
-// クラスは 1 つのままで、ファイルだけを機能単位に割っている（ADR-0005 案 D）。
-public partial class MainViewModel
+/// <summary>
+/// 文字起こし表示ウィンドウ（<c>LiveTranscriptWindow</c>）の ViewModel。表示する行の蓄積と反映を担当する
+/// （ADR-0008）。生成と保持は <see cref="MainViewModel"/> が行い、<see cref="MainViewModel.LiveTranscript"/> で公開する。
+/// </summary>
+/// <remarks>
+/// 親の状態（処理中フラグ・ステータス表示）には一切触れない。行は <see cref="TranscriptionService.SegmentTranscribed"/>
+/// から <see cref="QueueLine"/> へ届き、録音の開始時に親が <see cref="Clear"/> を呼ぶ（REQ-LIVEVIEW-08）。
+/// ウィンドウを開く要求（REQ-LIVEVIEW-01）はメインウィンドウのボタンから来るため、親の <c>ShowLiveTranscriptCommand</c> に残してある。
+/// </remarks>
+public sealed class LiveTranscriptViewModel : ObservableObject
 {
-    // --- 文字起こし表示ウィンドウ (T114) ---
-
-    /// <summary>
-    /// 文字起こし表示ウィンドウを開いてほしい、という要求（REQ-LIVEVIEW-01）。
-    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
-    /// </summary>
-    public event Action? LiveTranscriptRequested;
-
     /// <summary>
     /// 表示する文字起こし行。ライブ・ファイルの両方を含む（REQ-LIVEVIEW-03）。
     /// </summary>
@@ -79,7 +77,7 @@ public partial class MainViewModel
     /// <see cref="TranscriptionService.SegmentTranscribed"/> の受け口（REQ-LIVEVIEW-09）。
     /// **ワーカースレッドから呼ばれる。** ここで UI に触れてはならない（NFR-01）。
     /// </summary>
-    private void QueueLiveTranscriptLine(string line)
+    internal void QueueLine(string line)
     {
         _pendingTranscriptLines.Enqueue(line);
 
@@ -87,7 +85,7 @@ public partial class MainViewModel
         // これが無いと 1 行ごとに BeginInvoke が積まれ、間引きの意味が無くなる。
         if (Interlocked.Exchange(ref _transcriptFlushScheduled, 1) == 0)
         {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(FlushLiveTranscriptLines);
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(FlushLines);
         }
     }
 
@@ -99,7 +97,7 @@ public partial class MainViewModel
     /// 次の引き取りを予約できるようにするため。逆にすると、その行は次の 1 行が
     /// 届くまで画面に出ない。空振りの引き取りが 1 回増えることがあるが無害である。
     /// </remarks>
-    private void FlushLiveTranscriptLines()
+    private void FlushLines()
     {
         Interlocked.Exchange(ref _transcriptFlushScheduled, 0);
 
@@ -112,6 +110,16 @@ public partial class MainViewModel
         AppendLiveTranscriptLines(LiveTranscriptLines, batch, MaxLiveTranscriptLines);
     }
 
-    [RelayCommand]
-    private void ShowLiveTranscript() => LiveTranscriptRequested?.Invoke();
+    /// <summary>
+    /// 表示を空にする（REQ-LIVEVIEW-08）。録音の開始に**成功した後**に親が呼ぶ（UI スレッド）。
+    /// </summary>
+    /// <remarks>
+    /// 引き取り待ちのキュー（REQ-LIVEVIEW-09）も一緒に空にする。消し忘れると
+    /// 前のセッションの行がクリアの直後に画面へ現れる。
+    /// </remarks>
+    internal void Clear()
+    {
+        _pendingTranscriptLines.Clear();
+        LiveTranscriptLines.Clear();
+    }
 }

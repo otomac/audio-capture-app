@@ -7,6 +7,16 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace AudioCaptureApp.ViewModels;
 
+/// <summary>
+/// メインウィンドウの ViewModel であり、補助ウィンドウの ViewModel の親（ADR-0008）。
+/// </summary>
+/// <remarks>
+/// 持つのは画面をまたいで共有する状態（処理中フラグ・ステータス表示・直近の成果物）と、
+/// サービス・設定の実体、そしてメインウィンドウの操作（デバイス・録音・自動開始・ライブ文字起こしの ON/OFF）である。
+/// 補助ウィンドウの ViewModel はここで 1 度だけ生成して保持し、プロパティで公開する
+/// （<see cref="Settings"/> / <see cref="FileTranscription"/> / <see cref="RecordingMetadata"/> / <see cref="LiveTranscript"/>）。
+/// 子は親への参照を持ち、共有する状態は親の値を読み書きする（同じ値を 2 か所に持たない）。
+/// </remarks>
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AudioCaptureService _audioCaptureService = new();
@@ -32,10 +42,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private DateTime _recordingStartTime;
     private bool _initializing;
 
-    /// <summary>直近の <c>Error</c> イベントの内容（T134）。ファイル文字起こしの失敗表示に併記する。</summary>
-    private string? _lastTranscriptionError;
+    /// <summary>
+    /// 直近の <c>Error</c> イベントの内容（T134）。ファイル文字起こしの失敗表示と、録音停止の完了表示に併記する。
+    /// </summary>
+    /// <remarks>
+    /// ワーカースレッドで代入するが、string の代入は原子的で、読むのは継続（UI スレッド）だけ。
+    /// </remarks>
+    internal string? LastTranscriptionError { get; set; }
+
     private bool _suppressMicMuteWriteBack;
-    private bool _suppressUseGpuWriteBack;
+
+    // --- 補助ウィンドウの ViewModel（ADR-0008）。生成はコンストラクターで 1 度だけ行う ---
+
+    /// <summary>設定ウィンドウの ViewModel（REQ-SETWIN-01）。モデル管理ダイアログの ViewModel もここが持つ。</summary>
+    public SettingsViewModel Settings { get; }
+
+    /// <summary>ファイル文字起こしのオプション指定ダイアログの ViewModel（REQ-TRX-FILE-09）。</summary>
+    public FileTranscriptionViewModel FileTranscription { get; }
+
+    /// <summary>録音停止後のメタデータ入力ダイアログの ViewModel（REQ-REC-13）。</summary>
+    public RecordingMetadataViewModel RecordingMetadata { get; }
+
+    /// <summary>文字起こし表示ウィンドウの ViewModel（REQ-LIVEVIEW-01）。</summary>
+    public LiveTranscriptViewModel LiveTranscript { get; }
+
+    // --- 子 ViewModel が使うサービスと設定の実体。生成と破棄はここが持つ ---
+
+    internal AudioCaptureService AudioCaptureService => _audioCaptureService;
+
+    internal TranscriptionService TranscriptionService => _transcriptionService;
+
+    internal SpeakerDiarizationService? SpeakerDiarizationService => _speakerDiarizationService;
+
+    /// <summary>読み込んだ設定の実体。子は自分の担当する項目だけを読み書きし、保存は <see cref="SaveSettings"/> で行う。</summary>
+    internal AppSettings AppSettings => _settings;
 
     public MainViewModel()
     {
@@ -58,45 +98,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transcriptionService.Error += msg =>
         {
             // T134: 続く「失敗しました」の 1 行に理由を併記するため控えておく（REQ-TRX-FILE-12）。
-            // ワーカースレッドで代入するが、string の代入は原子的で、読むのは継続（UI スレッド）だけ。
-            _lastTranscriptionError = msg;
+            LastTranscriptionError = msg;
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"文字起こしエラー: {msg}");
         };
         _transcriptionService.RuntimeInfo += runtime =>
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
                 StatusMessage = $"Whisperランタイム: {runtime}");
-        // 文字起こしワーカースレッドから発火するため、必ず Dispatcher を経由する（NFR-01）
-        _transcriptionService.SegmentTranscribed += QueueLiveTranscriptLine;
 
         _settings = _settingsService.Load();
-        OutputFolder = _settings.OutputFolder;
-        TranscriptionEnabled = _settings.TranscriptionEnabled;
-        // REQ-CFG-08: 旧バージョンの設定（一覧なし・パスだけ）を一覧へ移行し、選択を実パスから引く。
-        foreach (var entry in MigrateWhisperModelList(_settings.WhisperModelList, _settings.WhisperModelPath))
-        {
-            WhisperModels.Add(entry);
-        }
-        SelectedWhisperModel = FindWhisperModel(WhisperModels, _settings.WhisperModelPath);
-        WhisperModelPath = SelectedWhisperModel?.ModelPath ?? string.Empty;
-        UseGpuForTranscription = _settings.UseGpuForTranscription;
 
         // REQ-REC-12 / REQ-CFG-10: 閾値・継続・クールダウンは起動時に固定（UI 無し）。ON/OFF だけが UI にある。
+        // 設定ウィンドウの ViewModel が ON/OFF を写すときに判定器を触るので、子より先に作る。
         _autoStartTrigger = new AutoStartTrigger(new AutoStartOptions(
             _settings.AutoStartThresholdDb,
             _settings.AutoStartSustainSeconds,
             _settings.AutoStartCooldownSeconds,
             _settings.AutoStartDipGraceSeconds));
-        AutoStartRecordingEnabled = _settings.AutoStartRecordingEnabled;
 
-        // REQ-TRX-10: settings.json は手編集され得るので、必ず正規化してから使う。
-        // 一覧に無いコードや、ライブ側の "auto" は日本語へ倒れる。
-        SelectedLiveLanguage = FindLanguage(
-            TranscriptionLanguages.ForLive,
-            TranscriptionLanguages.NormalizeForLive(_settings.LiveTranscriptionLanguage));
-        SelectedFileLanguage = FindLanguage(
-            TranscriptionLanguages.ForFile,
-            TranscriptionLanguages.NormalizeForFile(_settings.FileTranscriptionLanguage));
+        // 子 ViewModel は設定を読んだ直後に作る。以降の初期化（ライブ文字起こしの ON/OFF など）が子を使うため。
+        Settings = new SettingsViewModel(this);
+        FileTranscription = new FileTranscriptionViewModel(this);
+        RecordingMetadata = new RecordingMetadataViewModel(this);
+        LiveTranscript = new LiveTranscriptViewModel();
+        // 文字起こしワーカースレッドから発火するため、必ず Dispatcher を経由する（NFR-01）
+        _transcriptionService.SegmentTranscribed += LiveTranscript.QueueLine;
 
         _transcriptionService.SilenceCut = new SilenceCutOptions(
             _settings.SilenceRmsThreshold,
@@ -126,11 +152,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _speakerDiarizationService = new SpeakerDiarizationService(diarizationOptions);
         }
 
+        // ライブ文字起こしが ON なら、変更ハンドラーがここでモデルの読み込みを始める（読み込み中の二重起動は
+        // SettingsViewModel.TryLoadWhisperModel が弾く）。サービスと話者識別の準備を済ませた後に置くこと。
+        TranscriptionEnabled = _settings.TranscriptionEnabled;
+
         // モデルパスが設定されていれば常にロードする（ファイル文字起こしは
         // ライブ用チェックボックスと独立して動作する）
-        if (!string.IsNullOrEmpty(WhisperModelPath))
+        if (!string.IsNullOrEmpty(Settings.WhisperModelPath))
         {
-            TryLoadWhisperModel();
+            Settings.TryLoadWhisperModel();
         }
 
         RefreshDevicesInternal();
@@ -156,7 +186,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
@@ -166,7 +195,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
@@ -176,39 +204,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyCanExecuteChangedFor(nameof(StartRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopRecordingCommand))]
     [NotifyCanExecuteChangedFor(nameof(RefreshDevicesCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SelectOutputFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(TranscribeFromFileCommand))]
-    [NotifyCanExecuteChangedFor(nameof(CancelFileTranscriptionCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowSettingsCommand))]
     private bool _isTranscribingFile;
 
     public bool IsNotBusy => !IsRecording && !IsStopping && !IsTranscribingFile;
 
+    // IsNotBusy の変化は子 ViewModel も見ている（設定ウィンドウの操作可否。SettingsViewModel が中継する）。
+    // フラグを足したら、ここで IsNotBusy の通知を出すこと。
     partial void OnIsRecordingChanged(bool value)
     {
         OnPropertyChanged(nameof(RecordingStatusText));
         OnPropertyChanged(nameof(RecordingStatusColor));
         OnPropertyChanged(nameof(IsNotBusy));
-        OnPropertyChanged(nameof(CanToggleGpu));
     }
 
     partial void OnIsStoppingChanged(bool value)
     {
         OnPropertyChanged(nameof(RecordingStatusText));
         OnPropertyChanged(nameof(IsNotBusy));
-        OnPropertyChanged(nameof(CanToggleGpu));
     }
 
+    /// <remarks>
+    /// 書き手は <see cref="FileTranscriptionViewModel"/> だけである。ダイアログ側の表示の更新はそちらが行う。
+    /// </remarks>
     partial void OnIsTranscribingFileChanged(bool value)
     {
         OnPropertyChanged(nameof(IsNotBusy));
-        OnPropertyChanged(nameof(CanToggleGpu));
-        OnPropertyChanged(nameof(CanStartFileTranscription));
     }
-
-    [ObservableProperty]
-    private string _outputFolder = string.Empty;
 
     [ObservableProperty]
     private string _elapsedTime = "00:00:00";
@@ -223,23 +247,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenResultFolderCommand))]
     private string _lastResultPath = string.Empty;
-
-    /// <summary>
-    /// 設定ウィンドウを開いてほしい、という要求（REQ-SETWIN-02）。
-    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
-    /// </summary>
-    public event Action? SettingsRequested;
-
-    /// <summary>
-    /// 「設定…」の可否（REQ-SETWIN-05）。録音中・停止処理中・ファイル文字起こし中は無効にする。
-    /// 設定ウィンドウの項目はいずれも REQ-REC-09 でその間は操作できず、開いても何もできない。
-    /// 一方でモーダル（REQ-SETWIN-02）なので、開いている間は**録音の停止操作が塞がれる**。
-    /// 得るものが無く塞ぐものがある以上、開かせない。
-    /// </summary>
-    private bool CanShowSettings => IsNotBusy;
-
-    [RelayCommand(CanExecute = nameof(CanShowSettings))]
-    private void ShowSettings() => SettingsRequested?.Invoke();
 
     /// <summary>
     /// 「保存先を開く」の可否。成果物が未設定なら無効（REQ-OPEN-04）。加えて録音中・停止処理中・
@@ -303,37 +310,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             : null;
     }
 
-    private bool CanSelectOutputFolder => !IsRecording && !IsStopping && !IsTranscribingFile;
-
-    [RelayCommand(CanExecute = nameof(CanSelectOutputFolder))]
-    private void SelectOutputFolder()
+    /// <summary>
+    /// 画面の値を設定へ写して保存する（REQ-CFG-05）。子 ViewModel の担当する項目もここで集める。
+    /// </summary>
+    /// <remarks>
+    /// UI を持たない設定項目（無音カットの調整値など）を消さないため、
+    /// 読み込んだインスタンスの UI 対応プロパティだけを更新して保存する。
+    /// ファイル用のモデル名（REQ-CFG-09）だけは子が <see cref="AppSettings"/> へ直接書く（画面の値と 1 対 1 でないため）。
+    /// </remarks>
+    internal void SaveSettings()
     {
-        var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "保存先フォルダを選択" };
-        if (dialog.ShowDialog() == true)
-        {
-            OutputFolder = dialog.FolderName;
-            SaveSettings();
-        }
-    }
-
-    private void SaveSettings()
-    {
-        // UI を持たない設定項目（無音カットの調整値など）を消さないため、
-        // 読み込んだインスタンスの UI 対応プロパティだけを更新して保存する。
-        _settings.OutputFolder = OutputFolder;
+        _settings.OutputFolder = Settings.OutputFolder;
         _settings.LastSelectedDeviceId = SelectedCaptureDevice?.DeviceId;
         _settings.LastSelectedLoopbackDeviceId = SelectedRenderDevice?.DeviceId;
         _settings.TranscriptionEnabled = TranscriptionEnabled;
-        _settings.WhisperModelPath = WhisperModelPath;
+        _settings.WhisperModelPath = Settings.WhisperModelPath;
         _settings.WhisperModelList.Clear();
-        foreach (var entry in WhisperModels)
+        foreach (var entry in Settings.WhisperModels)
         {
             _settings.WhisperModelList.Add(entry);
         }
-        _settings.UseGpuForTranscription = UseGpuForTranscription;
-        _settings.AutoStartRecordingEnabled = AutoStartRecordingEnabled;
-        _settings.LiveTranscriptionLanguage = SelectedLiveLanguage.Code;
-        _settings.FileTranscriptionLanguage = SelectedFileLanguage.Code;
+        _settings.UseGpuForTranscription = Settings.UseGpuForTranscription;
+        _settings.AutoStartRecordingEnabled = Settings.AutoStartRecordingEnabled;
+        _settings.LiveTranscriptionLanguage = Settings.SelectedLiveLanguage.Code;
+        _settings.FileTranscriptionLanguage = FileTranscription.SelectedFileLanguage.Code;
         _settingsService.Save(_settings);
     }
 
@@ -353,8 +353,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         _meterTimer.Stop();
         _clockTimer.Stop();
-        _fileTranscriptionCts?.Dispose();
-        _fileTranscriptionCts = null;
+        FileTranscription.Dispose();
         _audioCaptureService.Dispose();
         _transcriptionService.Dispose();
         _speakerDiarizationService?.Dispose();

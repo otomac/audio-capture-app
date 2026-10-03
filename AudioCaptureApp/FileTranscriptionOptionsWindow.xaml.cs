@@ -8,8 +8,8 @@ namespace AudioCaptureApp;
 /// ファイル文字起こしのオプション指定ダイアログ（REQ-TRX-FILE-09）。
 /// </summary>
 /// <remarks>
-/// 自前の状態を持たず、<c>MainWindow</c> と同じ <see cref="MainViewModel"/> インスタンスを
-/// <c>DataContext</c> として共有する（<c>docs/adr/0002-secondary-windows-share-mainviewmodel.md</c>）。
+/// <c>DataContext</c> は <see cref="FileTranscriptionViewModel"/>（<see cref="MainViewModel.FileTranscription"/>。
+/// <c>docs/adr/0008-per-window-viewmodels.md</c>）。
 /// 「開始」を押すと同じウィンドウが進捗表示へ切り替わり（REQ-TRX-FILE-11）、
 /// 処理が終わったら完了・失敗・中止のいずれでも自動的に閉じる（REQ-TRX-FILE-12）。
 /// 進捗を出すのはこのダイアログだけであり（REQ-TRX-FILE-06）、
@@ -17,12 +17,12 @@ namespace AudioCaptureApp;
 /// </remarks>
 public partial class FileTranscriptionOptionsWindow : Window
 {
-    private readonly MainViewModel _viewModel;
+    private readonly FileTranscriptionViewModel _viewModel;
 
     /// <summary>「はい」で中止を要求済み。もう確認しない。</summary>
     private bool _cancelRequested;
 
-    public FileTranscriptionOptionsWindow(MainViewModel viewModel)
+    public FileTranscriptionOptionsWindow(FileTranscriptionViewModel viewModel)
     {
         InitializeComponent();
         _viewModel = viewModel;
@@ -45,7 +45,7 @@ public partial class FileTranscriptionOptionsWindow : Window
             return;
         }
 
-        var message = MainViewModel.FileTranscriptionCloseConfirmation(_viewModel.IsTranscribingFile);
+        var message = FileTranscriptionViewModel.FileTranscriptionCloseConfirmation(_viewModel.IsTranscribingFile);
         if (message == null)
         {
             return;
@@ -64,7 +64,7 @@ public partial class FileTranscriptionOptionsWindow : Window
     }
 
     // async void はイベントハンドラーのみ許可（20-architecture-standards.md §3-4）。
-    // StartFileTranscriptionAsync は内部で全例外を StatusMessage へ変換するため、
+    // StartFileTranscriptionAsync は内部で全例外をステータス表示へ変換するため、
     // ここまで例外は伝播しない。
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {

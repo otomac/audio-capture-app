@@ -163,7 +163,7 @@ public class RecordingMetadataFileTests
         var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
         try
         {
-            var metadata = MainViewModel.BuildMetadata("定例", "2026-09-22 10:00〜11:00", "a@x.example\n山田", null);
+            var metadata = RecordingMetadataViewModel.BuildMetadata("定例", "2026-09-22 10:00〜11:00", "a@x.example\n山田", null);
             RecordingMetadataFile.Write(path, metadata);
 
             var json = File.ReadAllText(path);
@@ -190,7 +190,7 @@ public class RecordingMetadataFileTests
         var path = Path.Combine(Path.GetTempPath(), $"acapp-meta-{Guid.NewGuid():N}.json");
         try
         {
-            RecordingMetadataFile.Write(path, MainViewModel.BuildMetadata("定例", "2026-09-22 10:00〜11:00", "山田\n佐藤", null));
+            RecordingMetadataFile.Write(path, RecordingMetadataViewModel.BuildMetadata("定例", "2026-09-22 10:00〜11:00", "山田\n佐藤", null));
 
             var read = RecordingMetadataFile.TryRead(path);
 
@@ -260,7 +260,7 @@ public class RecordingMetadataFileTests
         {
             File.WriteAllText(path, "{ \"メモ\": \"手で書いた\", \"会議名\": \"旧\", \"参加者\": [\"古\"] }");
 
-            RecordingMetadataFile.Update(path, MainViewModel.BuildMetadata("新", "2026-09-22 10:00〜11:00", "山田", null));
+            RecordingMetadataFile.Update(path, RecordingMetadataViewModel.BuildMetadata("新", "2026-09-22 10:00〜11:00", "山田", null));
 
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
@@ -284,7 +284,7 @@ public class RecordingMetadataFileTests
             File.WriteAllText(path, "[1, 2]");
 
             Assert.ThrowsAny<JsonException>(
-                () => RecordingMetadataFile.Update(path, MainViewModel.BuildMetadata("新", "", "", null)));
+                () => RecordingMetadataFile.Update(path, RecordingMetadataViewModel.BuildMetadata("新", "", "", null)));
             Assert.Equal("[1, 2]", File.ReadAllText(path));
         }
         finally
@@ -297,7 +297,7 @@ public class RecordingMetadataFileTests
     public void IsMetadataEmpty_AllBlank_IsTrue()
     {
         // ファイル文字起こしでは 3 項目とも空なら JSON を作らない（REQ-TRX-FILE-18）
-        Assert.True(MainViewModel.IsMetadataEmpty("", " ", ""));
-        Assert.False(MainViewModel.IsMetadataEmpty("", "", "山田"));
+        Assert.True(RecordingMetadataViewModel.IsMetadataEmpty("", " ", ""));
+        Assert.False(RecordingMetadataViewModel.IsMetadataEmpty("", "", "山田"));
     }
 }
