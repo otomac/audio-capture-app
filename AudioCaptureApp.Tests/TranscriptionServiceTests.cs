@@ -255,6 +255,116 @@ public class TranscriptionServiceTests
                 buffered, TranscriptionService.StaleSupplyIdle, null, Endpoint, suppressEndpointing: true));
     }
 
+    // --- 遅れの判定は全ソースの滞留で行う (T183 / REQ-TRX-LIVE-13) ---
+    // 判定するソース自身の分は、判定時には常に 20 秒未満で 60 秒の閾値に届かない。
+    // 以前は自ソースの確定済みチャンクだけを数えていたため、早期確定の抑止が一度も発火しなかった。
+
+    private const int Backlog = 16000 * 60;   // BacklogSuppressEndpointingSamples
+
+    /// <summary>有声 <paramref name="voicedSamples"/> の後に無音 <paramref name="silentTailSamples"/> が続くバッファを持つソース。</summary>
+    private static TranscriptionService.SourceState StateWithSpeech(int voicedSamples, int silentTailSamples)
+    {
+        var state = new TranscriptionService.SourceState { BufferEndElapsed = TimeSpan.FromSeconds(100) };
+        state.Pcm16kBuffer.AddRange(Enumerable.Repeat(0.5f, voicedSamples));
+        state.Pcm16kBuffer.AddRange(new float[silentTailSamples]);
+        return state;
+    }
+
+    [Fact]
+    public void TakeNextChunk_NotBehindAndSilentTail_TakesWholeBuffer()
+    {
+        var state = StateWithSpeech(16000 * 5, Endpoint);
+
+        var chunk = TranscriptionService.TakeNextChunk(
+            state, state.BufferEndElapsed, SilenceCutOptions.Default,
+            TranscriptionService.BufferedSamples(state));
+
+        Assert.NotNull(chunk);
+        Assert.Equal(16000 * 5 + Endpoint, chunk.Samples.Length);
+        Assert.Empty(state.Pcm16kBuffer);
+    }
+
+    [Fact]
+    public void TakeNextChunk_OtherSourceBehind_WaitsForFullChunk()
+    {
+        // 自ソースは 7 秒分しか無いが、もう一方のソースが 60 秒分待っている → 遅れている
+        var state = StateWithSpeech(16000 * 5, Endpoint);
+        long pending = TranscriptionService.BufferedSamples(state) + Backlog;
+
+        var chunk = TranscriptionService.TakeNextChunk(
+            state, state.BufferEndElapsed, SilenceCutOptions.Default, pending);
+
+        Assert.Null(chunk);
+        Assert.Equal(16000 * 5 + Endpoint, state.Pcm16kBuffer.Count);
+    }
+
+    [Fact]
+    public void BufferedSamples_CountsReadyChunksAndBuffer()
+    {
+        var state = StateWithSpeech(16000 * 5, 0);
+        state.Ready.Enqueue(new TranscriptionService.PendingChunk(new float[Threshold], TimeSpan.Zero));
+
+        Assert.Equal(Threshold + 16000 * 5, TranscriptionService.BufferedSamples(state));
+    }
+
+    // --- ギャップ分割も 20 秒で区切る (T183 / REQ-TRX-LIVE-07 / 10) ---
+    // 遅れているとバッファが数分分に膨らむ。ギャップ分割で丸ごと 1 チャンクにすると
+    // 1 回の Whisper 呼び出しが数分分になる。
+
+    private static List<float> Sequence(int count)
+    {
+        var buffer = new List<float>(count);
+        for (int i = 0; i < count; i++)
+        {
+            buffer.Add(i);
+        }
+
+        return buffer;
+    }
+
+    [Fact]
+    public void SplitAtChunkLimit_UnderLimit_ReturnsWholeBufferAsOneChunk()
+    {
+        var start = TimeSpan.FromSeconds(30);
+
+        var chunk = Assert.Single(TranscriptionService.SplitAtChunkLimit(Sequence(16000 * 15), start));
+
+        Assert.Equal(16000 * 15, chunk.Samples.Length);
+        Assert.Equal(start, chunk.StartElapsed);
+    }
+
+    [Fact]
+    public void SplitAtChunkLimit_OverLimit_SplitsInto20SecondChunks()
+    {
+        var start = TimeSpan.FromSeconds(30);
+
+        var chunks = TranscriptionService.SplitAtChunkLimit(Sequence(16000 * 50), start);
+
+        Assert.Equal([Threshold, Threshold, 16000 * 10], chunks.Select(c => c.Samples.Length));
+        Assert.Equal(
+            [start, start + TimeSpan.FromSeconds(20), start + TimeSpan.FromSeconds(40)],
+            chunks.Select(c => c.StartElapsed));
+    }
+
+    [Fact]
+    public void SplitAtChunkLimit_ExactMultiple_HasNoEmptyChunk()
+    {
+        var chunks = TranscriptionService.SplitAtChunkLimit(Sequence(Threshold * 2), TimeSpan.Zero);
+
+        Assert.Equal(2, chunks.Count);
+        Assert.All(chunks, c => Assert.Equal(Threshold, c.Samples.Length));
+    }
+
+    [Fact]
+    public void SplitAtChunkLimit_KeepsSampleOrder()
+    {
+        var buffer = Sequence(16000 * 45);
+
+        var chunks = TranscriptionService.SplitAtChunkLimit(buffer, TimeSpan.Zero);
+
+        Assert.Equal(buffer, chunks.SelectMany(c => c.Samples));
+    }
+
     // --- 末尾無音の検出 (T129) ---
 
     [Fact]
