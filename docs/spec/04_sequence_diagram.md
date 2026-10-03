@@ -133,6 +133,7 @@ sequenceDiagram
     ACS->>ACS: _isWriting = false
     ACS->>ACS: WriterThread の終了を待機 (最大5秒)
     ACS->>TS: StopSession()
+    TS->>TS: 処理中のチャンクを最後の区間まで処理（停止要求では途中で抜けない。T184）
     TS->>TS: 残りバッファ(1秒以上)を処理
     TS->>TS: スレッド終了待機（滞留分を吐き切るまで。上限なし）<br/>「打ち切り」が要求されたらキャンセルして10秒待機
     Note over VM: 待っている間、メーターのタイマーが PendingSeconds を読み<br/>「停止処理中... 文字起こしの残り N 秒分」を1秒ごとに出す

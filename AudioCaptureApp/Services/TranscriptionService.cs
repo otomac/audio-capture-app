@@ -1437,8 +1437,9 @@ public class TranscriptionService : IDisposable
                 while (_isRunning && !token.IsCancellationRequested
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
-                    // 通常運転中。停止要求が来たらチャンクの途中（区間の切れ目）で抜ける。
-                    ProcessChunkCounted(chunk, state, interruptible: true, token);
+                    // 停止要求が来ても、取り出したチャンクは最後の区間まで処理する（T184）。
+                    // バッファからは既に消えているので、途中で抜けると残りの区間を捨てることになる。
+                    ProcessChunkCounted(chunk, state, token);
                 }
             }
         }
@@ -1452,9 +1453,8 @@ public class TranscriptionService : IDisposable
                 while (!token.IsCancellationRequested
                        && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
                 {
-                    // 排出処理。ここは _isRunning が false の状態で走るため打ち切ってはならない。
-                    // 打ち切りたいときは token をキャンセルする（StopSession の「打ち切り」）。
-                    ProcessChunkCounted(chunk, state, interruptible: false, token);
+                    // 排出処理。打ち切りたいときは token をキャンセルする（StopSession の「打ち切り」）。
+                    ProcessChunkCounted(chunk, state, token);
                 }
 
                 if (token.IsCancellationRequested)
@@ -1476,7 +1476,7 @@ public class TranscriptionService : IDisposable
 
                 if (tail != null)
                 {
-                    ProcessChunkCounted(tail, state, interruptible: false, token);
+                    ProcessChunkCounted(tail, state, token);
                 }
             }
         }
@@ -1486,12 +1486,12 @@ public class TranscriptionService : IDisposable
     private long _inFlightSamples;
 
     /// <summary><see cref="ProcessChunk"/> を、処理中のサンプル数を数えながら呼ぶ。</summary>
-    private void ProcessChunkCounted(PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
+    private void ProcessChunkCounted(PendingChunk chunk, SourceState state, CancellationToken token)
     {
         Interlocked.Exchange(ref _inFlightSamples, chunk.Samples.Length);
         try
         {
-            ProcessChunk(chunk, state, interruptible, token);
+            ProcessChunk(chunk, state, token);
         }
         finally
         {
@@ -1847,16 +1847,6 @@ public class TranscriptionService : IDisposable
         }
     }
 
-    /// <summary>
-    /// 区間ループを次の区間へ進めてよいかを判定する。
-    /// キャンセル済みなら常に打ち切り、停止要求は <paramref name="interruptible"/> のときだけ見る。
-    /// </summary>
-    internal static bool ShouldStopRegionLoop(bool cancelled, bool isRunning, bool interruptible)
-        => cancelled || (interruptible && !isRunning);
-
-    private bool ShouldStopRegionLoop(bool interruptible, CancellationToken token)
-        => ShouldStopRegionLoop(token.IsCancellationRequested, _isRunning, interruptible);
-
     /// <summary>各区間の前後に余白を付け、チャンクの範囲内へクランプする。</summary>
     private static void ApplyPadding(List<VoicedRegion> regions, int padding, int totalSamples)
     {
@@ -1871,24 +1861,14 @@ public class TranscriptionService : IDisposable
     /// <summary>
     /// チャンクを有声区間に分けて Whisper に掛ける。
     /// </summary>
-    /// <param name="interruptible">
-    /// <c>true</c> なら停止要求（<see cref="_isRunning"/> が false）で区間ループを打ち切る。
-    /// 通常のポーリングループからは <c>true</c>、停止時の残バッファ排出からは <c>false</c> を渡す。
-    /// </param>
     /// <remarks>
-    /// T112 で 1 チャンクが複数区間に分かれるようになり、1 チャンクあたりの Whisper 呼び出しが
-    /// 最大 10 回になった（区間は 2.0 秒以上離れ、各区間は 0.2 秒以上あるため 20 秒に 10 個が上限）。
-    /// 停止要求が来たあとも全区間を回し切ると <see cref="StopSession"/> の猶予 30 秒を超え、
-    /// T117 が直した「停止がタイムアウトして WhisperProcessor の破棄を見送る」経路に戻ってしまう。
-    /// <para>
-    /// ここで <see cref="_isRunning"/> を無条件に見てはいけない。停止時の排出処理は
-    /// <see cref="_isRunning"/> が false の状態で走るため、無条件に見ると
-    /// 排出すべき最後のチャンクを 1 区間も処理せずに捨ててしまう（T120 の書き出し遅延対策が無効になる）。
-    /// だから呼び出し元ごとに <paramref name="interruptible"/> で切り替える。
-    /// </para>
+    /// 区間ループは停止要求（<see cref="_isRunning"/> が false）では抜けず、キャンセルでだけ抜ける（T184）。
+    /// チャンクは <see cref="TakeNextChunk"/> でバッファから取り除き済みなので、途中で抜けると
+    /// 残りの区間はどこにも残らず捨てられる。かつて（T127）は <see cref="StopSession"/> の猶予 30 秒を
+    /// 超えないよう停止要求で抜けていたが、T165 で猶予を無くして「捨てない」にしたため不要になった。
     /// </remarks>
     private void ProcessChunk(
-        PendingChunk chunk, SourceState state, bool interruptible, CancellationToken token)
+        PendingChunk chunk, SourceState state, CancellationToken token)
     {
         // results は try の外で宣言する。中で宣言すると、Whisper がキャンセル例外を投げたときに
         // 確定済みの区間の行まで一緒に捨てられる。それらの行は TranscribeRegion の中で
@@ -1900,7 +1880,8 @@ public class TranscriptionService : IDisposable
             // 時刻は区間自身が持つため、無音を捨てても後続の時刻はずれない。
             foreach (var region in SplitVoicedRegions(chunk.Samples, SilenceCut))
             {
-                if (ShouldStopRegionLoop(interruptible, token))
+                // ここで _isRunning を見てはいけない（T184。remarks を参照）。
+                if (token.IsCancellationRequested)
                 {
                     break;
                 }
