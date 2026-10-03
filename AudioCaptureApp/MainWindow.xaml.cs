@@ -32,6 +32,7 @@ public partial class MainWindow : Window, IDisposable
         InitializeComponent();
         DataContext = _viewModel;
         // 補助ウィンドウの生成は View 層の責務（ADR-0002）。ViewModel はイベントで要求だけを上げる。
+        // 補助ウィンドウには、それぞれの ViewModel（MainViewModel が保持する子）を渡す（ADR-0008）。
         _viewModel.FileTranscriptionRequested += ShowFileTranscriptionOptions;
         _viewModel.LiveTranscriptRequested += ShowLiveTranscript;
         _viewModel.SettingsRequested += ShowSettings;
@@ -145,7 +146,7 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private void ShowFileTranscriptionOptions()
     {
-        var dialog = new FileTranscriptionOptionsWindow(_viewModel) { Owner = this };
+        var dialog = new FileTranscriptionOptionsWindow(_viewModel.FileTranscription) { Owner = this };
         ShowModal(dialog);
     }
 
@@ -172,9 +173,9 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private void ShowRecordingMetadata()
     {
-        var dialog = new RecordingMetadataWindow(_viewModel) { Owner = this };
+        var dialog = new RecordingMetadataWindow(_viewModel.RecordingMetadata) { Owner = this };
         var accepted = ShowModal(dialog) == true;
-        _viewModel.CompleteRecordingMetadata(accepted);
+        _viewModel.RecordingMetadata.Complete(accepted);
     }
 
     /// <summary>
@@ -184,7 +185,7 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private void ShowSettings()
     {
-        var dialog = new SettingsWindow(_viewModel) { Owner = this };
+        var dialog = new SettingsWindow(_viewModel.Settings) { Owner = this };
         ShowModal(dialog);
     }
 
@@ -197,7 +198,7 @@ public partial class MainWindow : Window, IDisposable
     {
         if (_liveTranscriptWindow == null)
         {
-            _liveTranscriptWindow = new LiveTranscriptWindow(_viewModel) { Owner = this };
+            _liveTranscriptWindow = new LiveTranscriptWindow(_viewModel.LiveTranscript) { Owner = this };
             _liveTranscriptWindow.Closed += (_, _) => _liveTranscriptWindow = null;
             _liveTranscriptWindow.Show();
         }

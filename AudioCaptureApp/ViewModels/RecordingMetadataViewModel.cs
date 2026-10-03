@@ -4,19 +4,24 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace AudioCaptureApp.ViewModels;
 
-// MainViewModel のうち、録音停止時のメタデータ入力（会議名・実施日時・参加者）と JSON の書き出し・改名の指示を担当する部分。
-// クラスは 1 つのままで、ファイルだけを機能単位に割っている（ADR-0005 案 D / ADR-0006）。
-public partial class MainViewModel
+/// <summary>
+/// 録音停止後のメタデータ入力ダイアログ（<c>RecordingMetadataWindow</c>）の ViewModel（REQ-REC-13 / §16、ADR-0008）。
+/// 会議名・実施日時・参加者の入力と、JSON の書き出し・改名の指示を担当する。
+/// 生成と保持は <see cref="MainViewModel"/> が行い、<see cref="MainViewModel.RecordingMetadata"/> で公開する。
+/// </summary>
+/// <remarks>
+/// 流れ: 親が停止処理の完了後に <see cref="Prepare"/> で既定値を入れて表示を要求し、
+/// <c>MainWindow</c> が同期的にダイアログを出して、閉じたら <see cref="Complete"/> を呼ぶ。
+/// 親の状態のうち書くのは <see cref="MainViewModel.LastResultPath"/> と <see cref="MainViewModel.StatusMessage"/> だけである。
+/// </remarks>
+public sealed partial class RecordingMetadataViewModel : ObservableObject
 {
-    // --- 録音のメタデータ (T169 / REQ-REC-13 / §16) ---
+    private readonly MainViewModel _main;
 
-    /// <summary>
-    /// メタデータ入力ダイアログを開いてほしい、という要求（REQ-REC-13）。
-    /// 購読するのは <c>MainWindow</c> のコードビハインド（ADR-0002 の規則 2・3）。
-    /// **同期的に `ShowDialog` し、閉じたら <see cref="CompleteRecordingMetadata"/> を呼ぶ**こと —
-    /// 停止処理の続き（`LastResultPath` の確定・終了確認の `Close()`）がその戻りを待っている。
-    /// </summary>
-    public event Action? RecordingMetadataRequested;
+    internal RecordingMetadataViewModel(MainViewModel main)
+    {
+        _main = main;
+    }
 
     /// <summary>会議名（REQ-META-02 でファイル名にも付く）。</summary>
     [ObservableProperty]
@@ -37,6 +42,7 @@ public partial class MainViewModel
     /// <summary>
     /// メタデータ 3 項目から <see cref="RecordingMetadata"/> を組み立てる（REQ-META-01 / 03 / 04）。
     /// 会議名はファイル名用ではなく入力どおり（前後の空白だけ落とす）を JSON に書く。
+    /// ファイル文字起こしのダイアログ（<see cref="FileTranscriptionViewModel"/>）も同じ規則で組み立てる。
     /// </summary>
     internal static RecordingMetadata BuildMetadata(
         string meetingName, string heldAt, string participantsText, string? domainSortedLast)
@@ -62,34 +68,31 @@ public partial class MainViewModel
            && string.IsNullOrWhiteSpace(participantsText);
 
     /// <summary>
-    /// 停止処理の完了後、録音データがあれば入力を促す（REQ-REC-13）。
-    /// 既定値を入れてイベントを上げる。<c>MainWindow</c> が同期的にダイアログを出し、
-    /// 閉じたら <see cref="CompleteRecordingMetadata"/> を呼ぶ。
+    /// 停止処理の完了後、入力の既定値を入れる（REQ-REC-13）。表示の要求は親が続けて上げる。
     /// </summary>
-    private void RequestRecordingMetadata(RecordingSession session)
+    internal void Prepare(RecordingSession session)
     {
         MetadataMeetingName = "";
         MetadataHeldAt = RecordingMetadataFile.HeldAtText(session.StartedAt, session.StoppedAt ?? DateTime.Now);
         MetadataParticipantsText = "";
         MetadataTargetName = System.IO.Path.GetFileName(session.FilePath);
-        RecordingMetadataRequested?.Invoke();
     }
 
     /// <summary>
     /// ダイアログが閉じた（REQ-REC-13）。<paramref name="accepted"/> が「OK」なら JSON を書き、
-    /// 会議名があれば `.mp3` / `.txt` を改名して <see cref="LastResultPath"/> を追従させる（REQ-META-02）。
+    /// 会議名があれば `.mp3` / `.txt` を改名して <see cref="MainViewModel.LastResultPath"/> を追従させる（REQ-META-02）。
     /// 「キャンセル」なら何も残さない。
     /// </summary>
-    public void CompleteRecordingMetadata(bool accepted)
+    public void Complete(bool accepted)
     {
-        var session = _audioCaptureService.CurrentSession;
+        var session = _main.AudioCaptureService.CurrentSession;
         if (!accepted || session == null)
         {
             return;
         }
 
         // 改名先が既にある・失敗 → 元の名前のまま JSON だけ書く（REQ-META-02）
-        var renameError = _audioCaptureService.RenameSessionFiles(MetadataMeetingName);
+        var renameError = _main.AudioCaptureService.RenameSessionFiles(MetadataMeetingName);
         var mp3Path = session.FilePath;
         var txtPath = System.IO.Path.ChangeExtension(mp3Path, ".txt");
         var jsonPath = RecordingMetadataFile.BuildMetadataPath(mp3Path);
@@ -99,18 +102,18 @@ public partial class MainViewModel
             RecordingMetadataFile.Write(
                 jsonPath,
                 BuildMetadata(MetadataMeetingName, MetadataHeldAt, MetadataParticipantsText,
-                    _settings.ParticipantDomainSortedLast));
+                    _main.AppSettings.ParticipantDomainSortedLast));
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {
-            StatusMessage = $"メタデータの保存に失敗しました: {ex.Message}";
+            _main.StatusMessage = $"メタデータの保存に失敗しました: {ex.Message}";
             return;
         }
 
         // REQ-OPEN-01: 成果物のパスを改名後へ追従させる
         var hasTxt = System.IO.File.Exists(txtPath);
-        LastResultPath = hasTxt ? txtPath : mp3Path;
-        StatusMessage = renameError == null
+        _main.LastResultPath = hasTxt ? txtPath : mp3Path;
+        _main.StatusMessage = renameError == null
             ? $"保存完了: {mp3Path} (メタデータ: {System.IO.Path.GetFileName(jsonPath)})"
             : $"{renameError} メタデータは {System.IO.Path.GetFileName(jsonPath)} に保存しました";
     }

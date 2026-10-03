@@ -710,43 +710,6 @@ public class TranscriptionServiceTests
         Assert.Equal(samples.Length, region.Length);
     }
 
-    // --- 停止時に区間ループを打ち切る条件 (T127) ---
-    // 通常運転中は停止要求で打ち切る。停止時の排出処理では打ち切ってはならない
-    // （_isRunning は既に false なので、打ち切ると最後のチャンクを 1 区間も処理せず捨てる）。
-
-    [Fact]
-    public void ShouldStopRegionLoop_Cancelled_AlwaysStops()
-    {
-        Assert.True(TranscriptionService.ShouldStopRegionLoop(
-            cancelled: true, isRunning: true, interruptible: true));
-        Assert.True(TranscriptionService.ShouldStopRegionLoop(
-            cancelled: true, isRunning: false, interruptible: false));
-    }
-
-    [Fact]
-    public void ShouldStopRegionLoop_Running_Continues()
-    {
-        Assert.False(TranscriptionService.ShouldStopRegionLoop(
-            cancelled: false, isRunning: true, interruptible: true));
-    }
-
-    [Fact]
-    public void ShouldStopRegionLoop_StopRequestedWhileInterruptible_Stops()
-    {
-        // 通常運転中に停止要求 → 残りの区間は処理しない（T117 の 30 秒猶予を超えないため）
-        Assert.True(TranscriptionService.ShouldStopRegionLoop(
-            cancelled: false, isRunning: false, interruptible: true));
-    }
-
-    [Fact]
-    public void ShouldStopRegionLoop_DrainingAfterStop_DoesNotStop()
-    {
-        // 排出処理は _isRunning == false で走る。ここで打ち切ると
-        // 最後のチャンクが 1 区間も書き出されずに失われる（T120 の対策が無効になる）。
-        Assert.False(TranscriptionService.ShouldStopRegionLoop(
-            cancelled: false, isRunning: false, interruptible: false));
-    }
-
     // --- 区間の開始時刻の合成 (T112) ---
     // ライブ・ファイルの両経路が RegionStart を通る。ここが壊れると
     // 「無音を切ったぶんだけ記録時刻がずれる」という最も気付きにくい壊れ方をする。

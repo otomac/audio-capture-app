@@ -10,16 +10,16 @@ namespace AudioCaptureApp;
 /// 文字起こし行を表示するサブウィンドウ（REQ-LIVEVIEW-01）。
 /// </summary>
 /// <remarks>
-/// 自前の状態を持たず、<c>MainWindow</c> と同じ <see cref="MainViewModel"/> インスタンスを
-/// <c>DataContext</c> として共有する（<c>docs/adr/0002-secondary-windows-share-mainviewmodel.md</c>）。
+/// <c>DataContext</c> は <see cref="LiveTranscriptViewModel"/>（<see cref="MainViewModel.LiveTranscript"/>。
+/// <c>docs/adr/0008-per-window-viewmodels.md</c>）。
 /// 録音停止で閉じる処理は<b>意図的に書いていない</b>（REQ-LIVEVIEW-05）。
 /// プロセス終了時に閉じるのは、生成側が <c>Owner</c> を設定していることによる WPF の既定動作。
 /// </remarks>
 public partial class LiveTranscriptWindow : Window
 {
-    private readonly MainViewModel _viewModel;
+    private readonly LiveTranscriptViewModel _viewModel;
 
-    public LiveTranscriptWindow(MainViewModel viewModel)
+    public LiveTranscriptWindow(LiveTranscriptViewModel viewModel)
     {
         InitializeComponent();
         _viewModel = viewModel;

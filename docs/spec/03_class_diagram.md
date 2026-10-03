@@ -21,15 +21,15 @@ classDiagram
 
     class FileTranscriptionOptionsWindow {
         <<Window>>
-        -MainViewModel _viewModel
-        +FileTranscriptionOptionsWindow(MainViewModel)
+        -FileTranscriptionViewModel _viewModel
+        +FileTranscriptionOptionsWindow(FileTranscriptionViewModel)
         -StartButton_Click(object, RoutedEventArgs)
         -Window_Closing(object, CancelEventArgs)
     }
 
     class LiveTranscriptWindow {
         <<Window>>
-        +LiveTranscriptWindow(MainViewModel)
+        +LiveTranscriptWindow(LiveTranscriptViewModel)
         -OnLinesChanged(object, NotifyCollectionChangedEventArgs)
     }
 
@@ -53,6 +53,10 @@ classDiagram
         -SettingsService _settingsService
         -DispatcherTimer _meterTimer
         -DispatcherTimer _clockTimer
+        +SettingsViewModel Settings
+        +FileTranscriptionViewModel FileTranscription
+        +RecordingMetadataViewModel RecordingMetadata
+        +LiveTranscriptViewModel LiveTranscript
         +ObservableCollection~AudioDevice~ CaptureDevices
         +ObservableCollection~AudioDevice~ RenderDevices
         +AudioDevice SelectedCaptureDevice
@@ -60,75 +64,32 @@ classDiagram
         +bool IsRecording
         +bool IsStopping
         +bool IsTranscribingFile
-        +string OutputFolder
+        +bool IsNotBusy
         +string ElapsedTime
         +string StatusMessage
+        +string LastResultPath
         +bool TranscriptionEnabled
-        +string WhisperModelPath
-        +string TranscriptionStatus
-        +bool UseGpuForTranscription
-        +bool GpuAvailable
         +bool IsMicMuted
         +bool IsSpeakerMuted
         +double MicLevelDb
         +double LoopbackLevelDb
-        +string FileTranscriptionStatus
-        +string FileTranscriptionFileName
-        +string FileTranscriptionStartTime
-        +string FileTranscriptionStartTimeHint
-        +IReadOnlyList~TranscriptionLanguage~ LiveLanguageOptions
-        +IReadOnlyList~TranscriptionLanguage~ FileLanguageOptions
-        +TranscriptionLanguage SelectedLiveLanguage
-        +TranscriptionLanguage SelectedFileLanguage
-        +double FileTranscriptionProgress
-        +bool CanStartFileTranscription
-        +bool IsFileTranscriptionCancelRequested
-        +string FileTranscriptionCancelNotice
-        +ObservableCollection~string~ LiveTranscriptLines
-        +string LastResultPath
         +string SpeakerDiarizationStatus
         +string SpeakerDiarizationTooltip
-        +ObservableCollection~WhisperModelEntry~ WhisperModels
-        +WhisperModelEntry? SelectedWhisperModel
-        +WhisperModelEntry? ManagedWhisperModel
-        +WhisperModelEntry? SelectedFileWhisperModel
-        +string FileTranscriptionModelError
-        +string EditingModelName
-        +string EditingModelPath
-        +string WhisperModelError
-        +bool IsEditingWhisperModel
-        +bool FileDiarizationEnabled
-        +bool AutoStartRecordingEnabled
+        +bool CanChooseFileDiarization
         +bool IsAutoStartedRecording
         +bool IsModalDialogOpen
         +double TranscriptionPendingSeconds
         +bool IsStopAbortRequested
+        ~string? LastTranscriptionError
+        ~SaveSettings()
+        ~ResetAutoStart()
         +AbortStop()
-        +string MetadataMeetingName
-        +string MetadataHeldAt
-        +string MetadataParticipantsText
-        +string MetadataTargetName
-        +CompleteRecordingMetadata(bool)
-        +bool CanChooseFileDiarization
-        +IReadOnlyList~SpeakerCountOption~ SpeakerCountOptions
-        +SpeakerCountOption SelectedSpeakerCount
         +StartRecording()
         +StopRecordingAsync() Task
         +ShutdownAsync() Task
-        +SelectOutputFolder()
         +RefreshDevices()
-        +ShowWhisperModels()
-        +BrowseWhisperModelFile()
-        +AddWhisperModel()
-        +RenameWhisperModel()
-        +RemoveWhisperModel()
-        +NewWhisperModel()
-        +MoveWhisperModelUp()
-        +MoveWhisperModelDown()
         +TranscribeFromFile()
         +TranscribeDroppedFile(string)
-        +StartFileTranscriptionAsync() Task
-        +CancelFileTranscription()
         +ShowLiveTranscript()
         +ShowSettings()
         +OpenResultFolder()
@@ -137,24 +98,125 @@ classDiagram
         +DiarizationStatusTextFor(DiarizationAvailability) string$
         +DiarizationTooltipFor(DiarizationAvailability) string$
         +IsDiarizationSelectable(DiarizationAvailability) bool$
-        +MigrateWhisperModelList(IEnumerable~WhisperModelEntry~?, string?) List~WhisperModelEntry~$
-        +ValidateWhisperModelEntry(IEnumerable~WhisperModelEntry~, string, string, WhisperModelEntry?) string?$
-        +SpeakerCountOptionFor(int?) SpeakerCountOption$
         +BuildExplorerArguments(string) string
-        +TryParseStartTime(string, out TimeSpan) bool
-        +TryParseRecordedFileNameTime(string, out DateTime) bool$
-        +InferStartTime(string, DateTime?, DateTime?, Func~TimeSpan?~) StartTimeEstimate$
-        +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double
         +CloseConfirmationMessage(bool, bool, bool) string$
-        +FileTranscriptionCloseConfirmation(bool) string$
-        +AppendLiveTranscriptLine(IList~string~, string, int)$
-        +AppendLiveTranscriptLines(IList~string~, IReadOnlyList~string~, int)$
         +Dispose()
         event FileTranscriptionRequested
         event LiveTranscriptRequested
         event SettingsRequested
-        event WhisperModelsRequested
         event RecordingMetadataRequested
+    }
+
+    class SettingsViewModel {
+        <<ObservableObject>>
+        -MainViewModel _main
+        +WhisperModelsViewModel WhisperModelsManager
+        +bool IsNotBusy
+        +string SpeakerDiarizationStatus
+        +string SpeakerDiarizationTooltip
+        +string OutputFolder
+        +bool AutoStartRecordingEnabled
+        +IReadOnlyList~TranscriptionLanguage~ LiveLanguageOptions
+        +TranscriptionLanguage SelectedLiveLanguage
+        +ObservableCollection~WhisperModelEntry~ WhisperModels
+        +WhisperModelEntry? SelectedWhisperModel
+        +string WhisperModelPath
+        +string TranscriptionStatus
+        +bool UseGpuForTranscription
+        +bool GpuAvailable
+        +bool CanToggleGpu
+        +SelectOutputFolder()
+        +ShowWhisperModels()
+        ~TryLoadWhisperModel()
+        ~ChangeWhisperModelsWithoutWriteBack(Action)
+        -OnMainPropertyChanged(object, PropertyChangedEventArgs)
+        +MigrateWhisperModelList(IEnumerable~WhisperModelEntry~?, string?) List~WhisperModelEntry~$
+        +FindLanguage(IReadOnlyList~TranscriptionLanguage~, string) TranscriptionLanguage$
+        event WhisperModelsRequested
+    }
+
+    class WhisperModelsViewModel {
+        <<ObservableObject>>
+        -MainViewModel _main
+        -SettingsViewModel _settings
+        +ObservableCollection~WhisperModelEntry~ WhisperModels
+        +WhisperModelEntry? ManagedWhisperModel
+        +string EditingModelName
+        +string EditingModelPath
+        +string WhisperModelError
+        +bool IsEditingWhisperModel
+        ~ResetForm()
+        +BrowseWhisperModelFile()
+        +AddWhisperModel()
+        +RenameWhisperModel()
+        +RemoveWhisperModel()
+        +NewWhisperModel()
+        +MoveWhisperModelUp()
+        +MoveWhisperModelDown()
+        +ValidateWhisperModelEntry(IEnumerable~WhisperModelEntry~, string, string, WhisperModelEntry?) string?$
+    }
+
+    class FileTranscriptionViewModel {
+        <<ObservableObject, IDisposable>>
+        -MainViewModel _main
+        +bool IsTranscribingFile
+        +string SpeakerDiarizationStatus
+        +bool CanChooseFileDiarization
+        +ObservableCollection~WhisperModelEntry~ WhisperModels
+        +string FileTranscriptionStatus
+        +string FileTranscriptionFileName
+        +string FileTranscriptionStartTime
+        +string FileTranscriptionStartTimeHint
+        +IReadOnlyList~TranscriptionLanguage~ FileLanguageOptions
+        +TranscriptionLanguage SelectedFileLanguage
+        +bool FileDiarizationEnabled
+        +IReadOnlyList~SpeakerCountOption~ SpeakerCountOptions
+        +SpeakerCountOption SelectedSpeakerCount
+        +WhisperModelEntry? SelectedFileWhisperModel
+        +string FileTranscriptionModelError
+        +string MetadataMeetingName
+        +string MetadataHeldAt
+        +string MetadataParticipantsText
+        +double FileTranscriptionProgress
+        +bool CanStartFileTranscription
+        +bool IsFileTranscriptionCancelRequested
+        +string FileTranscriptionCancelNotice
+        ~Prepare(string)
+        +StartFileTranscriptionAsync() Task~bool~
+        +CancelFileTranscription()
+        ~CancelAndWaitAsync() Task
+        -SetTranscribing(bool)
+        +SpeakerCountOptionFor(int?) SpeakerCountOption$
+        +FileWhisperModelFor(IReadOnlyList~WhisperModelEntry~, string?, WhisperModelEntry?) WhisperModelEntry?$
+        +TryParseStartTime(string, out TimeSpan) bool$
+        +TryParseRecordedFileNameTime(string, out DateTime) bool$
+        +InferStartTime(string, DateTime?, DateTime?, Func~TimeSpan?~) StartTimeEstimate$
+        +FileTranscriptionProgressFor(TimeSpan, TimeSpan) double$
+        +FileTranscriptionCloseConfirmation(bool) string$
+        +IsSupportedAudioExtension(string) bool$
+        +Dispose()
+    }
+
+    class RecordingMetadataViewModel {
+        <<ObservableObject>>
+        -MainViewModel _main
+        +string MetadataMeetingName
+        +string MetadataHeldAt
+        +string MetadataParticipantsText
+        +string MetadataTargetName
+        ~Prepare(RecordingSession)
+        +Complete(bool)
+        +BuildMetadata(string, string, string, string?) RecordingMetadata$
+        +IsMetadataEmpty(string, string, string) bool$
+    }
+
+    class LiveTranscriptViewModel {
+        <<ObservableObject>>
+        +ObservableCollection~string~ LiveTranscriptLines
+        ~QueueLine(string)
+        ~Clear()
+        +AppendLiveTranscriptLine(IList~string~, string, int)$
+        +AppendLiveTranscriptLines(IList~string~, IReadOnlyList~string~, int)$
     }
 
     %% ==================== Service層 ====================
@@ -434,8 +496,17 @@ classDiagram
 
     MainWindow "1" ..> "0..1" FileTranscriptionOptionsWindow : ShowDialog (Owner)
     MainWindow "1" ..> "0..1" LiveTranscriptWindow : Show (Owner)
-    FileTranscriptionOptionsWindow --> MainViewModel : DataContext（同一インスタンス）
-    LiveTranscriptWindow --> MainViewModel : DataContext（同一インスタンス）
+    FileTranscriptionOptionsWindow --> FileTranscriptionViewModel : DataContext
+    LiveTranscriptWindow --> LiveTranscriptViewModel : DataContext
+    MainViewModel "1" *-- "1" SettingsViewModel : 生成・保持
+    MainViewModel "1" *-- "1" FileTranscriptionViewModel : 生成・保持
+    MainViewModel "1" *-- "1" RecordingMetadataViewModel : 生成・保持
+    MainViewModel "1" *-- "1" LiveTranscriptViewModel : 生成・保持
+    SettingsViewModel "1" *-- "1" WhisperModelsViewModel : 生成・保持
+    SettingsViewModel ..> MainViewModel : 親の状態を読み書き（IsNotBusy を中継）
+    WhisperModelsViewModel ..> SettingsViewModel : 登録一覧を編集
+    FileTranscriptionViewModel ..> MainViewModel : IsTranscribingFile / StatusMessage / LastResultPath を書く
+    RecordingMetadataViewModel ..> MainViewModel : StatusMessage / LastResultPath を書く
 
     MainViewModel "1" --> "1" AudioCaptureService
     MainViewModel "1" --> "1" TranscriptionService
@@ -455,9 +526,10 @@ classDiagram
     TranscriptionService ..> FileTranscriptionProgress : 進捗として報告する
     TranscriptionService ..> FileTranscriptionOptions : TranscribeFileAsync の引数
     TranscriptionService ..> FileTranscriptionResult : TranscribeFileAsync が返す
-    MainViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
+    FileTranscriptionViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
     MainViewModel "1" --> "1" AutoStartTrigger : メーターの 50ms タイマーで Observe
-    MainViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形
+    RecordingMetadataViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形
+    FileTranscriptionViewModel ..> RecordingMetadataFile : 既存の JSON の読み込み・更新
     RecordingMetadataFile ..> RecordingMetadata : 書き出す・読み込む
     AutoStartTrigger "1" --> "1" AutoStartOptions
 
@@ -476,4 +548,4 @@ classDiagram
 
 > `BytesToFloats` / `CalculatePeak`（`AudioCaptureService`）、`SplitVoicedRegions` / `AppendTranscriptLines` / `BuildTranscriptPath` / `TryGetAudioDuration`（`TranscriptionService`）、`Merge` / `FormatSpeaker`（`TranscriptDiarizationMerger`。クラス自体が `internal static`）、`PeakToDb` / `TryParseStartTime` / `TryParseRecordedFileNameTime` / `InferStartTime` / `CloseConfirmationMessage` / `FileTranscriptionCloseConfirmation` / `FileTranscriptionProgressFor` / `AppendLiveTranscriptLine` / `AppendLiveTranscriptLines`（`MainViewModel`）は実装上は `internal static` なユニットテスト用ヘルパーメソッドである（`InternalsVisibleTo` により `AudioCaptureApp.Tests` から直接呼び出される）。図中では公開インターフェースと合わせて `+` で表記している。
 >
-> `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow` は自前の状態を持たず、`MainWindow` と同じ `MainViewModel` インスタンスを `DataContext` として共有する（[ADR-0002](../adr/0002-secondary-windows-share-mainviewmodel.md)、[ADR-0006](../adr/0006-mainviewmodel-split-reevaluation.md)）。各ウィンドウの生成は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` は `SettingsWindow` が生成する）、`MainViewModel` はイベント（`FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `WhisperModelsRequested` / `RecordingMetadataRequested`）で要求を上げるだけである。
+> `FileTranscriptionOptionsWindow` / `LiveTranscriptWindow` / `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow` は自前の状態を持たず、`MainViewModel` が保持するそれぞれの ViewModel（子）を `DataContext` にする。子は親への参照を持ち、共有状態（処理中フラグ・ステータス表示・直近の成果物）は親のものを読み書きする（[ADR-0008](../adr/0008-per-window-viewmodels.md)）。各ウィンドウの生成は `MainWindow` のコードビハインドが行い（`WhisperModelsWindow` は `SettingsWindow` が生成する）、ViewModel はイベント（`MainViewModel` の `FileTranscriptionRequested` / `LiveTranscriptRequested` / `SettingsRequested` / `RecordingMetadataRequested` と、`SettingsViewModel` の `WhisperModelsRequested`）で要求を上げるだけである。図を簡潔にするため `SettingsWindow` / `WhisperModelsWindow` / `RecordingMetadataWindow` の View クラスは省略している。
