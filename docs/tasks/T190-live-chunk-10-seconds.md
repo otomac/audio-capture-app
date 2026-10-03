@@ -1,6 +1,6 @@
 # T190 — 確定パスのチャンク上限を、遅れていないときは 10 秒にする
 
-> **状態:** 進行中 — 2026-10-03
+> **状態:** 完了 — 2026-10-03
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 
 ## 1. 目的
@@ -62,9 +62,9 @@
 - [x] **B2** 下の 4 件を追加する
 
 ### グループ Z — 検証（必須・最後に置く）
-- [ ] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件
-- [ ] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし
-- [ ] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 全件成功
+- [x] **Z1** `dotnet build AudioCaptureApp.slnx -c Debug` — 警告 0 件（CI・Release 構成。「実行結果」を参照）
+- [x] **Z2** `dotnet format AudioCaptureApp.slnx --verify-no-changes` — 差分なし（同上）
+- [x] **Z3** `dotnet test AudioCaptureApp.slnx -c Debug` — 396 件成功 / 0 件失敗（同上）
 - [x] **Z4** 仕様書（§4）の更新反映を読み直す
 
 ## 8. テスト一覧
@@ -94,3 +94,12 @@
 
 - T182 の計測（確定の処理能力 90% 以上など）は、この変更後の確定パスで行う
 - 話し続けているときの確定の遅れは、最大で「10 秒 ＋ 1 秒（ポーリング周期）＋ 処理時間」になる
+
+## 実行結果 (2026-10-03)
+
+- `dotnet build` : 警告 0 件 / エラー 0 件
+- `dotnet format`: 差分なし
+- `dotnet test`  : 396 件成功 / 0 件失敗 / 0 件スキップ（変更前 392 件 + 追加 4 件）
+- 実行場所: このクラウド環境には dotnet が無いため、ブランチ上で CI（`build-desktop`、windows-latest、workflow_dispatch）を動かして測った
+  （run 37153168261、commit `a8e97d5`）。**CI は Release 構成**で、ゲートの規定（Debug）とは構成が違う。
+- 実機での確認（話し続けているときに確定が約 10 秒ごとに出るか、Zoom 会議中に 10 秒チャンクで追いつくか）は未実施。利用者の手元で行う
