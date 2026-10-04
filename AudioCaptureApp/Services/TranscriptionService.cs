@@ -255,6 +255,17 @@ public class TranscriptionService : IDisposable
     private const int BufferThresholdSamples = TargetRate * 20; // 20秒分
 
     /// <summary>
+    /// ライブ文字起こしで、遅れていないときのチャンクの上限（10 秒分。REQ-TRX-LIVE-10、T190）。
+    /// 遅れているときは <see cref="BufferThresholdSamples"/>（20 秒分）に戻す。
+    /// </summary>
+    /// <remarks>
+    /// 話し続けていると末尾無音の契機（REQ-TRX-LIVE-13）が来ないため、確定はこの上限ごとにしか出ない。
+    /// 20 秒では遅すぎるので 10 秒にする。1 回の呼び出しが短いほど割高になる（音声 1 秒あたり 20 秒入力 0.181 秒 /
+    /// 5 秒入力 0.381 秒）ので、遅れているときは処理能力を優先して 20 秒に戻す。
+    /// </remarks>
+    internal const int LiveChunkSamples = TargetRate * 10;
+
+    /// <summary>
     /// 音声の供給が途切れたと判定する閾値。これを超えるギャップを検出したら、
     /// そこまでのバッファを 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。
     /// </summary>
@@ -1534,7 +1545,7 @@ public class TranscriptionService : IDisposable
     /// </param>
     /// <remarks>
     /// 遅れの判定に <paramref name="state"/> 自身の分だけを使ってはいけない（T183）。確定済みチャンクは
-    /// 先に返すので判定時には残っておらず、未確定バッファも 20 秒分以上なら先に 20 秒で切り出すため、
+    /// 先に返すので判定時には残っておらず、未確定バッファも上限（10 秒分または 20 秒分）以上なら先に上限で切り出すため、
     /// 判定時の自ソース分は常に 20 秒未満で、60 秒の閾値に届かない。
     /// <paramref name="pendingSamples"/> はこの錠の外で数えて渡す。中で数えると
     /// <see cref="PendingSeconds"/>（<c>_sourcesLock</c> → 各ソースの錠）と錠の順序が逆になる。
@@ -1627,18 +1638,26 @@ public class TranscriptionService : IDisposable
     /// （<see cref="TrailingSilenceSamples"/> の戻り値）。
     /// </param>
     /// <param name="endpointSilenceSamples">発話が終わったとみなす末尾無音の長さ。</param>
+    /// <param name="behind">
+    /// 文字起こしが遅れているか（全ソースの滞留が <see cref="BacklogSuppressEndpointingSamples"/> 以上。REQ-TRX-LIVE-13）。
+    /// </param>
     /// <remarks>
     /// 契機は 3 つあり、この優先順で判定する。
     /// <list type="number">
-    /// <item>20 秒分たまった → 20 秒分だけ切り出す（1 回の Whisper 呼び出しを
-    /// 際限なく長くしないための上限。T117）。</item>
+    /// <item>上限までたまった → 上限の分だけ切り出す（1 回の Whisper 呼び出しを
+    /// 際限なく長くしないための上限。T117）。上限は遅れていなければ <see cref="LiveChunkSamples"/>（10 秒分）、
+    /// 遅れていれば <see cref="BufferThresholdSamples"/>（20 秒分。T190）。</item>
     /// <item>末尾に <paramref name="endpointSilenceSamples"/> 以上の無音が積まれ、かつ
     /// バッファ内に有声窓がある → 発話が終わったとみなしてバッファ全部を切り出す（T129）。</item>
     /// <item>供給が <see cref="StaleSupplyIdle"/> 以上途絶えている → バッファ全部を切り出す（T120）。</item>
     /// </list>
     /// <para>
+    /// <paramref name="behind"/>（遅れている）のときは、1 の上限を 20 秒分に戻し、2 を使わない（REQ-TRX-LIVE-13）。
+    /// どちらも 1 回あたりの効率を優先するためである。
+    /// </para>
+    /// <para>
     /// 2 が無いと、マイクは無音でも WASAPI がサンプルを供給し続けるため
-    /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が 20 秒固定になる。
+    /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が上限で固定になる。
     /// 保持時間に <see cref="SilenceCutOptions.MergeGapSeconds"/> と同じ値を渡すのは、
     /// それが <see cref="SplitVoicedRegions"/> で「発話の切れ目」を定義している値そのものだからで、
     /// 揃えれば確定チャンクは有声区間ちょうど 1 個を含む形になり、Whisper の呼び出し回数は
@@ -1660,17 +1679,19 @@ public class TranscriptionService : IDisposable
         TimeSpan supplyIdle,
         int? trailingSilenceSamples,
         int endpointSilenceSamples,
-        bool suppressEndpointing = false)
+        bool behind = false)
     {
-        if (bufferedSampleCount >= BufferThresholdSamples)
+        // REQ-TRX-LIVE-10: 遅れていなければ 10 秒、遅れていれば 20 秒で切る（T190）。
+        int limit = behind ? BufferThresholdSamples : LiveChunkSamples;
+        if (bufferedSampleCount >= limit)
         {
-            return BufferThresholdSamples;
+            return limit;
         }
 
         // REQ-TRX-LIVE-13: 遅れているときは②を使わない。20 秒たまるまで待って効率を優先する。
         // ③（供給の途絶）は残す — 供給が止まったソースを無期限に抱え込まないための契機であり、
         // 遅れているかどうかとは関係がない。
-        if (suppressEndpointing)
+        if (behind)
         {
             return supplyIdle >= StaleSupplyIdle && bufferedSampleCount >= MinTailSamples
                 ? bufferedSampleCount
