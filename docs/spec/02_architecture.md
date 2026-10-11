@@ -165,9 +165,12 @@ Styles/Controls.xaml"]
 | ループバックキャプチャコールバック | `WasapiLoopbackCapture.DataAvailable`（NAudio 内部スレッド） | スピーカー音声をバッファへ追加、ピークレベル算出、（録音中は）文字起こしバッファへ追加 |
 | `AudioMixerWriter` | `AudioCaptureService.WriterLoop`（録音中のみ起動する専用 `Thread`） | 20ms 周期でミキサーから読み出し、MP3 へストリーミング書き込み |
 | `WhisperTranscription` | `TranscriptionService.TranscriptionLoop`（ライブ文字起こしセッション中のみ起動する専用 `Thread`） | 1 秒周期で各音声ソースのバッファを確認し、閾値到達分を Whisper で処理 |
+| `ProvisionalTranscription`（**未実装** — T186） | `TranscriptionService` の速報ループ（速報が有効なライブ文字起こしセッション中のみ起動する専用 `Thread`。優先度 `BelowNormal`） | 既定 1 秒周期で、まだ確定していない音声を句単位で速報用モデル（**CPU・4 スレッド**）に掛け、速報を通知する（REQ-TRX-LIVE-15〜17）。**GPU には触れない**（REQ-GPU-06）。停止時は確定の吐き切りより先に止める（REQ-TRX-LIVE-11） |
 | ハードウェアミュート通知 | `AudioEndpointVolume.OnVolumeNotification`（OS コールバック） | OS 側のミュート変更をアプリへ通知（非 UI スレッド） |
 | `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `SettingsViewModel.TryLoadWhisperModel` / `FileTranscriptionViewModel.RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
 | sherpa-onnx ネイティブ推論 | `SpeakerDiarizationService.Diarize`（上記 `Task.Run` ワーカーから同期的に呼ぶ） | 話者ダイアライゼーション。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`lock` で 1 度に 1 呼び出しへ直列化する（REQ-TRX-DIA-10） |
+
+**GPU での推論は `WhisperTranscription` の 1 本の列で行う。** ggml の Vulkan バックエンドは、同じ GPU に別スレッドの別コンテキストから同時に推論すると落ちる（ggml-org/ggml#1087）。速報（`ProvisionalTranscription`）は CPU コンテキストなので並列に動かしてよい（ADR-0007 案 B。T182 の M3 で初回起動を含めて確かめた）。ファイル文字起こし（`Task.Run` ワーカー）は録音中に実行できない（REQ-REC-09）ので、ライブの確定パスと GPU を取り合わない。
 
 UI スレッド以外からプロパティを更新する箇所（`MicMuteChangedExternally`、`TranscriptionService.Error`/`RuntimeInfo`、`AudioCaptureService.RecordingError`）はすべて `Application.Current.Dispatcher.BeginInvoke` を介して UI スレッドに戻す（[CLAUDE.md](../../CLAUDE.md) の開発ルールに準拠）。
 
@@ -197,6 +200,22 @@ flowchart LR
     Whisper1 --> Txt["*.txt (同名, 追記)"]
     Whisper2 --> Txt
 ```
+
+#### 5.2.1 速報（**未実装** — T185〜T187。ADR-0007 案 B）
+
+確定パス（上の図）は変えずに、まだ確定していない音声を別スレッドで粗く文字起こしして字幕帯に出す。速報はファイルに書かない。
+
+```mermaid
+flowchart LR
+    SrcSpk3["SourceState (Speaker)\nまだ確定していない音声"] -->|"既定 1 秒ごと・句単位\n（0.6 秒の無音か 8 秒で閉じる）"| Prov["ProvisionalTranscription スレッド\n速報用モデル（CPU・4 スレッド）"]
+    Prov -->|"ProvisionalTranscribed\n（音源・句の絶対位置・セッション ID）"| Band["字幕帯\n（最大 4 件）"]
+    Final["WhisperTranscription スレッド\n（確定パス）"] -->|"LiveChunkCompleted\n（音源・終端の絶対位置・セッション ID）"| Band
+    Final --> Txt3["*.txt（確定の行だけ）"]
+```
+
+- 速報を出す音源の既定はスピーカーだけ（REQ-TRX-LIVE-15。両方・マイクだけも選べる）。
+- 確定完了の通知（REQ-TRX-LIVE-18）が届いたら、その音源のその位置までの速報を字幕帯から消す（REQ-LIVEVIEW-10）。
+- 確定パスには用語集と直前の確定文をプロンプトとして渡す（REQ-TRX-LIVE-19。T188）。
 
 ### 5.3 文字起こし（ファイル・話者ダイアライゼーション有効時）
 

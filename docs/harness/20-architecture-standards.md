@@ -65,6 +65,13 @@ View  ──→  ViewModel  ──→  Service  ──→  外部ライブラリ
 3. **共有バッファへのアクセスは同期を明示する。** 「たまたま動いている」を許容しない。
 4. **`async void` はイベントハンドラーのみ。** それ以外は `Task` を返す。
 5. **`.Result` / `.Wait()` による同期待ちをしない。** UI スレッドではデッドロックする。
+6. **GPU での推論（Whisper の GPU コンテキスト）は 1 本の列で行う。別スレッドから同じ GPU へ同時に推論してはならない。**
+   ggml の Vulkan バックエンドは、同じ GPU に別スレッドの別コンテキストから同時に推論すると落ちる
+   （[ggml-org/ggml#1087](https://github.com/ggml-org/ggml/issues/1087)）。`WhisperProcessor` は自インスタンスの呼び出ししか直列化しない。
+   並列に動かしてよいのは CPU コンテキスト（`UseGpu = false`）だけである（[ADR-0007](../adr/0007-two-pass-live-transcription.md)。T182 で初回起動を含めて確かめた）。
+7. **推論中のキャンセルは `OperationCanceledException` だけでは捕まえきれない。**
+   Whisper.net は推論の途中でキャンセルされると `WhisperProcessingException`（Failed to encode audio features）を投げることがある（T182 の実測）。
+   ワーカースレッドの境界で全例外を捕まえ（T117）、キャンセル後のこの例外をエラーとして利用者に見せない。
 
 ## 4. エラーハンドリングの規範
 
