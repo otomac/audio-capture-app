@@ -190,6 +190,6 @@ T182 で本 ADR を承認済みにした時点（2026-10-11）で次を直した
 - [x] `docs/spec/01_requirements.md` — REQ-TRX-LIVE-15〜19・REQ-LIVEVIEW-10・REQ-CFG-12 / 13・REQ-GPU-06・NFR-11 を新設、REQ-TRX-04 / LIVE-11 / LIVE-14・REQ-LIVEVIEW-02 / 08・REQ-SETWIN-03・REQ-MODELWIN-03 / 04 を改訂
 - [x] `docs/spec/02_architecture.md` — §4 スレッド表に `ProvisionalTranscription`、GPU 推論は 1 本の列、§5.2.1 速報のデータフロー
 - [x] `docs/harness/20-architecture-standards.md` — §3 規則 6（GPU 推論は 1 本の列）・規則 7（推論中のキャンセルの例外）
-- [ ] `docs/spec/03_class_diagram.md` — `TranscriptionService` の新しいイベント・型、ViewModel の速報関連メンバー（T185〜T188 の実装で反映）
-- [ ] `docs/spec/04_sequence_diagram.md` — §3 キャプチャと文字起こし、§4 停止（速報を先に止める）。図はコードの事実を書く規範（50-spec-standards.md §3）のため、T186 / T187 の実装で反映
+- [x] `docs/spec/03_class_diagram.md` — `TranscriptionService` の新しいイベント・型、ViewModel の速報関連メンバー（T185〜T188 の実装で反映。2026-10-12）
+- [x] `docs/spec/04_sequence_diagram.md` — §2 録音開始、§3 キャプチャと文字起こし、§4 停止（速報を先に止める）。図はコードの事実を書く規範（50-spec-standards.md §3）のため、T186 / T187 / T188 の実装で反映（2026-10-12）
 - [x] `CLAUDE.md` — 変更なし（3 層構成・依存方向・ライブラリは変えない）

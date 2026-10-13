@@ -44,6 +44,12 @@ public class AppSettings
     public bool UseGpuForTranscription { get; set; } = true;
 
     /// <summary>
+    /// GPU で動くときに flash attention を使うか（REQ-GPU-07 / REQ-CFG-14）。既定は ON（small・GPU で処理時間が約 24% 減り、
+    /// 文字誤り率は同等。T191）。CPU では遅くなるので、ON でも CPU のときは使わない。UI からは変更できない。
+    /// </summary>
+    public bool UseFlashAttentionOnGpu { get; set; } = true;
+
+    /// <summary>
     /// ライブ文字起こしの言語（REQ-CFG-07 / REQ-TRX-LIVE-14）。既定は日本語。
     /// 未知の値は読み込み時に既定へ倒す（`TranscriptionLanguages.NormalizeForLive`）。
     /// **ライブでは自動判定 (`auto`) を選べない**ため、書かれていても日本語になる。
@@ -133,4 +139,55 @@ public class AppSettings
     /// 上限を 4 に置くのは実測で 4 を超えても速くならず、8 を超えると遅くなるためである。
     /// </summary>
     public int SpeakerDiarizationThreads { get; set; } = Math.Min(4, Environment.ProcessorCount);
+
+    // ---- 速報（REQ-CFG-12 / REQ-TRX-LIVE-15〜17、ADR-0007）----
+
+    /// <summary>
+    /// 録音中に速報を出すか。既定は ON（利用者の判断 2026-10-11）。速報用モデル（<see cref="ProvisionalWhisperModelName"/>）が
+    /// 未選択なら、ON でも速報は動かない。UI は設定ウィンドウ。
+    /// </summary>
+    public bool LiveProvisionalEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 速報用モデルの名前（<see cref="WhisperModelList"/> の <c>ModelName</c>）。既定は <c>null</c>（未選択）。
+    /// 推奨は base（tiny は文字誤り率が 60% を超えて読めない。T182）。UI は設定ウィンドウ。
+    /// </summary>
+    public string? ProvisionalWhisperModelName { get; set; }
+
+    /// <summary>速報の間隔の下限（秒、0.5〜4）。UI からは変更できない。</summary>
+    public double ProvisionalIntervalSeconds { get; set; } = 1.0;
+
+    /// <summary>速報に使ってよい時間の割合の上限（0.1〜1.0）。超えたら間隔を伸ばす。UI からは変更できない。</summary>
+    public double ProvisionalDutyCap { get; set; } = 1.0;
+
+    /// <summary>速報用モデルの CPU スレッド数（1〜16）。UI からは変更できない。</summary>
+    public int ProvisionalThreads { get; set; } = 4;
+
+    /// <summary>速報を出す音源（<c>speaker</c> / <c>mic</c> / <c>both</c>）。既定はスピーカーだけ。UI からは変更できない。</summary>
+    public string ProvisionalSources { get; set; } = "speaker";
+
+    /// <summary>速報の句の上限（秒、2〜25）。UI からは変更できない。</summary>
+    public double ProvisionalMaxPhraseSeconds { get; set; } = 8.0;
+
+    // ---- 確定パスの文脈プロンプト（REQ-TRX-LIVE-19 / REQ-CFG-12 / REQ-CFG-13）----
+
+    /// <summary>
+    /// ライブの確定パスに文脈プロンプト（用語集＋直前の確定文）を渡すか。既定は ON（T182 の M6 で文字誤り率 34.7% → 31.7%）。
+    /// UI からは変更できない。
+    /// </summary>
+    public bool LiveContextPromptEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 用語集（固有名詞・専門用語。1 行 1 語）。既定は空。ライブの確定パスのプロンプトの先頭に「、」区切りで並べ、
+    /// 120 文字を超えた分は語の単位で使わない。UI は設定ウィンドウ。
+    /// </summary>
+    public string TranscriptionGlossary { get; set; } = "";
+
+    // ---- 計測ログ（REQ-CFG-12）----
+
+    /// <summary>
+    /// ライブ文字起こしの計測ログ（Whisper の呼び出しごとの所要時間など数値だけ）を書くか。既定は OFF。
+    /// UI からは変更できない。書く先は <c>%APPDATA%\AudioCaptureApp\logs</c>。文字起こしの本文は書かない。
+    /// </summary>
+    public bool TranscriptionMetricsLogEnabled { get; set; }
 }

@@ -39,6 +39,22 @@ public class AppSettingsTests
         Assert.Equal(1.0, settings.AutoStartSustainSeconds);
         Assert.Equal(0.3, settings.AutoStartDipGraceSeconds);
         Assert.Equal(10.0, settings.AutoStartCooldownSeconds);
+        // 計測ログは既定で書かない（REQ-CFG-12）
+        Assert.False(settings.TranscriptionMetricsLogEnabled);
+        // 速報は既定で ON（利用者の判断 2026-10-11）。ただし速報用モデルは未選択なので、そのままでは動かない（REQ-CFG-12）
+        Assert.True(settings.LiveProvisionalEnabled);
+        Assert.Null(settings.ProvisionalWhisperModelName);
+        // T182 の実測で合格した組み合わせ
+        Assert.Equal(1.0, settings.ProvisionalIntervalSeconds);
+        Assert.Equal(1.0, settings.ProvisionalDutyCap);
+        Assert.Equal(4, settings.ProvisionalThreads);
+        Assert.Equal("speaker", settings.ProvisionalSources);
+        Assert.Equal(8.0, settings.ProvisionalMaxPhraseSeconds);
+        // 文脈プロンプトは既定で ON（T182 の M6）。用語集は既定で空（REQ-CFG-12 / 13）
+        Assert.True(settings.LiveContextPromptEnabled);
+        Assert.Equal("", settings.TranscriptionGlossary);
+        // flash attention は GPU のときだけ使う設定で、既定は ON（REQ-CFG-14 / T191）
+        Assert.True(settings.UseFlashAttentionOnGpu);
     }
 
     [Fact]
