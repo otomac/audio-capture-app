@@ -6,6 +6,7 @@
         mc:Ignorable="d"
         Title="設定"
         Width="420" SizeToContent="Height"
+        MaxHeight="{Binding Source={x:Static SystemParameters.WorkArea}, Path=Height}"
         ResizeMode="NoResize" ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner">
 
@@ -17,118 +18,164 @@
     -->
     <Grid Margin="14">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ===== 録音 ===== -->
-        <Border Grid.Row="0" Style="{StaticResource Card}" Margin="0,0,0,10">
+        <!-- REQ-SETWIN-03: 項目が増えて小さい画面（768 ピクセル）に収まらないため、中身をスクロール領域に入れる。
+             ウィンドウの高さは作業領域の高さまで（MaxHeight）。「閉じる」はスクロールの外に置く。 -->
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <TextBlock Text="録音" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
 
-                <TextBlock Text="保存先フォルダ" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox Grid.Column="0" Text="{Binding OutputFolder, Mode=OneWay}"
-                             IsReadOnly="True" Margin="0,0,8,0"
-                             ToolTip="{Binding OutputFolder}"/>
-                    <Button Grid.Column="1" Content="選択"
-                            Command="{Binding SelectOutputFolderCommand}"/>
-                </Grid>
+                <!-- ===== 録音 ===== -->
+                <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="録音" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
 
-                <!-- REQ-SETWIN-03: デバイス一覧の「更新」はここに置かない（T158 で外した）。
-                     選び直す先のコンボボックスから離れるため、置き場はメインウィンドウである（REQ-DEV-01）。 -->
+                        <TextBlock Text="保存先フォルダ" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Text="{Binding OutputFolder, Mode=OneWay}"
+                                     IsReadOnly="True" Margin="0,0,8,0"
+                                     ToolTip="{Binding OutputFolder}"/>
+                            <Button Grid.Column="1" Content="選択"
+                                    Command="{Binding SelectOutputFolderCommand}"/>
+                        </Grid>
 
-                <!-- REQ-REC-12 / REQ-SETWIN-03 ⑥: 自動開始の ON/OFF。閾値などは settings.json（REQ-CFG-10） -->
-                <CheckBox Content="マイクの音量で録音を自動で開始する" Margin="0,12,0,0"
-                          IsChecked="{Binding AutoStartRecordingEnabled}"
-                          IsEnabled="{Binding IsNotBusy}"/>
-                <TextBlock Text="話し始めると自動で録音を開始します（既定: −15 dB 以上が合計 1 秒。語の切れ目は許容します）。停止は自動化しません。マイクが遠くて始まらないときは settings.json で閾値を下げられます。"
-                           Style="{StaticResource Text.Caption}" Margin="21,4,0,0" TextWrapping="Wrap"/>
+                        <!-- REQ-SETWIN-03: デバイス一覧の「更新」はここに置かない（T158 で外した）。
+                             選び直す先のコンボボックスから離れるため、置き場はメインウィンドウである（REQ-DEV-01）。 -->
+
+                        <!-- REQ-REC-12 / REQ-SETWIN-03 ⑥: 自動開始の ON/OFF。閾値などは settings.json（REQ-CFG-10） -->
+                        <CheckBox Content="マイクの音量で録音を自動で開始する" Margin="0,12,0,0"
+                                  IsChecked="{Binding AutoStartRecordingEnabled}"
+                                  IsEnabled="{Binding IsNotBusy}"/>
+                        <TextBlock Text="話し始めると自動で録音を開始します（既定: −15 dB 以上が合計 1 秒。語の切れ目は許容します）。停止は自動化しません。マイクが遠くて始まらないときは settings.json で閾値を下げられます。"
+                                   Style="{StaticResource Text.Caption}" Margin="21,4,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== 文字起こし ===== -->
+                <Border Style="{StaticResource Card}" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="文字起こし" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
+
+                        <!-- REQ-SETWIN-03 ② / REQ-MODELWIN-07: 登録済みモデル（REQ-CFG-08）のエイリアスから選ぶ。
+                             パスの直接選択は置かない（登録は「モデル管理…」）。 -->
+                        <TextBlock Text="Whisper モデル（ライブ文字起こし）" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox Grid.Column="0" Margin="0,0,8,0"
+                                      ItemsSource="{Binding WhisperModels}"
+                                      SelectedItem="{Binding SelectedWhisperModel}"
+                                      IsEnabled="{Binding IsNotBusy}"
+                                      ToolTip="{Binding WhisperModelPath}">
+                                      <ComboBox.ItemTemplate>
+                                          <DataTemplate>
+                                              <TextBlock Text="{Binding ModelName}"/>
+                                          </DataTemplate>
+                                      </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <Button Grid.Column="1" Content="モデル管理…"
+                                    Command="{Binding ShowWhisperModelsCommand}"/>
+                        </Grid>
+                        <TextBlock Text="{Binding WhisperModelPath}" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding WhisperModelPath}"
+                                   Style="{StaticResource Text.Caption}" Margin="0,0,0,12"/>
+
+                        <!-- REQ-TRX-LIVE-14: 変更は次の録音開始から効く -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="ライブ文字起こしの言語"
+                                       Style="{StaticResource Text.Label}"/>
+                            <ComboBox Grid.Column="1" MinWidth="130"
+                                      ItemsSource="{Binding LiveLanguageOptions}"
+                                      SelectedItem="{Binding SelectedLiveLanguage}"
+                                      IsEnabled="{Binding IsNotBusy}">
+                                      <ComboBox.ItemTemplate>
+                                          <DataTemplate>
+                                              <TextBlock Text="{Binding DisplayName}"/>
+                                          </DataTemplate>
+                                      </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                        <TextBlock Text="言語の変更は次に録音を開始したときから効きます。"
+                                   Style="{StaticResource Text.Caption}" Margin="0,0,0,12"/>
+
+                        <!-- REQ-GPU-02: GPU が使えないと判明したら強制 OFF ＋ 操作不可 -->
+                        <CheckBox Content="文字起こしに GPU を使用する"
+                                  IsChecked="{Binding UseGpuForTranscription}"
+                                  IsEnabled="{Binding CanToggleGpu}"/>
+                        <TextBlock Text="{Binding TranscriptionStatus}"
+                                   Style="{StaticResource Text.Caption}" Margin="21,4,0,0"/>
+
+                        <!-- REQ-SETWIN-03 ⑦ / REQ-CFG-12: 速報（字幕帯）。変えた時点で保存し、速報用モデルを読み直す。
+                             未選択の選択肢は置かない（止めたいときはチェックボックスで止める）。 -->
+                        <TextBlock Text="速報（字幕帯）" Style="{StaticResource Text.Label}" Margin="0,14,0,4"/>
+                        <CheckBox Content="録音中に速報を出す"
+                                  IsChecked="{Binding LiveProvisionalEnabled}"
+                                  IsEnabled="{Binding IsNotBusy}"/>
+                        <TextBlock Text="話している最中の粗い文字を、文字起こしウィンドウの字幕帯に出します（ファイルには書きません。次の録音から効きます）。"
+                                   Style="{StaticResource Text.Caption}" Margin="21,4,0,6" TextWrapping="Wrap"/>
+                        <Grid Margin="21,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="速報用モデル（推奨: base）" Style="{StaticResource Text.Label}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding WhisperModels}"
+                                      SelectedItem="{Binding SelectedProvisionalWhisperModel}"
+                                      IsEnabled="{Binding IsNotBusy}"
+                                      ToolTip="{Binding SelectedProvisionalWhisperModel.ModelPath}">
+                                      <ComboBox.ItemTemplate>
+                                          <DataTemplate>
+                                              <TextBlock Text="{Binding ModelName}"/>
+                                          </DataTemplate>
+                                      </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </Grid>
+                        <TextBlock Text="{Binding ProvisionalModelStatus}"
+                                   Style="{StaticResource Text.Caption}" Margin="21,2,0,0"/>
+
+                        <!-- REQ-SETWIN-03 ⑧ / REQ-CFG-13: 用語集。入力のたびに保存する（Esc で閉じても失われない） -->
+                        <TextBlock Text="用語集（人名・専門用語。1 行に 1 語）" Style="{StaticResource Text.Label}" Margin="0,14,0,4"/>
+                        <TextBox Text="{Binding TranscriptionGlossary, UpdateSourceTrigger=PropertyChanged}"
+                                 AcceptsReturn="True" TextWrapping="NoWrap" Height="68"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 VerticalContentAlignment="Top"
+                                 IsEnabled="{Binding IsNotBusy}"/>
+                        <TextBlock Text="ライブ文字起こしの確定の文に、聞き取ってほしい語を伝えます。先頭から 120 文字分まで使います。次の録音から効きます。"
+                                   Style="{StaticResource Text.Caption}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== 話者識別（読み取り専用。REQ-TRX-DIA-03 により切り替えは settings.json） ===== -->
+                <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="話者識別" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
+                        <TextBlock Text="{Binding SpeakerDiarizationStatus}"/>
+                        <TextBlock Text="{Binding SpeakerDiarizationTooltip}"
+                                   Style="{StaticResource Text.Caption}" Margin="0,4,0,0"/>
+                        <TextBlock Text="切り替えは settings.json で行います。"
+                                   Style="{StaticResource Text.Caption}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
-        </Border>
-
-        <!-- ===== 文字起こし ===== -->
-        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,10">
-            <StackPanel>
-                <TextBlock Text="文字起こし" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
-
-                <!-- REQ-SETWIN-03 ② / REQ-MODELWIN-07: 登録済みモデル（REQ-CFG-08）のエイリアスから選ぶ。
-                     パスの直接選択は置かない（登録は「モデル管理…」）。 -->
-                <TextBlock Text="Whisper モデル（ライブ文字起こし）" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
-                <Grid Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <ComboBox Grid.Column="0" Margin="0,0,8,0"
-                              ItemsSource="{Binding WhisperModels}"
-                              SelectedItem="{Binding SelectedWhisperModel}"
-                              IsEnabled="{Binding IsNotBusy}"
-                              ToolTip="{Binding WhisperModelPath}">
-                              <ComboBox.ItemTemplate>
-                                  <DataTemplate>
-                                      <TextBlock Text="{Binding ModelName}"/>
-                                  </DataTemplate>
-                              </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <Button Grid.Column="1" Content="モデル管理…"
-                            Command="{Binding ShowWhisperModelsCommand}"/>
-                </Grid>
-                <TextBlock Text="{Binding WhisperModelPath}" TextTrimming="CharacterEllipsis"
-                           ToolTip="{Binding WhisperModelPath}"
-                           Style="{StaticResource Text.Caption}" Margin="0,0,0,12"/>
-
-                <!-- REQ-TRX-LIVE-14: 変更は次の録音開始から効く -->
-                <Grid Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="ライブ文字起こしの言語"
-                               Style="{StaticResource Text.Label}"/>
-                    <ComboBox Grid.Column="1" MinWidth="130"
-                              ItemsSource="{Binding LiveLanguageOptions}"
-                              SelectedItem="{Binding SelectedLiveLanguage}"
-                              IsEnabled="{Binding IsNotBusy}">
-                              <ComboBox.ItemTemplate>
-                                  <DataTemplate>
-                                      <TextBlock Text="{Binding DisplayName}"/>
-                                  </DataTemplate>
-                              </ComboBox.ItemTemplate>
-                    </ComboBox>
-                </Grid>
-                <TextBlock Text="言語の変更は次に録音を開始したときから効きます。"
-                           Style="{StaticResource Text.Caption}" Margin="0,0,0,12"/>
-
-                <!-- REQ-GPU-02: GPU が使えないと判明したら強制 OFF ＋ 操作不可 -->
-                <CheckBox Content="文字起こしに GPU を使用する"
-                          IsChecked="{Binding UseGpuForTranscription}"
-                          IsEnabled="{Binding CanToggleGpu}"/>
-                <TextBlock Text="{Binding TranscriptionStatus}"
-                           Style="{StaticResource Text.Caption}" Margin="21,4,0,0"/>
-            </StackPanel>
-        </Border>
-
-        <!-- ===== 話者識別（読み取り専用。REQ-TRX-DIA-03 により切り替えは settings.json） ===== -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,12">
-            <StackPanel>
-                <TextBlock Text="話者識別" Style="{StaticResource Text.Label}" Margin="0,0,0,8"/>
-                <TextBlock Text="{Binding SpeakerDiarizationStatus}"/>
-                <TextBlock Text="{Binding SpeakerDiarizationTooltip}"
-                           Style="{StaticResource Text.Caption}" Margin="0,4,0,0"/>
-                <TextBlock Text="切り替えは settings.json で行います。"
-                           Style="{StaticResource Text.Caption}" Margin="0,4,0,0"/>
-            </StackPanel>
-        </Border>
+        </ScrollViewer>
 
         <!-- REQ-SETWIN-06: 取り消しは無いので「閉じる」だけ -->
-        <Button Grid.Row="3" Content="閉じる" IsCancel="True" IsDefault="True"
+        <Button Grid.Row="1" Content="閉じる" IsCancel="True" IsDefault="True"
                 Style="{StaticResource Button.Accent}"
                 HorizontalAlignment="Right" MinWidth="90"/>
     </Grid>

@@ -160,10 +160,13 @@ public sealed partial class WhisperModelsViewModel : ObservableObject
         }
 
         var live = _settings.SelectedWhisperModel;
+        var provisional = _settings.SelectedProvisionalWhisperModel;
         _settings.ChangeWhisperModelsWithoutWriteBack(() =>
         {
             WhisperModels.Move(index, newIndex);
             _settings.SelectedWhisperModel = live;
+            // REQ-MODELWIN-08: 速報用の選択も変えない
+            _settings.SelectedProvisionalWhisperModel = provisional;
             ManagedWhisperModel = target;
         });
         MoveWhisperModelUpCommand.NotifyCanExecuteChanged();
@@ -267,6 +270,8 @@ public sealed partial class WhisperModelsViewModel : ObservableObject
         var renamed = new WhisperModelEntry { ModelName = EditingModelName.Trim(), ModelPath = target.ModelPath };
         var index = WhisperModels.IndexOf(target);
         var wasSelected = ReferenceEquals(_settings.SelectedWhisperModel, target);
+        var wasProvisional = ReferenceEquals(_settings.SelectedProvisionalWhisperModel, target);
+        var provisionalBefore = _settings.SelectedProvisionalWhisperModel;
 
         // 名前だけの変更でパスは同じなので、保存・再読み込み・破棄はしない。
         // 差し替え（Replace）の最中に ComboBox が選択をいったん null にしうるため、抑止は差し替えの前から掛ける。
@@ -277,6 +282,9 @@ public sealed partial class WhisperModelsViewModel : ObservableObject
             {
                 _settings.SelectedWhisperModel = renamed;
             }
+            // REQ-MODELWIN-03: 速報用に選ばれていれば新しい要素へ付け替える（パスは同じなので読み直さない）。
+            // 選ばれていなくても、差し替えで ComboBox が選択を触ることがあるので元へ戻す
+            _settings.SelectedProvisionalWhisperModel = wasProvisional ? renamed : provisionalBefore;
         });
         ManagedWhisperModel = renamed;
         // REQ-CFG-09: ファイル用の保存名が旧名なら追随する
@@ -302,6 +310,7 @@ public sealed partial class WhisperModelsViewModel : ObservableObject
         }
 
         var wasSelected = ReferenceEquals(_settings.SelectedWhisperModel, target);
+        var wasProvisional = ReferenceEquals(_settings.SelectedProvisionalWhisperModel, target);
         WhisperModels.Remove(target);
         ManagedWhisperModel = null;
         EditingModelName = "";
@@ -314,6 +323,13 @@ public sealed partial class WhisperModelsViewModel : ObservableObject
             appSettings.FileWhisperModelName = null;
         }
         _main.TranscribeFromFileCommand.NotifyCanExecuteChanged();
+
+        if (wasProvisional)
+        {
+            // REQ-MODELWIN-04: 速報用に選ばれていたら選択を外し、速報を無効に倒す（どちらも保存し、速報用モデルを破棄する）
+            _settings.SelectedProvisionalWhisperModel = null;
+            _settings.LiveProvisionalEnabled = false;
+        }
 
         if (wasSelected)
         {

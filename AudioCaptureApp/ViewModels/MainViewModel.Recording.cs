@@ -42,6 +42,8 @@ public partial class MainViewModel
             // REQ-LIVEVIEW-08: 前のセッションの行が新しいセッションの行に混ざらないようにする。
             // 開始に成功したあとで消すこと。失敗したのに消すと、失敗の前後を見比べられなくなる。
             LiveTranscript.Clear();
+            // REQ-LIVEVIEW-10: 字幕帯はこのセッションの速報だけを受け付ける（セッション ID は StartRecording の中で採番済み）
+            LiveTranscript.BeginProvisionalSession(_transcriptionService.CurrentSessionId);
 
             IsRecording = true;
             // 手動で始めた録音。自動開始のときは呼び出し元（ObserveAutoStart）が直後に true へ上書きする
@@ -233,6 +235,8 @@ public partial class MainViewModel
         IsStopping = false;
         IsStopAbortRequested = false;
         IsAutoStartedRecording = false;
+        // REQ-TRX-LIVE-11: 停止が完了したら字幕帯を空にする（速報は停止の最初に止まっている）
+        LiveTranscript.EndProvisionalSession();
         // REQ-REC-12: 止めた直後に会話が続いていても、クールダウンの間は自動で再開しない
         _autoStartTrigger.NotifyStopped();
 
