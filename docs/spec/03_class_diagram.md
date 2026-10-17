@@ -125,13 +125,20 @@ classDiagram
         +bool UseGpuForTranscription
         +bool GpuAvailable
         +bool CanToggleGpu
+        +string ProvisionalModelStatus
+        +string TranscriptionGlossary
+        +bool LiveProvisionalEnabled
+        +WhisperModelEntry? SelectedProvisionalWhisperModel
+        ~ReloadProvisionalModel()
         +SelectOutputFolder()
         +ShowWhisperModels()
         ~TryLoadWhisperModel()
+        -TryLoadProvisionalModelAsync() Task
         ~ChangeWhisperModelsWithoutWriteBack(Action)
         -OnMainPropertyChanged(object, PropertyChangedEventArgs)
         +MigrateWhisperModelList(IEnumerable~WhisperModelEntry~?, string?) List~WhisperModelEntry~$
         +FindLanguage(IReadOnlyList~TranscriptionLanguage~, string) TranscriptionLanguage$
+        +FindWhisperModelByName(IEnumerable~WhisperModelEntry~, string?) WhisperModelEntry?$
         event WhisperModelsRequested
     }
 
@@ -213,8 +220,15 @@ classDiagram
     class LiveTranscriptViewModel {
         <<ObservableObject>>
         +ObservableCollection~string~ LiveTranscriptLines
+        +ObservableCollection~string~ ProvisionalLines
         ~QueueLine(string)
+        ~QueueProvisional(ProvisionalUpdate)
+        ~QueueChunkCompletion(LiveChunkCompletion)
+        ~BeginProvisionalSession(long)
+        ~EndProvisionalSession()
         ~Clear()
+        +ApplyProvisionalUpdate(List~ProvisionalEntry~, Dictionary~AudioSourceType,long~, long?, ProvisionalUpdate, int) bool$
+        +ApplyChunkCompletion(List~ProvisionalEntry~, Dictionary~AudioSourceType,long~, long?, LiveChunkCompletion) bool$
         +AppendLiveTranscriptLine(IList~string~, string, int)$
         +AppendLiveTranscriptLines(IList~string~, IReadOnlyList~string~, int)$
     }
@@ -261,6 +275,20 @@ classDiagram
         +bool IsModelLoaded
         +SilenceCutOptions SilenceCut
         +string LiveLanguage
+        +bool MetricsLogEnabled
+        +long CurrentSessionId
+        +bool ProvisionalEnabled
+        +ProvisionalOptions Provisional
+        +bool ContextPromptEnabled
+        +bool UseFlashAttentionOnGpu
+        +string TranscriptionGlossary
+        -RememberConfirmed(TimeSpan, TimeSpan, string)
+        +bool IsProvisionalModelLoaded
+        +LoadProvisionalModel(string) string?
+        +UnloadProvisionalModel()
+        -StartProvisional()
+        -StopProvisional()
+        -ProvisionalLoop()
         +LoadModel(string, bool) ValueTuple~bool,bool~
         +UnloadModel()
         +RegisterSource(AudioSourceType, string, int, int)
@@ -275,9 +303,75 @@ classDiagram
         +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
         +TryGetAudioDuration(string, out TimeSpan) bool$
+        +AudioContextFor(double) int$
+        +NextProvisionalInterval(double, ProvisionalOptions) double$
+        +SanitizeProvisionalText(string?) string?$
+        +BuildGlossaryPrompt(string?) string$
+        +ShouldUseFlashAttention(bool, bool) bool$
+        +NeedsReloadWithoutFlash(bool, bool?) bool$
+        +BuildContextPrompt(string, IReadOnlyList~ConfirmedText~, TimeSpan) string?$
+        +StripSpeakerTag(string) string$
         event Error
         event SegmentTranscribed
         event RuntimeInfo
+        event LiveChunkCompleted
+        event ProvisionalTranscribed
+    }
+
+    class ProvisionalUpdate {
+        <<sealed record>>
+        +long SessionId
+        +AudioSourceType Source
+        +string Label
+        +int PhraseId
+        +long StartPosition
+        +long EndPosition
+        +bool Closing
+        +string Text
+    }
+
+    class ProvisionalOptions {
+        <<sealed record>>
+        +double IntervalSeconds
+        +double DutyCap
+        +int Threads
+        +ProvisionalSources Sources
+        +double MaxPhraseSeconds
+        +ProvisionalOptions Default$
+        +ParseSources(string?) ProvisionalSources$
+        +Targets(AudioSourceType) bool
+    }
+
+    class ProvisionalSources {
+        <<enumeration>>
+        Speaker
+        Mic
+        Both
+    }
+
+    class ProvisionalPhrasePlanner {
+        +long KnownWindows
+        +long KeepFrom
+        +AppendWindow(bool)
+        +Plan() List~ProvisionalRequest~
+        +SkipBefore(long)
+        +TrimBefore(long)
+    }
+
+    class LiveChunkCompletion {
+        <<readonly record struct>>
+        +long SessionId
+        +AudioSourceType Source
+        +long EndPosition
+    }
+
+    class TranscriptionMetricsLog {
+        <<IDisposable>>
+        +Open(string, Action~string~) TranscriptionMetricsLog?$
+        +WriteFinal(TimeSpan, AudioSourceType, long, int, double, int, bool, double)
+        +WriteProvisional(TimeSpan, AudioSourceType, long, int, double, int, double, double)
+        +PathFor(DateTime) string$
+        +Dispose()
     }
 
     class AudioSourceType {
@@ -446,6 +540,17 @@ classDiagram
         +double SpeakerClusteringThreshold
         +int? KnownSpeakerCount
         +int SpeakerDiarizationThreads
+        +bool TranscriptionMetricsLogEnabled
+        +bool LiveProvisionalEnabled
+        +string? ProvisionalWhisperModelName
+        +double ProvisionalIntervalSeconds
+        +double ProvisionalDutyCap
+        +int ProvisionalThreads
+        +string ProvisionalSources
+        +double ProvisionalMaxPhraseSeconds
+        +bool LiveContextPromptEnabled
+        +string TranscriptionGlossary
+        +bool UseFlashAttentionOnGpu
     }
 
     class WhisperModelEntry {
@@ -526,6 +631,12 @@ classDiagram
     TranscriptionService ..> FileTranscriptionProgress : 進捗として報告する
     TranscriptionService ..> FileTranscriptionOptions : TranscribeFileAsync の引数
     TranscriptionService ..> FileTranscriptionResult : TranscribeFileAsync が返す
+    TranscriptionService ..> LiveChunkCompletion : LiveChunkCompleted で通知する
+    TranscriptionService ..> ProvisionalUpdate : ProvisionalTranscribed で通知する
+    TranscriptionService "1" --> "1" ProvisionalOptions : Provisional
+    TranscriptionService "1" --> "*" ProvisionalPhrasePlanner : 速報の対象の音源ごと（録音中だけ）
+    ProvisionalOptions --> ProvisionalSources
+    TranscriptionService "1" --> "0..1" TranscriptionMetricsLog : 録音中だけ（REQ-CFG-12）
     FileTranscriptionViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
     MainViewModel "1" --> "1" AutoStartTrigger : メーターの 50ms タイマーで Observe
     RecordingMetadataViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形

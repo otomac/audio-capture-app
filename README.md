@@ -22,6 +22,15 @@ Windows向け音声キャプチャアプリ。WASAPI Shared Mode で入力デバ
   - マイクとスピーカーの識別あり
   - ライブ文字起こしでは同一入力音声内の話者識別は無し
   - 文字起こし状況を表示できるサブウィンドウを表示可能（起動直後は非表示）
+  - **速報（字幕帯）:** 話している最中の粗い文字を、文字起こしウィンドウの下の字幕帯に 1〜2 秒遅れで出します。
+    「設定…」→「速報（字幕帯）」で速報用モデルを選ぶと動きます（推奨は `base`。CPU で動き、GPU は使いません。`tiny` は粗すぎて読めません）。
+    速報はファイルに書かず、確定した行が出るとその分の速報は字幕帯から消えます。既定ではスピーカーの音声にだけ出します
+  - **用語集:** 「設定…」の「用語集」に人名・専門用語を 1 行に 1 語で書くと、ライブ文字起こしの確定の文に伝えます（直前の確定文とあわせて Whisper に渡します。先頭から 120 文字分まで）
+  - 確定の行の先頭に Whisper が付けがちな `(山本)` のような話者名の付け札は取り除きます（実在しない名前が付くため。音声ファイルからの文字起こしも同じ）
+  - `settings.json` だけで変えられる調整値: `ProvisionalSources`（速報を出す音源。`speaker`（既定）/ `mic` / `both`。両方に出すと遅れが大きくなります）、
+    `ProvisionalIntervalSeconds` / `ProvisionalDutyCap` / `ProvisionalThreads` / `ProvisionalMaxPhraseSeconds`（速報の間隔・CPU の使い方・句の長さ）、
+    `LiveContextPromptEnabled`（用語集と直前の確定文を渡すか。既定 `true`）、
+    `TranscriptionMetricsLogEnabled`（`true` にすると録音ごとに `%APPDATA%\AudioCaptureApp\logs\` へ処理時間の記録を書きます。文字起こしの本文は書きません）
 - Whisper を用いた音声ファイルからの文字起こし
   - sherpa-onnx による話者識別（Speaker Dialization）
     - 同一音声内で `話者1` / `話者2` … を区別する
@@ -29,6 +38,7 @@ Windows向け音声キャプチャアプリ。WASAPI Shared Mode で入力デバ
 - **完全にローカルで処理します。** クラウド API は使わず、音声や文字起こし内容を外部へ送信しません。
   ネットワーク接続が無い環境でも動作します。
 - 文字起こしはGPU（CUDA／Vulkan）を利用可能（処理が遅くなるが、GPUをOFFにすることも可能）
+  - GPU で動くときは flash attention を使います（このマシンの実測で `small` の処理時間が約 24% 減り、文字起こしの質は同等）。CPU では遅くなるため使いません。`settings.json` の `UseFlashAttentionOnGpu` を `false` にすると止められます
 
 ## 話者識別（Speaker Dialization）
 

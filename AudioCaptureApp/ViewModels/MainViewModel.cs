@@ -123,11 +123,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LiveTranscript = new LiveTranscriptViewModel();
         // 文字起こしワーカースレッドから発火するため、必ず Dispatcher を経由する（NFR-01）
         _transcriptionService.SegmentTranscribed += LiveTranscript.QueueLine;
+        // 字幕帯（REQ-LIVEVIEW-10）。速報スレッド・確定パスのワーカーから発火する。受け口が Dispatcher を経由する
+        _transcriptionService.ProvisionalTranscribed += LiveTranscript.QueueProvisional;
+        _transcriptionService.LiveChunkCompleted += LiveTranscript.QueueChunkCompletion;
 
         _transcriptionService.SilenceCut = new SilenceCutOptions(
             _settings.SilenceRmsThreshold,
             _settings.SilenceMergeGapSeconds,
             _settings.VoicedPaddingSeconds);
+        // REQ-CFG-12: 計測ログと速報の調整値。読まれるのは録音開始時（StartSession）だけ
+        _transcriptionService.MetricsLogEnabled = _settings.TranscriptionMetricsLogEnabled;
+        _transcriptionService.ProvisionalEnabled = _settings.LiveProvisionalEnabled;
+        _transcriptionService.Provisional = new ProvisionalOptions(
+            _settings.ProvisionalIntervalSeconds,
+            _settings.ProvisionalDutyCap,
+            _settings.ProvisionalThreads,
+            ProvisionalOptions.ParseSources(_settings.ProvisionalSources),
+            _settings.ProvisionalMaxPhraseSeconds);
+        // REQ-TRX-LIVE-19: 文脈プロンプトの有効化は settings.json だけ。用語集は設定ウィンドウ（SettingsViewModel が写す）
+        _transcriptionService.ContextPromptEnabled = _settings.LiveContextPromptEnabled;
+        // REQ-GPU-07: flash attention（GPU のときだけ）。モデルの読み込みより前に写すこと
+        _transcriptionService.UseFlashAttentionOnGpu = _settings.UseFlashAttentionOnGpu;
 
         var diarizationOptions = new SpeakerDiarizationOptions(
             _settings.SpeakerSegmentationModelPath,
@@ -333,6 +349,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.UseGpuForTranscription = Settings.UseGpuForTranscription;
         _settings.AutoStartRecordingEnabled = Settings.AutoStartRecordingEnabled;
         _settings.LiveTranscriptionLanguage = Settings.SelectedLiveLanguage.Code;
+        _settings.LiveProvisionalEnabled = Settings.LiveProvisionalEnabled;
+        _settings.ProvisionalWhisperModelName = Settings.SelectedProvisionalWhisperModel?.ModelName;
+        _settings.TranscriptionGlossary = Settings.TranscriptionGlossary;
         _settings.FileTranscriptionLanguage = FileTranscription.SelectedFileLanguage.Code;
         _settingsService.Save(_settings);
     }

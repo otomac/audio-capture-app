@@ -51,6 +51,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             SelectedLiveLanguage = FindLanguage(
                 TranscriptionLanguages.ForLive,
                 TranscriptionLanguages.NormalizeForLive(settings.LiveTranscriptionLanguage));
+            // REQ-CFG-12: 速報。モデルは名前で持つ（一覧に無い名前なら未選択）
+            LiveProvisionalEnabled = settings.LiveProvisionalEnabled;
+            SelectedProvisionalWhisperModel = FindWhisperModelByName(WhisperModels, settings.ProvisionalWhisperModelName);
+            // REQ-CFG-13: 用語集
+            TranscriptionGlossary = settings.TranscriptionGlossary ?? "";
         }
         finally
         {
@@ -361,6 +366,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             _isLoadingModel = true;
             TranscriptionStatus = "モデル読み込み中...";
+            // 速報用モデルだけの読み直しが走っていたら終わるのを待つ（読み込みを重ねない。T187 D7）
+            await _provisionalLoad;
             var modelPath = WhisperModelPath;
             var requestGpu = UseGpuForTranscription;
             var transcriptionService = _main.TranscriptionService;
@@ -383,6 +390,9 @@ public sealed partial class SettingsViewModel : ObservableObject
                 {
                     _main.AudioCaptureService.SetTranscriptionService(transcriptionService);
                 }
+
+                // REQ-TRX-04: 速報用モデルはライブ用の後に順番に読む（ネイティブログの観測を重ねない）
+                await TryLoadProvisionalModelAsync();
             }
             else
             {

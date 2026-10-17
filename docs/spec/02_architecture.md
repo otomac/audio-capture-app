@@ -165,9 +165,12 @@ Styles/Controls.xaml"]
 | ループバックキャプチャコールバック | `WasapiLoopbackCapture.DataAvailable`（NAudio 内部スレッド） | スピーカー音声をバッファへ追加、ピークレベル算出、（録音中は）文字起こしバッファへ追加 |
 | `AudioMixerWriter` | `AudioCaptureService.WriterLoop`（録音中のみ起動する専用 `Thread`） | 20ms 周期でミキサーから読み出し、MP3 へストリーミング書き込み |
 | `WhisperTranscription` | `TranscriptionService.TranscriptionLoop`（ライブ文字起こしセッション中のみ起動する専用 `Thread`） | 1 秒周期で各音声ソースのバッファを確認し、閾値到達分を Whisper で処理 |
+| `ProvisionalTranscription` | `TranscriptionService` の速報ループ（速報が有効なライブ文字起こしセッション中のみ起動する専用 `Thread`。優先度 `BelowNormal`） | 既定 1 秒周期で、まだ確定していない音声を句単位で速報用モデル（**CPU・4 スレッド**）に掛け、速報を通知する（REQ-TRX-LIVE-15〜17）。有声判定もこのスレッドで行う（キャプチャのコールバックは写しへコピーするだけ）。**GPU には触れない**（REQ-GPU-06）。停止時は確定の吐き切りより先に止める（REQ-TRX-LIVE-11） |
 | ハードウェアミュート通知 | `AudioEndpointVolume.OnVolumeNotification`（OS コールバック） | OS 側のミュート変更をアプリへ通知（非 UI スレッド） |
 | `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `SettingsViewModel.TryLoadWhisperModel` / `FileTranscriptionViewModel.RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
 | sherpa-onnx ネイティブ推論 | `SpeakerDiarizationService.Diarize`（上記 `Task.Run` ワーカーから同期的に呼ぶ） | 話者ダイアライゼーション。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`lock` で 1 度に 1 呼び出しへ直列化する（REQ-TRX-DIA-10） |
+
+**GPU での推論は `WhisperTranscription` の 1 本の列で行う。** ggml の Vulkan バックエンドは、同じ GPU に別スレッドの別コンテキストから同時に推論すると落ちる（ggml-org/ggml#1087）。速報（`ProvisionalTranscription`）は CPU コンテキストなので並列に動かしてよい（ADR-0007 案 B。T182 の M3 で初回起動を含めて確かめた）。ファイル文字起こし（`Task.Run` ワーカー）は録音中に実行できない（REQ-REC-09）ので、ライブの確定パスと GPU を取り合わない。
 
 UI スレッド以外からプロパティを更新する箇所（`MicMuteChangedExternally`、`TranscriptionService.Error`/`RuntimeInfo`、`AudioCaptureService.RecordingError`）はすべて `Application.Current.Dispatcher.BeginInvoke` を介して UI スレッドに戻す（[CLAUDE.md](../../CLAUDE.md) の開発ルールに準拠）。
 
@@ -192,11 +195,29 @@ flowchart LR
 flowchart LR
     MicBuf2["マイクコールバック"] -->|"AddSamples(Mic)"| SrcMic["SourceState (Mic)\nダウンミックス+LPF+リサンプル"]
     LoopBuf2["スピーカーコールバック"] -->|"AddSamples(Speaker)"| SrcSpk["SourceState (Speaker)"]
-    SrcMic -->|20秒分たまったら| Whisper1["WhisperProcessor"]
-    SrcSpk -->|20秒分たまったら| Whisper2["WhisperProcessor"]
+    SrcMic -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper1["WhisperProcessor"]
+    SrcSpk -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper2["WhisperProcessor"]
     Whisper1 --> Txt["*.txt (同名, 追記)"]
     Whisper2 --> Txt
 ```
+
+#### 5.2.1 速報（ADR-0007 案 B）
+
+確定パス（上の図）は変えずに、まだ確定していない音声を別スレッドで粗く文字起こしして字幕帯に出す。速報はファイルに書かない。
+
+```mermaid
+flowchart LR
+    SrcSpk3["SourceState.Provisional (Speaker)\n確定パスとは別の写し"] -->|"既定 1 秒ごと・句単位\n（0.6 秒の無音か 8 秒で閉じる）"| Prov["ProvisionalTranscription スレッド\n速報用モデル（CPU・4 スレッド）"]
+    Prov -->|"ProvisionalTranscribed\n（音源・句の絶対位置・セッション ID）"| Band["字幕帯\n（最大 4 件）"]
+    Final["WhisperTranscription スレッド\n（確定パス）"] -->|"LiveChunkCompleted\n（音源・終端の絶対位置・セッション ID）"| Band
+    Final --> Txt3["*.txt（確定の行だけ）"]
+```
+
+- 速報を出す音源の既定はスピーカーだけ（REQ-TRX-LIVE-15。両方・マイクだけも選べる）。
+- 速報用の音声は `AddSamples` が確定パスのバッファへ積むのと同時に、別の写しへ積む。確定パスはチャンクを取り出すとバッファから消すため、同じバッファは使えない。写しは今の句の先頭より前を捨てる。
+- 確定完了の通知の位置より前の音声には速報を出さない（REQ-TRX-LIVE-15）。
+- 確定完了の通知（REQ-TRX-LIVE-18）が届いたら、その音源のその位置までの速報を字幕帯から消す（REQ-LIVEVIEW-10）。
+- 確定パスには用語集と直前の確定文をプロンプトとして渡す（REQ-TRX-LIVE-19）。直前の確定文は確定パスのワーカーだけが持つ（直近 50 行）。確定行の行頭の付け札は落とす（REQ-TRX-LIVE-20）。
 
 ### 5.3 文字起こし（ファイル・話者ダイアライゼーション有効時）
 
@@ -233,6 +254,7 @@ flowchart TB
 | アプリ設定 | `%APPDATA%\AudioCaptureApp\settings.json` | `SettingsService` が JSON で読み書き |
 | 録音ファイル | `<OutputFolder>\yyyyMMdd_HHmmss.mp3`（既定 `%USERPROFILE%\Documents\AudioCapture`）。メタデータの会議名があれば停止後に `yyyyMMdd_HHmmss_会議名.mp3` へ改名 | `AudioCaptureService.StartRecording` / `RenameSessionFiles` |
 | ライブ文字起こし結果 | 録音ファイルと同名の `.txt` | `TranscriptionService.StartSession` |
+| 文字起こしの計測ログ（既定は書かない） | `%APPDATA%\AudioCaptureApp\logs\metrics_yyyyMMdd_HHmmss.tsv`（録音ごと。数値だけで本文は書かない。REQ-CFG-12） | `TranscriptionMetricsLog`（`TranscriptionMetricsLogEnabled` が `true` のときだけ） |
 | ファイル文字起こし結果 | `{入力ファイル名}[_会議名].transcript.txt` | `TranscriptionService.BuildTranscriptPath` |
 | 録音のメタデータ | 音声（改名後）または `.transcript.txt` と同名の `.json`（`会議名` / `実施日時` / `参加者`）。ファイル文字起こしでは入力ファイルと同じ stem の `.json` を読み込み、既存の `.json` は更新する（REQ-TRX-FILE-19） | `RecordingMetadataFile.Write` / `TryRead` / `Update` |
 | Whisper モデル | 既定 `%APPDATA%\AudioCaptureApp\models\ggml-small.bin`（ユーザー変更可）。登録一覧は `settings.json` の `WhisperModelList` | `AppSettings.WhisperModelPath` / `WhisperModelList` |

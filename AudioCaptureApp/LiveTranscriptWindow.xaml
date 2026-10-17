@@ -15,14 +15,43 @@
         REQ-LIVEVIEW-02: 9pt。WPF の FontSize は既定で DIP（1/96 インチ）だが、
         単位付きで書けるので意図がそのまま読める形にしている。
     -->
-    <ListBox x:Name="LinesList" Margin="12" FontSize="9pt"
-             ItemsSource="{Binding LiveTranscriptLines}"
-             HorizontalContentAlignment="Stretch"
-             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-        <ListBox.ItemTemplate>
-            <DataTemplate>
-                <TextBlock Text="{Binding}" TextWrapping="Wrap" VerticalAlignment="Top"/>
-            </DataTemplate>
-        </ListBox.ItemTemplate>
-    </ListBox>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ListBox x:Name="LinesList" Grid.Row="0" FontSize="9pt"
+                 ItemsSource="{Binding LiveTranscriptLines}"
+                 HorizontalContentAlignment="Stretch"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding}" TextWrapping="Wrap" VerticalAlignment="Top"/>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <!--
+            REQ-LIVEVIEW-10: 字幕帯。速報（確定前の粗い文字）を最大 4 件、薄い斜体で出す。
+            高さは固定（NFR-09。4 行分）。項目は折り返し、下端に揃えて、はみ出した古い行を上で切る（最新の文字が常に見える）。
+            下端に揃えるのに VerticalAlignment="Bottom" は使えない — 中身が枠より高いと WPF は上から並べ、最新の行が下で切れる。
+            Canvas の下端（Canvas.Bottom）に貼り付けて上へ伸ばし、幅だけ枠に合わせて折り返させる。
+            行一覧の中では差し替えない（REQ-LIVEVIEW-04 / 06 / 07 / 09 と衝突するため）。
+        -->
+        <Border Grid.Row="1" Height="68" Margin="0,8,0,0" Padding="4,4,4,2"
+                BorderBrush="{StaticResource Brush.CardBorder}" BorderThickness="0,1,0,0">
+            <Canvas x:Name="ProvisionalBand" ClipToBounds="True">
+                <ItemsControl Canvas.Bottom="0" Width="{Binding ActualWidth, ElementName=ProvisionalBand}"
+                              ItemsSource="{Binding ProvisionalLines}"
+                              FontSize="9pt" FontStyle="Italic" Foreground="{StaticResource Brush.TextMuted}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" TextWrapping="Wrap"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Canvas>
+        </Border>
+    </Grid>
 </Window>

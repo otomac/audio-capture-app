@@ -67,12 +67,18 @@ sequenceDiagram
     opt TranscriptionEnabled かつ モデルロード済み
         ACS->>TS: RegisterSource(Mic, ...) / RegisterSource(Speaker, ...)
         ACS->>TS: StartSession(filePath, now)
+        TS->>TS: セッション ID を採番（REQ-TRX-LIVE-18）
+        opt 速報が有効 かつ 速報用モデルが読み込み済み かつ 対象の音源あり（REQ-TRX-LIVE-15）
+            TS->>TS: 対象の音源に写しを用意 / ProvisionalTranscription スレッド起動（BelowNormal）
+        end
         TS->>TS: WhisperTranscription スレッド起動
     end
 
     ACS->>ACS: _micBuffer.ClearBuffer() / _loopbackBuffer.ClearBuffer()
     ACS->>ACS: AudioMixerWriter スレッド起動 (WriterLoop)
     ACS-->>VM: 開始時刻 (DateTime)
+    VM->>VM: LiveTranscript.Clear()（行一覧・字幕帯。REQ-LIVEVIEW-08）
+    VM->>VM: LiveTranscript.BeginProvisionalSession(TS.CurrentSessionId)（このセッションの速報だけを受け付ける）
     VM->>VM: IsRecording = true / ElapsedTime 更新開始 (_clockTimer)
 
     loop 20ms 周期（録音中）
@@ -99,14 +105,30 @@ sequenceDiagram
             ACS->>ACS: BytesToFloats(buffer)
             ACS->>TS: AddSamples(Mic, floats, count)
             TS->>TS: ダウンミックス + LPF + リサンプル(16kHz) → Pcm16kBuffer に蓄積
+            opt この音源が速報の対象（REQ-TRX-LIVE-15。既定はスピーカーだけ）
+                TS->>TS: 同じ 16kHz の音声を速報用の写しへコピー（判定はしない）
+            end
         end
     end
 
+    Note over TS: 別スレッド (ProvisionalTranscription・CPU) が既定 1 秒毎に回る（REQ-TRX-LIVE-15〜17）
+    TS->>TS: 写しの新しい 100ms 窓を有声判定 → ProvisionalPhrasePlanner.Plan()
+    loop 依頼（句）ごと
+        TS->>TS: 句の音声（末尾の無音を除く）を速報用モデルへ（audio_ctx は句の長さから）
+        TS->>TS: SanitizeProvisionalText()（空・定型の幻聴・繰り返しは捨てる）
+        TS-->>LTVM: ProvisionalTranscribed（セッション ID・音源・句 ID・絶対位置・本文）
+    end
+    TS->>TS: 次の間隔 = 使った時間 ÷ duty の上限（1〜4 秒）
+
     Note over TS: 別スレッド (WhisperTranscription) が1秒毎にポーリング
-    TS->>TS: 確定条件を満たしたソースを検出（20秒到達 / 末尾に2秒の無音 / 供給が5秒途絶）
+    TS->>TS: 確定条件を満たしたソースを検出（10秒到達（遅れているときは20秒） / 末尾に2秒の無音 / 供給が5秒途絶）
     TS->>TS: SplitVoicedRegions() で有声区間に分割
     loop 有声区間ごと
+        opt 文脈プロンプトが有効で、用語集か直前の確定文がある（REQ-TRX-LIVE-19）
+            TS->>TS: BuildContextPrompt()（用語集＋両音源の直前の確定文の末尾 100 文字）→ プロンプト付きの processor を作る
+        end
         TS->>TS: WhisperProcessor.ProcessAsync(region)
+        TS->>TS: 行頭の付け札を落とす（REQ-TRX-LIVE-20。空になったセグメントは出さない）→ 直前の確定文に足す
         TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形して results に追加（区間の開始オフセットを加算）
         TS-->>LTVM: SegmentTranscribed イベント（セグメント毎・文字起こしワーカースレッドから発火）
         LTVM->>LTVM: Dispatcher.BeginInvoke → LiveTranscriptLines に追加（100 行超は先頭から破棄）
@@ -114,6 +136,8 @@ sequenceDiagram
     end
     Note over TS: results は区間ループの外で宣言する。<br/>キャンセル・例外でループを抜けても次の追記は必ず通る
     TS->>TS: AppendTranscriptLines(outputPath, results)（results が空でなければ）
+    TS-->>LTVM: LiveChunkCompleted（セッション ID・音源・チャンク終端の絶対位置。0 行・キャンセル・例外でも。REQ-TRX-LIVE-18）
+    TS->>TS: 速報用の写しへ確定位置を渡す（そこより前には速報を出さない）
 ```
 
 ## 4. 録音停止
@@ -133,8 +157,9 @@ sequenceDiagram
     ACS->>ACS: _isWriting = false
     ACS->>ACS: WriterThread の終了を待機 (最大5秒)
     ACS->>TS: StopSession()
+    TS->>TS: 速報を先に止める（キャンセル → 最大 10 秒 join。抜けなければ速報用 factory を破棄しない）
     TS->>TS: 処理中のチャンクを最後の区間まで処理（停止要求では途中で抜けない。T184）
-    TS->>TS: 残りバッファ(1秒以上)を処理
+    TS->>TS: 残りバッファ(0.2秒以上。REQ-TRX-LIVE-05)を処理
     TS->>TS: スレッド終了待機（滞留分を吐き切るまで。上限なし）<br/>「打ち切り」が要求されたらキャンセルして10秒待機
     Note over VM: 待っている間、メーターのタイマーが PendingSeconds を読み<br/>「停止処理中... 文字起こしの残り N 秒分」を1秒ごとに出す
     TS-->>ACS: 完了
@@ -149,6 +174,7 @@ sequenceDiagram
     ACS-->>VM: 完了
 
     VM->>VM: IsRecording = false / IsStopping = false
+    VM->>VM: LiveTranscript.EndProvisionalSession()（字幕帯を空にする。REQ-TRX-LIVE-11）
     VM->>VM: CurrentSession を参照し StatusMessage 更新（保存完了 / 文字起こしファイルの有無）
 
     opt CurrentSession != null（REQ-REC-13）

@@ -57,6 +57,14 @@ public sealed record SilenceCutOptions
 /// <summary>チャンク内の有声区間。Start はチャンク先頭からのサンプル位置。</summary>
 public readonly record struct VoicedRegion(int Start, int Length);
 
+/// <summary>
+/// 確定パスがチャンクを 1 つ処理し終えたことの通知（REQ-TRX-LIVE-18）。
+/// </summary>
+/// <param name="SessionId">録音ごとのセッション ID（<see cref="TranscriptionService.CurrentSessionId"/>）。</param>
+/// <param name="Source">音源。</param>
+/// <param name="EndPosition">チャンク終端の絶対位置（音源ごとの 16kHz 換算の累計サンプル数）。ここまでの音声は確定済み。</param>
+public readonly record struct LiveChunkCompletion(long SessionId, AudioSourceType Source, long EndPosition);
+
 /// <summary>文字起こしの言語の選択肢 1 件（REQ-TRX-10）。</summary>
 /// <param name="Code">Whisper へ渡す言語コード。<c>auto</c> は自動判定を表す。</param>
 /// <param name="DisplayName">ドロップダウンに出す表示名。</param>
@@ -188,15 +196,23 @@ public sealed record FileTranscriptionResult(FileTranscriptionOutcome Outcome, s
     public bool Success => Outcome == FileTranscriptionOutcome.Completed;
 }
 
-public class TranscriptionService : IDisposable
+public partial class TranscriptionService : IDisposable
 {
     /// <summary>
     /// Whisper へ渡す 1 チャンク。<paramref name="StartElapsed"/> はセッション開始からの
     /// 経過時間で、チャンク先頭サンプルが録音された時刻を指す。
     /// </summary>
-    private sealed record PendingChunk(float[] Samples, TimeSpan StartElapsed);
+    /// <param name="StartPosition">
+    /// チャンク先頭サンプルの絶対位置（音源ごとの 16kHz 換算の累計サンプル数。REQ-TRX-LIVE-18）。
+    /// 速報と確定の対応づけに使う。時刻ではないので、供給の途切れでは進まない。
+    /// </param>
+    internal sealed record PendingChunk(float[] Samples, TimeSpan StartElapsed, long StartPosition = 0)
+    {
+        /// <summary>チャンク終端（最後のサンプルの次）の絶対位置。</summary>
+        public long EndPosition => StartPosition + Samples.Length;
+    }
 
-    private class SourceState
+    internal sealed class SourceState
     {
         public readonly List<float> Pcm16kBuffer = new(BufferThresholdSamples + TargetRate);
         public readonly object BufferLock = new();
@@ -210,6 +226,18 @@ public class TranscriptionService : IDisposable
         /// チャンク先頭時刻はここからバッファ長を引いて求められる。
         /// </summary>
         public TimeSpan BufferEndElapsed;
+
+        /// <summary>
+        /// <see cref="Pcm16kBuffer"/> の先頭サンプルの絶対位置（REQ-TRX-LIVE-18）。
+        /// バッファからチャンクを取り出すたびに、取り出した長さだけ進める。
+        /// </summary>
+        public long BufferStartPosition;
+
+        /// <summary>この状態がどの音源のものか（確定完了の通知に載せる）。</summary>
+        public AudioSourceType Type;
+
+        /// <summary>速報の写し（REQ-TRX-LIVE-15）。この音源が速報の対象でなければ <c>null</c>。録音開始時に決まる。</summary>
+        public ProvisionalSource? Provisional;
 
         public int SourceRate;
         public int SourceChannels;
@@ -253,6 +281,17 @@ public class TranscriptionService : IDisposable
 
     private const int TargetRate = 16000;
     private const int BufferThresholdSamples = TargetRate * 20; // 20秒分
+
+    /// <summary>
+    /// ライブ文字起こしで、遅れていないときのチャンクの上限（10 秒分。REQ-TRX-LIVE-10、T190）。
+    /// 遅れているときは <see cref="BufferThresholdSamples"/>（20 秒分）に戻す。
+    /// </summary>
+    /// <remarks>
+    /// 話し続けていると末尾無音の契機（REQ-TRX-LIVE-13）が来ないため、確定はこの上限ごとにしか出ない。
+    /// 20 秒では遅すぎるので 10 秒にする。1 回の呼び出しが短いほど割高になる（音声 1 秒あたり 20 秒入力 0.181 秒 /
+    /// 5 秒入力 0.381 秒）ので、遅れているときは処理能力を優先して 20 秒に戻す。
+    /// </remarks>
+    internal const int LiveChunkSamples = TargetRate * 10;
 
     /// <summary>
     /// 音声の供給が途切れたと判定する閾値。これを超えるギャップを検出したら、
@@ -319,6 +358,28 @@ public class TranscriptionService : IDisposable
     public event Action<string>? Error;
     public event Action<string>? SegmentTranscribed;
     public event Action<string>? RuntimeInfo;
+
+    /// <summary>
+    /// 確定パスがチャンクを 1 つ処理し終えた（REQ-TRX-LIVE-18）。0 行・キャンセル・例外で終わったときも発火する。
+    /// **文字起こしワーカースレッドから発火する。** 受け手は UI に触れる前に Dispatcher を経由すること（NFR-01）。
+    /// </summary>
+    public event Action<LiveChunkCompletion>? LiveChunkCompleted;
+
+    /// <summary>
+    /// 録音ごとのセッション ID（REQ-TRX-LIVE-18）。<see cref="StartSession"/> のたびに 1 つ増える。
+    /// 前のセッションの通知を受け手が捨てるために使う。
+    /// </summary>
+    public long CurrentSessionId => Interlocked.Read(ref _sessionId);
+
+    private long _sessionId;
+
+    /// <summary>
+    /// 計測ログを書くか（REQ-CFG-12）。MainViewModel が設定から反映する。読まれるのは <see cref="StartSession"/> だけ。
+    /// </summary>
+    public bool MetricsLogEnabled { get; set; }
+
+    /// <summary>録音中だけ開いている計測ログ。無効なら <c>null</c>。</summary>
+    private TranscriptionMetricsLog? _metrics;
 
     public bool IsModelLoaded => _factory != null;
 
@@ -482,9 +543,11 @@ public class TranscriptionService : IDisposable
             RuntimeOptions.RuntimeLibraryOrder = GpuPreferredOrder;
 
             var observer = new NativeLoadObserver();
+            bool flash = ShouldUseFlashAttention(UseFlashAttentionOnGpu, useGpu);
             using (LogProvider.AddLogger(observer.OnLog))
             {
-                _factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = useGpu });
+                _factory = WhisperFactory.FromPath(
+                    modelPath, new WhisperFactoryOptions { UseGpu = useGpu, UseFlashAttention = flash });
 
                 // FromPath はモデルの読み込みをその場で行うが、失敗しても例外を投げずに
                 // ファクトリを返す。失敗が表面化するのは最初の CreateBuilder() なので、
@@ -502,6 +565,17 @@ public class TranscriptionService : IDisposable
             var gpuAvailable = IsGpuLibrary(loaded) && observer.HasGpuBackend != false;
             var gpuInUse = observer.GpuInUse ?? (useGpu && gpuAvailable);
 
+            // REQ-GPU-07: GPU を頼んだのに重みが CPU に載ったら、flash attention 無しで読み込み直す（CPU では遅くなるため）
+            if (NeedsReloadWithoutFlash(flash, observer.GpuInUse))
+            {
+                // 先に手放す（読み込み直しが例外になったとき、下の catch が破棄済みの factory を二重に破棄しないように）
+                var withFlash = _factory;
+                _factory = null;
+                withFlash.Dispose();
+                _factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = useGpu });
+                _ = _factory.CreateBuilder();
+            }
+
             RuntimeInfo?.Invoke(DescribeRuntime(loaded, gpuInUse));
             return (true, gpuAvailable);
         }
@@ -516,6 +590,24 @@ public class TranscriptionService : IDisposable
         }
 #pragma warning restore CA1031
     }
+
+    /// <summary>
+    /// GPU で動くときに flash attention を使うか（REQ-GPU-07 / REQ-CFG-14）。MainViewModel が設定から反映する。
+    /// 読まれるのはモデルの読み込み（<see cref="LoadModel"/> とファイル文字起こしの 2 つ目のモデル）のときだけ。
+    /// </summary>
+    public bool UseFlashAttentionOnGpu { get; set; } = true;
+
+    /// <summary>
+    /// flash attention を使うか（REQ-GPU-07）。有効で、かつ GPU で読み込むときだけ使う。
+    /// CPU では遅くなる（small で +23%。T191 の実測）。
+    /// </summary>
+    internal static bool ShouldUseFlashAttention(bool enabled, bool useGpu) => enabled && useGpu;
+
+    /// <summary>
+    /// flash attention を使って読み込んだのに、重みが CPU に載ったか（REQ-GPU-07）。そのときは使わずに読み込み直す。
+    /// 載った先が分からない（ネイティブログを解析できなかった）ときは読み込み直さない。
+    /// </summary>
+    internal static bool NeedsReloadWithoutFlash(bool flashUsed, bool? gpuInUse) => flashUsed && gpuInUse == false;
 
     /// <summary>
     /// 読み込み済みのモデルを破棄して「未読み込み」へ戻す（REQ-MODELWIN-04）。
@@ -536,6 +628,7 @@ public class TranscriptionService : IDisposable
 
         var state = new SourceState
         {
+            Type = type,
             SourceRate = sourceRate,
             SourceChannels = sourceChannels,
             Label = label,
@@ -569,12 +662,22 @@ public class TranscriptionService : IDisposable
                 state.Pcm16kBuffer.Clear();
                 state.Ready.Clear();
                 state.BufferEndElapsed = TimeSpan.Zero;
+                state.BufferStartPosition = 0;
             }
             state.ResamplePos = 0;
             state.LpfPrev = 0f;
         }
 
+        Interlocked.Increment(ref _sessionId);
+        _metrics = MetricsLogEnabled
+            ? TranscriptionMetricsLog.Open(TranscriptionMetricsLog.PathFor(startTime), message => Error?.Invoke(message))
+            : null;
+
         _sessionClock.Restart();
+        // 速報（REQ-TRX-LIVE-15）は確定パスより先に用意する。AddSamples が写しへ積み始めるのは _isRunning の後
+        StartProvisional(CurrentSessionId);
+        // 文脈プロンプト（REQ-TRX-LIVE-19）。ワーカーを起こす前に用意する
+        PrepareContext();
         _cts = new CancellationTokenSource();
         _abortRequested = false;
         _isRunning = true;
@@ -600,10 +703,14 @@ public class TranscriptionService : IDisposable
         {
             if (ShouldSplitOnGap(audioStart, state.BufferEndElapsed, state.Pcm16kBuffer.Count, GapThreshold))
             {
-                // ここまでを 1 チャンクとして確定し、以降は新しい基準時刻で積み直す。
-                state.Ready.Enqueue(new PendingChunk(
-                    state.Pcm16kBuffer.ToArray(),
-                    ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count)));
+                // ここまでを確定し、以降は新しい基準時刻で積み直す。遅れているとバッファが
+                // 数分分に膨らんでいることがあるため、20 秒分ずつに分けて積む（REQ-TRX-LIVE-10、T183）。
+                var bufferStart = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
+                foreach (var chunk in SplitAtChunkLimit(state.Pcm16kBuffer, bufferStart, state.BufferStartPosition))
+                {
+                    state.Ready.Enqueue(chunk);
+                }
+                state.BufferStartPosition += state.Pcm16kBuffer.Count;
                 state.Pcm16kBuffer.Clear();
 
                 // 不連続な音声を地続きとして扱わないよう、リサンプラと LPF の状態も切る
@@ -613,11 +720,18 @@ public class TranscriptionService : IDisposable
 
             double resamplePos = state.ResamplePos;
             float lpfPrev = state.LpfPrev;
+            int appendedFrom = state.Pcm16kBuffer.Count;
             DownmixResampleAppend(
                 samples, sampleCount, state.SourceChannels, state.SourceRate,
                 state.LpfAlpha, ref resamplePos, ref lpfPrev, state.Pcm16kBuffer);
             state.ResamplePos = resamplePos;
             state.LpfPrev = lpfPrev;
+
+            // 速報の対象なら、同じ音声を写しへ（確定パスは取り出すとバッファから消すため。T186 D2）
+            if (state.Provisional is { } provisional)
+            {
+                AppendProvisionalCopy(provisional, state.Pcm16kBuffer, appendedFrom);
+            }
 
             state.BufferEndElapsed = nowElapsed;
         }
@@ -630,6 +744,30 @@ public class TranscriptionService : IDisposable
     internal static bool ShouldSplitOnGap(
         TimeSpan audioStart, TimeSpan bufferEndElapsed, int bufferedSampleCount, TimeSpan threshold)
         => bufferedSampleCount > 0 && audioStart - bufferEndElapsed > threshold;
+
+    /// <summary>
+    /// ギャップで確定するバッファを、先頭から <see cref="BufferThresholdSamples"/>（20 秒分）ずつのチャンクに分ける。
+    /// </summary>
+    /// <param name="buffer">16kHz モノラルのバッファ。中にギャップは無い（<see cref="ShouldSplitOnGap"/> が保証する）。</param>
+    /// <param name="bufferStart">バッファ先頭サンプルの経過時間。</param>
+    /// <param name="startPosition">バッファ先頭サンプルの絶対位置（REQ-TRX-LIVE-18）。</param>
+    /// <remarks>
+    /// バッファ内は地続きなので、各チャンクの先頭時刻はバッファ先頭の時刻にチャンク内の位置を足せば求まる
+    /// （<see cref="RegionStart"/> と同じ式）。20 秒分以下なら、従来どおりバッファ全体を 1 チャンクにする。
+    /// </remarks>
+    internal static List<PendingChunk> SplitAtChunkLimit(List<float> buffer, TimeSpan bufferStart, long startPosition = 0)
+    {
+        var chunks = new List<PendingChunk>();
+        for (int offset = 0; offset < buffer.Count; offset += BufferThresholdSamples)
+        {
+            int count = Math.Min(BufferThresholdSamples, buffer.Count - offset);
+            var samples = new float[count];
+            buffer.CopyTo(offset, samples, 0, count);
+            chunks.Add(new PendingChunk(samples, RegionStart(bufferStart, offset), startPosition + offset));
+        }
+
+        return chunks;
+    }
 
     /// <summary>
     /// バッファ先頭サンプルの経過時間を、末尾の経過時間とバッファ長から逆算する。
@@ -738,7 +876,8 @@ public class TranscriptionService : IDisposable
             }
 
             progress?.Report(new FileTranscriptionProgress(LoadModelPhase, TimeSpan.Zero, TimeSpan.Zero));
-            var (loaded, loadError) = TryCreateFactory(modelPath, options.UseGpu);
+            var (loaded, loadError) = TryCreateFactory(
+                modelPath, options.UseGpu, ShouldUseFlashAttention(UseFlashAttentionOnGpu, options.UseGpu));
             if (loaded == null)
             {
                 return new FileTranscriptionResult(FileTranscriptionOutcome.ModelLoadFailed, loadError);
@@ -816,8 +955,10 @@ public class TranscriptionService : IDisposable
     /// ファイル文字起こし用の 2 つ目の factory を作る（REQ-TRX-FILE-17）。
     /// ライブ用の <see cref="LoadModel"/> と同じく <c>CreateBuilder()</c> を 1 度呼んで失敗を確定させる（T122）。
     /// </summary>
+    /// <param name="flashAttention">flash attention を使うか（REQ-GPU-07。GPU で読み込むときだけ <c>true</c> にする）。</param>
     /// <returns>成功なら factory、失敗なら理由。</returns>
-    private static (WhisperFactory? Factory, string? Error) TryCreateFactory(string modelPath, bool useGpu)
+    private static (WhisperFactory? Factory, string? Error) TryCreateFactory(
+        string modelPath, bool useGpu, bool flashAttention = false)
     {
         if (!File.Exists(modelPath))
         {
@@ -827,7 +968,8 @@ public class TranscriptionService : IDisposable
         WhisperFactory? factory = null;
         try
         {
-            factory = WhisperFactory.FromPath(modelPath, new WhisperFactoryOptions { UseGpu = useGpu });
+            factory = WhisperFactory.FromPath(
+                modelPath, new WhisperFactoryOptions { UseGpu = useGpu, UseFlashAttention = flashAttention });
             _ = factory.CreateBuilder();
             return (factory, null);
         }
@@ -1069,7 +1211,8 @@ public class TranscriptionService : IDisposable
 
                 await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
                 {
-                    var text = segment.Text?.Trim();
+                    // 行頭の話者名の付け札は落とす（REQ-TRX-LIVE-20。話者欄と食い違う名前が並ぶため。T194）
+                    var text = StripSpeakerTag(segment.Text?.Trim() ?? "");
                     if (string.IsNullOrEmpty(text))
                     {
                         continue;
@@ -1385,7 +1528,8 @@ public class TranscriptionService : IDisposable
 
             await foreach (var segment in processor.ProcessAsync(regionSamples, ct).ConfigureAwait(false))
             {
-                var text = segment.Text?.Trim();
+                // 行頭の話者名の付け札は落とす（REQ-TRX-LIVE-20。T194）
+                var text = StripSpeakerTag(segment.Text?.Trim() ?? "");
                 if (string.IsNullOrEmpty(text))
                 {
                     continue;
@@ -1435,7 +1579,7 @@ public class TranscriptionService : IDisposable
                 // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
                 PendingChunk? chunk;
                 while (_isRunning && !token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut, PendingBufferedSamples())) != null)
                 {
                     // 停止要求が来ても、取り出したチャンクは最後の区間まで処理する（T184）。
                     // バッファからは既に消えているので、途中で抜けると残りの区間を捨てることになる。
@@ -1451,7 +1595,7 @@ public class TranscriptionService : IDisposable
             {
                 PendingChunk? chunk;
                 while (!token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut)) != null)
+                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut, PendingBufferedSamples())) != null)
                 {
                     // 排出処理。打ち切りたいときは token をキャンセルする（StopSession の「打ち切り」）。
                     ProcessChunkCounted(chunk, state, token);
@@ -1469,8 +1613,10 @@ public class TranscriptionService : IDisposable
                     {
                         tail = new PendingChunk(
                             state.Pcm16kBuffer.ToArray(),
-                            ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count));
+                            ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count),
+                            state.BufferStartPosition);
                     }
+                    state.BufferStartPosition += state.Pcm16kBuffer.Count;
                     state.Pcm16kBuffer.Clear();
                 }
 
@@ -1488,10 +1634,12 @@ public class TranscriptionService : IDisposable
     /// <summary><see cref="ProcessChunk"/> を、処理中のサンプル数を数えながら呼ぶ。</summary>
     private void ProcessChunkCounted(PendingChunk chunk, SourceState state, CancellationToken token)
     {
+        // 計測ログ用（REQ-CFG-12）。取り出した直後の滞留で、TakeNextChunk と同じ判定をする
+        bool behind = PendingBufferedSamples() >= BacklogSuppressEndpointingSamples;
         Interlocked.Exchange(ref _inFlightSamples, chunk.Samples.Length);
         try
         {
-            ProcessChunk(chunk, state, token);
+            ProcessChunk(chunk, state, behind, token);
         }
         finally
         {
@@ -1503,8 +1651,18 @@ public class TranscriptionService : IDisposable
     /// 確定済みチャンクを 1 つ取り出す。無ければバッファから 1 チャンク切り出す。
     /// どちらも無ければ <c>null</c>。
     /// </summary>
-    private static PendingChunk? TakeNextChunk(
-        SourceState state, TimeSpan nowElapsed, SilenceCutOptions options)
+    /// <param name="pendingSamples">
+    /// 全ソースの確定待ちの合計（<see cref="PendingBufferedSamples"/>）。遅れているかの判定に使う（REQ-TRX-LIVE-13）。
+    /// </param>
+    /// <remarks>
+    /// 遅れの判定に <paramref name="state"/> 自身の分だけを使ってはいけない（T183）。確定済みチャンクは
+    /// 先に返すので判定時には残っておらず、未確定バッファも上限（10 秒分または 20 秒分）以上なら先に上限で切り出すため、
+    /// 判定時の自ソース分は常に 20 秒未満で、60 秒の閾値に届かない。
+    /// <paramref name="pendingSamples"/> はこの錠の外で数えて渡す。中で数えると
+    /// <see cref="PendingSeconds"/>（<c>_sourcesLock</c> → 各ソースの錠）と錠の順序が逆になる。
+    /// </remarks>
+    internal static PendingChunk? TakeNextChunk(
+        SourceState state, TimeSpan nowElapsed, SilenceCutOptions options, long pendingSamples)
     {
         lock (state.BufferLock)
         {
@@ -1521,19 +1679,13 @@ public class TranscriptionService : IDisposable
             // REQ-TRX-LIVE-13: 遅れているときは末尾無音での早期確定を使わない。
             // 20 秒に満たないチャンクは 1 回あたりの効率が悪く（実測: 音声 1 秒あたり
             // 20 秒入力 0.181 秒 / 5 秒入力 0.381 秒）、遅れをさらに広げるため。
-            long backlog = 0;
-            foreach (var ready in state.Ready)
-            {
-                backlog += ready.Samples.Length;
-            }
-
             var start = ChunkStartElapsed(state.BufferEndElapsed, state.Pcm16kBuffer.Count);
             int take = ChunkTakeCount(
                 state.Pcm16kBuffer.Count,
                 nowElapsed - state.BufferEndElapsed,
                 TrailingSilenceSamples(state.Pcm16kBuffer, options.RmsThreshold),
                 SecondsToSamples(options.MergeGapSeconds),
-                backlog >= BacklogSuppressEndpointingSamples);
+                pendingSamples >= BacklogSuppressEndpointingSamples);
             if (take == 0)
             {
                 return null;
@@ -1542,7 +1694,9 @@ public class TranscriptionService : IDisposable
             var samples = new float[take];
             state.Pcm16kBuffer.CopyTo(0, samples, 0, take);
             state.Pcm16kBuffer.RemoveRange(0, take);
-            return new PendingChunk(samples, start);
+            var chunk = new PendingChunk(samples, start, state.BufferStartPosition);
+            state.BufferStartPosition += take;
+            return chunk;
         }
     }
 
@@ -1597,18 +1751,26 @@ public class TranscriptionService : IDisposable
     /// （<see cref="TrailingSilenceSamples"/> の戻り値）。
     /// </param>
     /// <param name="endpointSilenceSamples">発話が終わったとみなす末尾無音の長さ。</param>
+    /// <param name="behind">
+    /// 文字起こしが遅れているか（全ソースの滞留が <see cref="BacklogSuppressEndpointingSamples"/> 以上。REQ-TRX-LIVE-13）。
+    /// </param>
     /// <remarks>
     /// 契機は 3 つあり、この優先順で判定する。
     /// <list type="number">
-    /// <item>20 秒分たまった → 20 秒分だけ切り出す（1 回の Whisper 呼び出しを
-    /// 際限なく長くしないための上限。T117）。</item>
+    /// <item>上限までたまった → 上限の分だけ切り出す（1 回の Whisper 呼び出しを
+    /// 際限なく長くしないための上限。T117）。上限は遅れていなければ <see cref="LiveChunkSamples"/>（10 秒分）、
+    /// 遅れていれば <see cref="BufferThresholdSamples"/>（20 秒分。T190）。</item>
     /// <item>末尾に <paramref name="endpointSilenceSamples"/> 以上の無音が積まれ、かつ
     /// バッファ内に有声窓がある → 発話が終わったとみなしてバッファ全部を切り出す（T129）。</item>
     /// <item>供給が <see cref="StaleSupplyIdle"/> 以上途絶えている → バッファ全部を切り出す（T120）。</item>
     /// </list>
     /// <para>
+    /// <paramref name="behind"/>（遅れている）のときは、1 の上限を 20 秒分に戻し、2 を使わない（REQ-TRX-LIVE-13）。
+    /// どちらも 1 回あたりの効率を優先するためである。
+    /// </para>
+    /// <para>
     /// 2 が無いと、マイクは無音でも WASAPI がサンプルを供給し続けるため
-    /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が 20 秒固定になる。
+    /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が上限で固定になる。
     /// 保持時間に <see cref="SilenceCutOptions.MergeGapSeconds"/> と同じ値を渡すのは、
     /// それが <see cref="SplitVoicedRegions"/> で「発話の切れ目」を定義している値そのものだからで、
     /// 揃えれば確定チャンクは有声区間ちょうど 1 個を含む形になり、Whisper の呼び出し回数は
@@ -1630,17 +1792,19 @@ public class TranscriptionService : IDisposable
         TimeSpan supplyIdle,
         int? trailingSilenceSamples,
         int endpointSilenceSamples,
-        bool suppressEndpointing = false)
+        bool behind = false)
     {
-        if (bufferedSampleCount >= BufferThresholdSamples)
+        // REQ-TRX-LIVE-10: 遅れていなければ 10 秒、遅れていれば 20 秒で切る（T190）。
+        int limit = behind ? BufferThresholdSamples : LiveChunkSamples;
+        if (bufferedSampleCount >= limit)
         {
-            return BufferThresholdSamples;
+            return limit;
         }
 
         // REQ-TRX-LIVE-13: 遅れているときは②を使わない。20 秒たまるまで待って効率を優先する。
         // ③（供給の途絶）は残す — 供給が止まったソースを無期限に抱え込まないための契機であり、
         // 遅れているかどうかとは関係がない。
-        if (suppressEndpointing)
+        if (behind)
         {
             return supplyIdle >= StaleSupplyIdle && bufferedSampleCount >= MinTailSamples
                 ? bufferedSampleCount
@@ -1866,9 +2030,13 @@ public class TranscriptionService : IDisposable
     /// チャンクは <see cref="TakeNextChunk"/> でバッファから取り除き済みなので、途中で抜けると
     /// 残りの区間はどこにも残らず捨てられる。かつて（T127）は <see cref="StopSession"/> の猶予 30 秒を
     /// 超えないよう停止要求で抜けていたが、T165 で猶予を無くして「捨てない」にしたため不要になった。
+    /// <para>
+    /// 処理し終えたら、結末（0 行・キャンセル・例外）によらず <see cref="LiveChunkCompleted"/> を発火する（REQ-TRX-LIVE-18）。
+    /// 発火しないと、その位置までの速報が字幕帯から消えずに残る。
+    /// </para>
     /// </remarks>
     private void ProcessChunk(
-        PendingChunk chunk, SourceState state, CancellationToken token)
+        PendingChunk chunk, SourceState state, bool behind, CancellationToken token)
     {
         // results は try の外で宣言する。中で宣言すると、Whisper がキャンセル例外を投げたときに
         // 確定済みの区間の行まで一緒に捨てられる。それらの行は TranscribeRegion の中で
@@ -1888,19 +2056,24 @@ public class TranscriptionService : IDisposable
 
                 var regionStart = RegionStart(chunk.StartElapsed, region.Start);
                 var samples = PadToMinimum(SliceRegion(chunk.Samples, region), MinWhisperSamples);
-                TranscribeRegion(state, samples, regionStart, results, token);
+                long callStarted = Stopwatch.GetTimestamp();
+                int segments = TranscribeRegion(state, samples, regionStart, results, token);
+                _metrics?.WriteFinal(
+                    _sessionClock.Elapsed, state.Type, chunk.StartPosition + region.Start, region.Length,
+                    Stopwatch.GetElapsedTime(callStarted).TotalMilliseconds, segments, behind, PendingSeconds);
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // キャンセルによる中断は正常終了扱い
         }
         // CA1031: ワーカースレッド境界＋Whisper のネイティブ処理。例外を漏らすとプロセスごと
         //         落ちて録音中のセッションを失うため、全例外を Error イベントに変換する。
 #pragma warning disable CA1031
         catch (Exception ex)
         {
-            Error?.Invoke($"文字起こしエラー: {ex.Message}");
+            // キャンセルによる中断は正常終了扱い。推論中にキャンセルすると Whisper.net は
+            // WhisperProcessingException を投げることがあるので、型ではなくトークンで判定する（T192）
+            if (ShouldReportChunkError(ex, token.IsCancellationRequested))
+            {
+                Error?.Invoke($"文字起こしエラー: {ex.Message}");
+            }
         }
 #pragma warning restore CA1031
 
@@ -1912,7 +2085,23 @@ public class TranscriptionService : IDisposable
         {
             Error?.Invoke($"文字起こし結果の書き出しに失敗しました: {failure}");
         }
+
+        // REQ-TRX-LIVE-18: 結末によらず通知する。try の外なので、キャンセル・例外の後も必ず通る。
+        MarkProvisionalConfirmed(state, chunk.EndPosition);
+        LiveChunkCompleted?.Invoke(new LiveChunkCompletion(CurrentSessionId, state.Type, chunk.EndPosition));
     }
+
+    /// <summary>
+    /// 確定パスのチャンクの処理で起きた例外を利用者に知らせるか（REQ-TRX-LIVE-11、ハーネス §3 規則 7）。
+    /// キャンセル済みなら型によらず知らせない — 打ち切りは利用者が選んだ操作であり、エラーではない。
+    /// </summary>
+    /// <remarks>
+    /// Whisper.net は推論の途中でキャンセルされると <see cref="OperationCanceledException"/> ではなく
+    /// <c>WhisperProcessingException</c> を投げることがあり、メッセージも中断した段階で変わる
+    /// （Failed to encode / decode audio features、Failed to decode during token processing。T182・T192 の実測）。
+    /// </remarks>
+    internal static bool ShouldReportChunkError(Exception exception, bool canceled)
+        => !canceled && exception is not OperationCanceledException;
 
     /// <summary>
     /// 確定した行をテキストファイルへ追記する（REQ-TRX-07）。
@@ -1945,28 +2134,42 @@ public class TranscriptionService : IDisposable
     /// 有声区間 1 つを Whisper に掛け、整形した行を results へ積む。
     /// regionStart は区間先頭の、セッション開始からの経過時間。
     /// </summary>
-    private void TranscribeRegion(
+    /// <returns>積んだ行の数（計測ログ用）。</returns>
+    /// <remarks>
+    /// 文脈プロンプト（REQ-TRX-LIVE-19）があるときは、この呼び出しのためだけの processor を作って破棄する。
+    /// 無ければ音源ごとの作り置きの processor を使う（今までと同じ）。確定行の行頭の付け札は落とす（REQ-TRX-LIVE-20）。
+    /// </remarks>
+    private int TranscribeRegion(
         SourceState state, float[] samples, TimeSpan regionStart,
         List<string> results, CancellationToken token)
     {
+        int count = 0;
+        var prompt = ContextPromptFor(regionStart);
+        using var prompted = prompt == null
+            ? null
+            : WithLanguageOption(_factory!.CreateBuilder(), _sessionLanguage).WithPrompt(prompt).Build();
+        var processor = prompted ?? state.Processor!;
+
         // ProcessAsync を同期的に消費
-        var asyncEnum = state.Processor!.ProcessAsync(samples, token);
+        var asyncEnum = processor.ProcessAsync(samples, token);
         var enumerator = asyncEnum.GetAsyncEnumerator(token);
         try
         {
             while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())
             {
                 var segment = enumerator.Current;
-                var text = segment.Text?.Trim();
+                var text = StripSpeakerTag(segment.Text?.Trim() ?? "");
                 if (string.IsNullOrEmpty(text))
                 {
                     continue;
                 }
 
+                RememberConfirmed(regionStart + segment.Start, regionStart + segment.End, text);
                 var startTime = _sessionStartTime + regionStart + segment.Start;
                 var endTime = _sessionStartTime + regionStart + segment.End;
                 var line = $"[{startTime:HH:mm:ss} - {endTime:HH:mm:ss}] [{state.Label}] {text}";
                 results.Add(line);
+                count++;
                 SegmentTranscribed?.Invoke(line);
             }
         }
@@ -1974,6 +2177,8 @@ public class TranscriptionService : IDisposable
         {
             enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
+
+        return count;
     }
 
     /// <summary>これ以上の滞留があれば「遅れている」とみなし、効率を優先する（REQ-TRX-LIVE-13）。</summary>
@@ -2004,6 +2209,9 @@ public class TranscriptionService : IDisposable
     {
         _isRunning = false;
 
+        // REQ-TRX-LIVE-11: 速報を先に止める（確定の吐き切りと CPU を取り合わないため）
+        StopProvisional();
+
         // 残りバッファ処理の完了を待つ（打ち切り要求が来るまで上限なし）
         bool workerExited = true;
         if (_thread != null)
@@ -2025,6 +2233,10 @@ public class TranscriptionService : IDisposable
         _cts?.Dispose();
         _cts = null;
 
+        // ワーカーが抜けていなくても閉じてよい（閉じた後の書き込みは TranscriptionMetricsLog が捨てる）
+        _metrics?.Dispose();
+        _metrics = null;
+
         foreach (var state in _sources.Values)
         {
             DisposeProcessorSafely(state, workerExited);
@@ -2040,26 +2252,38 @@ public class TranscriptionService : IDisposable
     /// 停止処理中に「文字起こしの残り」を表示するために UI スレッドから読む（REQ-TRX-LIVE-11）。
     /// </summary>
     public double PendingSeconds
+        => (double)(PendingBufferedSamples() + Interlocked.Read(ref _inFlightSamples)) / TargetRate;
+
+    /// <summary>
+    /// 全ソースの確定済みチャンクと未確定バッファのサンプル数の合計（処理中のチャンクは含まない）。
+    /// UI スレッド（<see cref="PendingSeconds"/>）とワーカー（遅れの判定。REQ-TRX-LIVE-13）から読む。
+    /// </summary>
+    private long PendingBufferedSamples()
     {
-        get
+        long samples = 0;
+        lock (_sourcesLock)
         {
-            long samples = 0;
-            lock (_sourcesLock)
+            foreach (var state in _sources.Values)
             {
-                foreach (var state in _sources.Values)
-                {
-                    lock (state.BufferLock)
-                    {
-                        samples += state.Pcm16kBuffer.Count;
-                        foreach (var chunk in state.Ready)
-                        {
-                            samples += chunk.Samples.Length;
-                        }
-                    }
-                }
+                samples += BufferedSamples(state);
+            }
+        }
+
+        return samples;
+    }
+
+    /// <summary>1 ソースの確定済みチャンクと未確定バッファのサンプル数の合計。</summary>
+    internal static long BufferedSamples(SourceState state)
+    {
+        lock (state.BufferLock)
+        {
+            long samples = state.Pcm16kBuffer.Count;
+            foreach (var chunk in state.Ready)
+            {
+                samples += chunk.Samples.Length;
             }
 
-            return (double)(samples + Interlocked.Read(ref _inFlightSamples)) / TargetRate;
+            return samples;
         }
     }
 
@@ -2138,5 +2362,6 @@ public class TranscriptionService : IDisposable
         RequestAbort();
         StopSession();
         DisposeProcessor();
+        DisposeProvisionalModel();
     }
 }
