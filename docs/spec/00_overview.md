@@ -18,6 +18,7 @@ Windows 向けのスタンドアロン音声キャプチャアプリケーショ
 | [02_architecture.md](./02_architecture.md) | ソフトウェアアーキテクチャ |
 | [03_class_diagram.md](./03_class_diagram.md) | クラス図（Mermaid） |
 | [04_sequence_diagram.md](./04_sequence_diagram.md) | シーケンス図（Mermaid） |
+| [05_transcribe_logic.html](./05_transcribe_logic.html) | 文字起こしのしくみ（モデルの役割分担・時間軸・速報と確定・調整値の一覧）。01 の要件を利用者の目線で束ね直した解説で、ブラウザで開く HTML |
 
 ## 対象範囲外
 
