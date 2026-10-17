@@ -51,6 +51,7 @@
 | [02_architecture.md](../spec/02_architecture.md) | 技術スタック・レイヤー構成・スレッドモデル・データフロー・永続化・エラー方針 | 層構成、依存関係、スレッド、保存先、ライブラリ、エラー方針の変更 |
 | [03_class_diagram.md](../spec/03_class_diagram.md) | Mermaid クラス図 | 公開クラス／主要メソッド・プロパティの増減、クラス間関係の変更 |
 | [04_sequence_diagram.md](../spec/04_sequence_diagram.md) | Mermaid シーケンス図 | 処理順序・呼び出し関係の変更、ユースケースの追加 |
+| [05_transcribe_logic.html](../spec/05_transcribe_logic.html) | 文字起こしのしくみ（利用者向けの解説。01 の要件を束ね直したもの。要件 ID は採番しない） | 文字起こしのモデルの役割・区切り方・Whisper に渡す設定・既定値・許容範囲・固定値・画面の項目を変えたとき（01 と同じ変更で直す） |
 
 ### 更新が不要な変更
 
