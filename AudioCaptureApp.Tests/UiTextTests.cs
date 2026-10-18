@@ -99,6 +99,7 @@ public class UiTextTests
             MainViewModel.StoppingStatusFor(113.8),
             MainViewModel.StoppingStatusFor(0.0),
             MainViewModel.AbortStopConfirmationMessage(113.8),
+            MainViewModel.GpuFallbackMessage,
             FileTranscriptionViewModel.FileTranscriptionFailureMessageFor(null),
             FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.FileName),
             FileTranscriptionViewModel.StartTimeHintFor(FileTranscriptionViewModel.StartTimeSource.CreationTime),

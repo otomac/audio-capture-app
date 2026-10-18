@@ -4,7 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace AudioCaptureApp.ViewModels;
 
-// MainViewModel のうち、話者識別の状態表示とライブ文字起こしの ON/OFF を担当する部分。
+// MainViewModel のうち、話者識別の状態表示・GPU で推論中に終わったときの切り替え・ライブ文字起こしの ON/OFF を担当する部分。
 // モデルの読み込み・GPU の切り替え・言語の選択は設定ウィンドウの ViewModel（SettingsViewModel）が持つ（ADR-0008）。
 public partial class MainViewModel
 {
@@ -87,6 +87,28 @@ public partial class MainViewModel
             + "settings.json の SpeakerSegmentationModelPath / SpeakerEmbeddingModelPath を確認してください。",
         _ => "settings.json の SpeakerDiarizationEnabled を true にすると有効になります。"
     };
+
+    // --- GPU で推論中に終わったときの切り替え (T199 / REQ-GPU-08) ---
+
+    /// <summary>
+    /// 起動時に知らせる文言（REQ-GPU-08）。前回 GPU で推論している最中に終わっていて、GPU を使わない設定へ倒したときだけ非 <c>null</c>。
+    /// 表示は <c>MainWindow</c> が読み込み後に 1 度だけ行う（ステータス行はモデルの読み込みの通知ですぐ上書きされるため使わない）。
+    /// </summary>
+    public string? GpuFallbackNotice { get; }
+
+    /// <summary>
+    /// 起動時に GPU を使わない設定へ倒すか（REQ-GPU-08）。印が残っていて、かつ GPU 使用が ON のときだけ倒す。
+    /// OFF なら倒すものが無いので知らせない。
+    /// </summary>
+    internal static bool ShouldFallBackToCpu(bool markerLeft, bool useGpu) => markerLeft && useGpu;
+
+    /// <summary>GPU を使わない設定へ倒したことを知らせる文言（REQ-GPU-08）。</summary>
+    internal const string GpuFallbackMessage =
+        "前回、GPU で文字起こしをしている最中に、アプリが正常に終了しませんでした"
+        + "（PC が固まった・強制終了した、など）。\n\n"
+        + "GPU のドライバーが止まると PC 全体が固まることがあるため、"
+        + "「文字起こしに GPU を使用する」を OFF にしました。文字起こしは CPU で続けます（処理は遅くなります）。\n\n"
+        + "GPU に戻すには、設定ウィンドウで「文字起こしに GPU を使用する」にチェックを入れてください。";
 
     // --- 文字起こし設定 ---
     [ObservableProperty]

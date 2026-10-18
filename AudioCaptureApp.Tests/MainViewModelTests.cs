@@ -384,6 +384,27 @@ public class MainViewModelTests
         Assert.Contains("中止して終了しますか", message, StringComparison.Ordinal);
     }
 
+    // --- GPU で推論中に終わったときの切り替え (T199 / REQ-GPU-08) ---
+
+    [Theory]
+    [InlineData(true, true, true)]     // 前回 GPU で推論中に終わった → 今回は GPU を使わない
+    [InlineData(true, false, false)]   // すでに OFF → 倒すものが無いので知らせない
+    [InlineData(false, true, false)]   // 前回は正常に終わった
+    [InlineData(false, false, false)]
+    public void ShouldFallBackToCpu_OnlyWhenMarkerLeftAndGpuOn(bool markerLeft, bool useGpu, bool expected)
+    {
+        Assert.Equal(expected, MainViewModel.ShouldFallBackToCpu(markerLeft, useGpu));
+    }
+
+    [Fact]
+    public void GpuFallbackMessage_SaysWhatHappenedAndHowToUndo()
+    {
+        // 何が起きたか・何を変えたか・どう戻すかの 3 つが揃っていること
+        Assert.Contains("正常に終了しませんでした", MainViewModel.GpuFallbackMessage, StringComparison.Ordinal);
+        Assert.Contains("OFF にしました", MainViewModel.GpuFallbackMessage, StringComparison.Ordinal);
+        Assert.Contains("設定ウィンドウ", MainViewModel.GpuFallbackMessage, StringComparison.Ordinal);
+    }
+
     // --- 開始時刻の自動入力 (T150 / REQ-TRX-FILE-15) ---
 
     /// <summary>③に落ちないはずの場面で音声長が読まれたら分かるようにする。</summary>
