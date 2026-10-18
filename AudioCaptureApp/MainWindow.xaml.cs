@@ -38,8 +38,32 @@ public partial class MainWindow : Window, IDisposable
         _viewModel.SettingsRequested += ShowSettings;
         _viewModel.RecordingMetadataRequested += ShowRecordingMetadata;
         _viewModel.StopConfirmationRequested += ConfirmStop;
+        Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         Closed += (_, _) => Dispose();
+    }
+
+    /// <summary>
+    /// 前回 GPU で推論している最中に終わっていて、GPU を使わない設定へ倒したら、起動直後に 1 度だけ知らせる（REQ-GPU-08）。
+    /// </summary>
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= MainWindow_Loaded;
+        if (_viewModel.GpuFallbackNotice is not { } notice)
+        {
+            return;
+        }
+
+        // REQ-REC-12: ダイアログの背後で録音を自動開始させない
+        _viewModel.IsModalDialogOpen = true;
+        try
+        {
+            MessageBox.Show(this, notice, "音声キャプチャ", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _viewModel.IsModalDialogOpen = false;
+        }
     }
 
     /// <summary>

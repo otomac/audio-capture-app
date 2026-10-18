@@ -12,9 +12,11 @@
 
 ## 進行中
 
-（なし）
+- [~] **T199** **（不具合）GPU で文字起こし中に PC 全体が固まり、OS が再起動した。繰り返さないよう、次の起動では GPU を使わない。** 利用者の報告 (2026-10-18、`release_2026.10.18_beta`): 速報（base）を有効にして録音を始め、約 5 分でアプリの表示が止まり、マウスを動かすと数秒で PC 全体が固まり（YouTube も停止）、Ctrl+Alt+Del の後に「デバイスに問題が発生したため再起動が必要」で再起動した。**調査:** アプリで GPU を使うのは確定パス（Vulkan）だけで、速報は CPU（`UseGpu = false`）。同じ止まり方が速報の無い 09-28（PC 全体が停止）・09-29（LiveKernelEvent 141 ×6）にも起きており、速報は必要条件ではない。GPU のドライバーが止まるとアプリ側では例外にもならず防げないため、①GPU を使わない設定を選べること（既存）と ②一度起きたら次の起動で GPU を使わない設定へ倒して知らせること（REQ-GPU-08 案）で再発を防ぐ。利用者の提案「速報も GPU で（速報 → 確定）」は ADR-0007 案 A で、T182 で不合格（速報の遅れ p50 8.59 秒）かつ GPU の負荷を増やす方向なので採らない案を推す（判断は利用者） 着手 (2026-10-18) → [詳細](./T199-gpu-hang-fallback.md)
 
 ## 未着手
+
+- [ ] **T200** **（調査）GPU ドライバーの停止（T199）の根本原因を、利用者の実機で切り分ける。** アプリのコードからは「確定パスの Vulkan 推論が引き金」までしか言えない。必要なもの: 停止の時刻のバグチェックのコード（システム ログの `Microsoft-Windows-WER-SystemErrorReporting` ID 1001）、`nvlddmkm` / `Display` のイベント、`C:\Windows\LiveKernelReports` のダンプの有無、NVIDIA ドライバーの版、ブラウザのハードウェア アクセラレーションの有無。切り分けの候補: flash attention（`UseFlashAttentionOnGpu`）の有無・CUDA ランタイム（CUDA Toolkit を入れると Vulkan より優先される）・ブラウザの動画再生の有無。手順は [T199 §6](./T199-gpu-hang-fallback.md#6-根本原因の確かめ方利用者の実機) T199 の作業中に起票 (2026-10-18)
 
 - [ ] **T193** **`TranscriptionService.cs` を機能単位の partial に分ける（内部リファクタリング・仕様非影響）。** 2,300 行を超えている（2026-10-12、T185〜T188 の後）。T186 / T188 で速報・文脈プロンプトは `TranscriptionService.Provisional.cs` / `.Context.cs` へ分けたが、本体にはライブの確定パス・ファイル文字起こし・話者付きの書き出し・無音カット・モデル読み込みが同居している。ViewModel と同じく「1 ファイル 500 行が目安」に寄せ、ファイル文字起こし（`TranscribeFileAsync` 以下）と無音カット（`SplitVoicedRegions` 以下）を先に切り出す。振る舞いは変えない。T188 の作業中に起票 (2026-10-12) **判断 (2026-10-12、T185〜T195 のバッチ):** このバッチのブランチでは着手しない。振る舞いを変えない大きなファイル移動で、機能の変更（速報・文脈プロンプト）と同じ PR に混ぜると差分のレビューが難しくなるため。このバッチを `develop` へ入れた後、`maintenance-` の別ブランチで行う
 - [ ] **T171** **録音の自動開始 案 (b): Zoom / Teams の会議開始を検知して録音を始める。** [T168](./T168-auto-start-recording.md) で案 (a)（マイク音量）を実装し、(b) は手元に Zoom / Teams が無く実機で確かめられないため見送った。設計の見込み（T168 起票時の評価）: Zoom は会議に入ると子プロセス `CptHost.exe` が起動するので `Process.GetProcessesByName` で拾えるが、**新 Teams（`ms-teams.exe`）は会議用の別プロセスを持たない**。両方に効くのは「マイクのオーディオセッションを Zoom / Teams のプロセスが開いたか」を `MMDevice.AudioSessionManager`（`SessionCreated` / `AudioSessionControl.GetProcessID`）で見る方法で、追加ライブラリ不要。実装は `AudioCaptureService` にセッション監視を足し、`AutoStartTrigger` と同じ「発火させない条件」（REQ-REC-12）を共有する。**着手の条件: Zoom または Teams のある実機で、会議に入ったときにセッションが作られること・抜けたときに消えることを確認する。** 利用者の依頼 (2026-09-22) から分割

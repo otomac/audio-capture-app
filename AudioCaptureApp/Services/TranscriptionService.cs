@@ -576,6 +576,7 @@ public partial class TranscriptionService : IDisposable
                 _ = _factory.CreateBuilder();
             }
 
+            _liveOnGpu = gpuInUse;
             RuntimeInfo?.Invoke(DescribeRuntime(loaded, gpuInUse));
             return (true, gpuAvailable);
         }
@@ -608,6 +609,30 @@ public partial class TranscriptionService : IDisposable
     /// 載った先が分からない（ネイティブログを解析できなかった）ときは読み込み直さない。
     /// </summary>
     internal static bool NeedsReloadWithoutFlash(bool flashUsed, bool? gpuInUse) => flashUsed && gpuInUse == false;
+
+    /// <summary>
+    /// GPU で推論している間だけ置く印（REQ-GPU-08）。MainViewModel が起動時に渡す。<c>null</c> なら印を置かない。
+    /// </summary>
+    public GpuInferenceMarker? GpuMarker { get; set; }
+
+    /// <summary>ライブ用のモデル（<see cref="_factory"/>）が GPU に載っているか（REQ-GPU-05 の判定）。<see cref="LoadModel"/> が決める。</summary>
+    private bool _liveOnGpu;
+
+    /// <summary>このセッションの開始時に GPU の印を置いたか（REQ-GPU-08）。</summary>
+    private bool _gpuSessionMarked;
+
+    /// <summary>
+    /// 停止のときに GPU の印を消すか（REQ-GPU-08）。開始時に置いていて、かつワーカーが抜けたときだけ消す。
+    /// 抜けていなければ GPU の処理が続いているかもしれないので残し、次の起動で GPU を使わない側に倒す。
+    /// </summary>
+    internal static bool ShouldClearGpuMarker(bool marked, bool workerExited) => marked && workerExited;
+
+    /// <summary>
+    /// ファイル文字起こしが GPU で推論するか（REQ-GPU-08 の印を置くか）。ライブ用のモデルを共有するならその実行先、
+    /// 2 つ目のモデルを作るなら GPU を頼んだか（GPU が使えない環境では REQ-GPU-02 で頼む側が OFF に倒れている）。
+    /// </summary>
+    internal static bool FileRunUsesGpu(bool sharesLiveFactory, bool liveOnGpu, bool requestedGpu)
+        => sharesLiveFactory ? liveOnGpu : requestedGpu;
 
     /// <summary>
     /// 読み込み済みのモデルを破棄して「未読み込み」へ戻す（REQ-MODELWIN-04）。
@@ -678,6 +703,12 @@ public partial class TranscriptionService : IDisposable
         StartProvisional(CurrentSessionId);
         // 文脈プロンプト（REQ-TRX-LIVE-19）。ワーカーを起こす前に用意する
         PrepareContext();
+        // REQ-GPU-08: GPU で推論する前に印を置く。正常に止まったら StopSession が消す
+        _gpuSessionMarked = _liveOnGpu;
+        if (_gpuSessionMarked)
+        {
+            GpuMarker?.Set("live");
+        }
         _cts = new CancellationTokenSource();
         _abortRequested = false;
         _isRunning = true;
@@ -886,6 +917,13 @@ public partial class TranscriptionService : IDisposable
             factory = loaded;
         }
 
+        // REQ-GPU-08: GPU で推論する間だけ印を置く（完了・失敗・中止のいずれでも finally で消す）
+        bool onGpu = FileRunUsesGpu(ownFactory == null, _liveOnGpu, options.UseGpu);
+        if (onGpu)
+        {
+            GpuMarker?.Set("file");
+        }
+
         string outputPath = BuildTranscriptPath(audioFilePath, options.MeetingName);
         var startOffset = options.StartOffset;
         var language = options.Language;
@@ -930,6 +968,10 @@ public partial class TranscriptionService : IDisposable
         {
             // 2 つ目の factory はこの実行の間だけ（完了・失敗・中止のいずれでも破棄する）
             ownFactory?.Dispose();
+            if (onGpu)
+            {
+                GpuMarker?.Clear();
+            }
         }
     }
 
@@ -2245,6 +2287,13 @@ public partial class TranscriptionService : IDisposable
         {
             _sources.Clear();
         }
+
+        // REQ-GPU-08: ワーカーが抜けたときだけ印を消す（抜けていなければ GPU の処理が続いているかもしれない）
+        if (ShouldClearGpuMarker(_gpuSessionMarked, workerExited))
+        {
+            GpuMarker?.Clear();
+        }
+        _gpuSessionMarked = false;
     }
 
     /// <summary>
@@ -2342,6 +2391,7 @@ public partial class TranscriptionService : IDisposable
         _factory?.Dispose();
         _factory = null;
         _loadedModelPath = null;
+        _liveOnGpu = false;
     }
 
     public void Dispose()

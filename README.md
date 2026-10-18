@@ -39,6 +39,7 @@ Windows向け音声キャプチャアプリ。WASAPI Shared Mode で入力デバ
   ネットワーク接続が無い環境でも動作します。
 - 文字起こしはGPU（CUDA／Vulkan）を利用可能（処理が遅くなるが、GPUをOFFにすることも可能）
   - GPU で動くときは flash attention を使います（このマシンの実測で `small` の処理時間が約 24% 減り、文字起こしの質は同等）。CPU では遅くなるため使いません。`settings.json` の `UseFlashAttentionOnGpu` を `false` にすると止められます
+  - **GPU で文字起こしをしている最中に PC が固まった（または強制終了した）場合、次の起動では「文字起こしに GPU を使用する」が自動で OFF になり、起動直後にその旨が表示されます。** GPU のドライバーが止まると PC 全体が固まり、Windows が再起動することがあるためです。GPU に戻すには設定ウィンドウでチェックを入れ直してください。速報（字幕帯）は常に CPU で動くので関係しません
 
 ## 話者識別（Speaker Dialization）
 

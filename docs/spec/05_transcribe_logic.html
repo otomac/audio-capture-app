@@ -857,8 +857,9 @@ footer p { margin: 4px 0; }
     <li><strong>実際の実行先</strong>：ステータスに「GPU (Vulkan)」や「CPU」と出ます。モデルが実際に載った場所で判定します。</li>
     <li><strong>flash attention</strong>（GPU 向けの速い計算方法）：GPU で動くときだけ使います（既定 ON）。small・GPU で処理時間が約 24% 減り、文字誤り率は同じくらいでした。CPU では 23% 遅くなったので使いません。<code>settings.json</code> の <code>UseFlashAttentionOnGpu</code> で止められます。</li>
     <li><strong>GPU で計算するのは確定パスとファイル文字起こしだけ</strong>です。速報は常に CPU で動きます。Vulkan で同じ GPU を 2 つの処理から同時に使うと落ちる不具合が、GPU 計算ライブラリにあるためです。録音中はファイル文字起こしを始められないので、GPU を同時に使うことはありません。CPU の速報と GPU の確定を同時に動かしても落ちないことは確かめてあります（T182）。</li>
+    <li><strong>GPU で計算している最中に PC が固まったら、次の起動では GPU を使いません。</strong>GPU のドライバーが止まると PC 全体が固まり、Windows が再起動することがあります（2026-09-28・2026-10-18 に起きました）。このときアプリは後始末ができないので、GPU で計算している間だけ印のファイル（<code>%APPDATA%\AudioCaptureApp\gpu-inference.marker</code>）を置き、正常に終えたら消します。次の起動で印が残っていたら「文字起こしに GPU を使用する」を OFF にして、起動直後のダイアログで知らせます。アプリが強制終了したときや停電でも同じ扱いになります。GPU に戻すには設定ウィンドウでチェックを入れ直します。速報は CPU なので関係しません。</li>
   </ul>
-  <p class="reqs">要件：REQ-TRX-02 / 03、REQ-GPU-01〜07、REQ-CFG-14</p>
+  <p class="reqs">要件：REQ-TRX-02 / 03、REQ-GPU-01〜08、REQ-CFG-14</p>
 </section>
 
 <!-- ============================================================ 9 -->
@@ -899,7 +900,7 @@ footer p { margin: 4px 0; }
         <tr><th scope="row">録音中にライブ文字起こしする</th><td>メイン</td><td>OFF</td><td>ON / OFF</td><td><span class="when">次の録音から</span></td><td><code>TranscriptionEnabled</code></td><td class="req">REQ-TRX-LIVE-01</td></tr>
         <tr><th scope="row">Whisper モデル（ライブ文字起こし）</th><td>設定</td><td><code>ggml-small.bin</code></td><td>登録した一覧から</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>WhisperModelPath</code>（実パス）</td><td class="req">REQ-CFG-04、REQ-MODELWIN-07</td></tr>
         <tr><th scope="row">ライブ文字起こしの言語</th><td>設定</td><td>日本語</td><td>日本語 / 英語</td><td><span class="when">次の録音から</span></td><td><code>LiveTranscriptionLanguage</code>（<code>ja</code>）</td><td class="req">REQ-TRX-LIVE-14</td></tr>
-        <tr><th scope="row">文字起こしに GPU を使用する</th><td>設定</td><td>ON</td><td>ON / OFF（GPU が無ければ OFF で固定）</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>UseGpuForTranscription</code></td><td class="req">REQ-GPU-01〜04</td></tr>
+        <tr><th scope="row">文字起こしに GPU を使用する</th><td>設定</td><td>ON</td><td>ON / OFF（GPU が無ければ OFF で固定。GPU で計算中に PC が固まったら次の起動で OFF）</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>UseGpuForTranscription</code></td><td class="req">REQ-GPU-01〜04 / 08</td></tr>
         <tr><th scope="row">録音中に速報を出す</th><td>設定</td><td>ON</td><td>ON / OFF</td><td><span class="when">次の録音から</span></td><td><code>LiveProvisionalEnabled</code></td><td class="req">REQ-CFG-12</td></tr>
         <tr><th scope="row">速報用モデル</th><td>設定</td><td>未選択</td><td>登録した一覧から（推奨 base）</td><td><span class="when">次の録音から</span></td><td><code>ProvisionalWhisperModelName</code></td><td class="req">REQ-CFG-12</td></tr>
         <tr><th scope="row">用語集</th><td>設定</td><td>空</td><td>1 行 1 語。先頭から 120 文字分を使う</td><td><span class="when">次の録音から</span></td><td><code>TranscriptionGlossary</code></td><td class="req">REQ-CFG-13</td></tr>

@@ -13,11 +13,18 @@ sequenceDiagram
     participant SS as SettingsService
     participant ACS as AudioCaptureService
     participant TS as TranscriptionService
+    participant GM as GpuInferenceMarker
 
     User->>MW: アプリ起動
     MW->>VM: new MainViewModel()
     VM->>SS: Load()
     SS-->>VM: AppSettings
+    VM->>GM: TakeLeftover()（前回 GPU で推論している最中に終わったか。残っていれば消す。REQ-GPU-08）
+    GM-->>VM: bool
+    opt 印が残っていた かつ UseGpuForTranscription が ON
+        VM->>VM: UseGpuForTranscription = false / GpuFallbackNotice を用意
+    end
+    VM->>TS: GpuMarker = 同じ印（GPU で推論する間だけ置く・消す）
     VM->>SVM: new SettingsViewModel(this)（子 ViewModel。ADR-0008）
     SVM->>SVM: OutputFolder / UseGpuForTranscription / 自動開始の ON/OFF / ライブの言語 を復元
     SVM->>SVM: WhisperModelList を復元（無ければ WhisperModelPath から 1 件へ移行。REQ-CFG-08）<br/>WhisperModelPath と一致する要素を SelectedWhisperModel にする
@@ -44,7 +51,14 @@ sequenceDiagram
         ACS-->>VM: false なら StatusMessage に機能低下を表示
     end
 
+    opt GPU 使用を OFF に倒した（REQ-GPU-08）
+        VM->>SS: Save(AppSettings)（SaveSettings 経由。このまま閉じても次の起動で GPU に戻らないように。保存に失敗しても起動は続ける）
+    end
+
     MW->>VM: DataContext = VM
+    opt 読み込み後（Loaded） かつ GpuFallbackNotice あり
+        MW-->>User: ダイアログ（OK のみ）で理由と戻し方を知らせる
+    end
 ```
 
 ## 2. 録音開始
@@ -70,6 +84,9 @@ sequenceDiagram
         TS->>TS: セッション ID を採番（REQ-TRX-LIVE-18）
         opt 速報が有効 かつ 速報用モデルが読み込み済み かつ 対象の音源あり（REQ-TRX-LIVE-15）
             TS->>TS: 対象の音源に写しを用意 / ProvisionalTranscription スレッド起動（BelowNormal）
+        end
+        opt 確定パスのモデルが GPU に載っている（REQ-GPU-08）
+            TS->>TS: GpuMarker.Set("live")（%APPDATA%\AudioCaptureApp\gpu-inference.marker）
         end
         TS->>TS: WhisperTranscription スレッド起動
     end
@@ -162,6 +179,9 @@ sequenceDiagram
     TS->>TS: 残りバッファ(0.2秒以上。REQ-TRX-LIVE-05)を処理
     TS->>TS: スレッド終了待機（滞留分を吐き切るまで。上限なし）<br/>「打ち切り」が要求されたらキャンセルして10秒待機
     Note over VM: 待っている間、メーターのタイマーが PendingSeconds を読み<br/>「停止処理中... 文字起こしの残り N 秒分」を1秒ごとに出す
+    opt 開始時に印を置いた かつ ワーカーが抜けた（REQ-GPU-08。抜けていなければ消さない）
+        TS->>TS: GpuMarker.Clear()
+    end
     TS-->>ACS: 完了
 
     Note over ACS: マイク・スピーカーの常時モニタは停止しない<br/>（レベルメーターは録音停止後も動き続ける）
@@ -270,6 +290,9 @@ sequenceDiagram
     FVM->>TS: TranscribeFileAsync(filePath, options, diarization, progress, token) ※Task.Run上
     alt options.ModelPath がライブ用の読み込み済みモデルと異なる（REQ-TRX-FILE-17）
         TS->>TS: 2 つ目の WhisperFactory を作る（失敗なら ModelLoadFailed を返し、FVM はダイアログ内に理由を出して閉じない）
+    end
+    opt GPU で推論する（FileRunUsesGpu: 共有ならライブ用のモデルが GPU、2 つ目なら options.UseGpu。REQ-GPU-08）
+        TS->>TS: GpuMarker.Set("file")（完了・失敗・中止のいずれでも finally で Clear()）
     end
 
     Note over TS: diarization が null（＝話者ダイアライゼーション無効）なら以下の従来経路。<br/>非 null のときは §6.1 の経路を通る

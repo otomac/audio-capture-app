@@ -16,6 +16,7 @@ classDiagram
         -TranscriptionGroup_DragLeave(object, DragEventArgs)
         -TranscriptionGroup_Drop(object, DragEventArgs)
         -MainWindow_Closing(object, CancelEventArgs)
+        -MainWindow_Loaded(object, RoutedEventArgs)
         +Dispose()
     }
 
@@ -51,6 +52,7 @@ classDiagram
         -AudioCaptureService _audioCaptureService
         -TranscriptionService _transcriptionService
         -SettingsService _settingsService
+        -GpuInferenceMarker _gpuMarker
         -DispatcherTimer _meterTimer
         -DispatcherTimer _clockTimer
         +SettingsViewModel Settings
@@ -80,6 +82,7 @@ classDiagram
         +bool IsModalDialogOpen
         +double TranscriptionPendingSeconds
         +bool IsStopAbortRequested
+        +string? GpuFallbackNotice
         ~string? LastTranscriptionError
         ~SaveSettings()
         ~ResetAutoStart()
@@ -100,6 +103,7 @@ classDiagram
         +IsDiarizationSelectable(DiarizationAvailability) bool$
         +BuildExplorerArguments(string) string
         +CloseConfirmationMessage(bool, bool, bool) string$
+        +ShouldFallBackToCpu(bool, bool) bool$
         +Dispose()
         event FileTranscriptionRequested
         event LiveTranscriptRequested
@@ -281,6 +285,8 @@ classDiagram
         +ProvisionalOptions Provisional
         +bool ContextPromptEnabled
         +bool UseFlashAttentionOnGpu
+        +GpuInferenceMarker? GpuMarker
+        -bool _liveOnGpu
         +string TranscriptionGlossary
         -RememberConfirmed(TimeSpan, TimeSpan, string)
         +bool IsProvisionalModelLoaded
@@ -309,6 +315,8 @@ classDiagram
         +BuildGlossaryPrompt(string?) string$
         +ShouldUseFlashAttention(bool, bool) bool$
         +NeedsReloadWithoutFlash(bool, bool?) bool$
+        +ShouldClearGpuMarker(bool, bool) bool$
+        +FileRunUsesGpu(bool, bool, bool) bool$
         +BuildContextPrompt(string, IReadOnlyList~ConfirmedText~, TimeSpan) string?$
         +StripSpeakerTag(string) string$
         event Error
@@ -503,6 +511,15 @@ classDiagram
         +Save(AppSettings)
     }
 
+    class GpuInferenceMarker {
+        <<sealed>>
+        -string _path
+        +GpuInferenceMarker()
+        +Set(string)
+        +Clear()
+        +TakeLeftover() bool
+    }
+
     %% ==================== Model層 ====================
     class AudioDevice {
         +string DeviceId
@@ -637,6 +654,8 @@ classDiagram
     TranscriptionService "1" --> "*" ProvisionalPhrasePlanner : 速報の対象の音源ごと（録音中だけ）
     ProvisionalOptions --> ProvisionalSources
     TranscriptionService "1" --> "0..1" TranscriptionMetricsLog : 録音中だけ（REQ-CFG-12）
+    MainViewModel "1" --> "1" GpuInferenceMarker : 起動時に TakeLeftover（REQ-GPU-08）
+    TranscriptionService ..> GpuInferenceMarker : GPU で推論する間だけ Set / Clear（GpuMarker。REQ-GPU-08）
     FileTranscriptionViewModel ..> SpeakerCountOption : ダイアログの話者人数の選択肢
     MainViewModel "1" --> "1" AutoStartTrigger : メーターの 50ms タイマーで Observe
     RecordingMetadataViewModel ..> RecordingMetadataFile : JSON の書き出し・名前の整形

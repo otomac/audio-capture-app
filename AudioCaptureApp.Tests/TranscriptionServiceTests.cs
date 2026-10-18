@@ -437,6 +437,30 @@ public class TranscriptionServiceTests
         Assert.Equal(expected, TranscriptionService.NeedsReloadWithoutFlash(flashUsed, gpuInUse));
     }
 
+    // --- GPU で推論中の印 (T199 / REQ-GPU-08) ---
+    // GPU のドライバーが止まると PC ごと固まり、アプリは後始末ができない。印は「推論の前に置き、正常に終えたら消す」。
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]   // ワーカーが抜けていない → GPU の処理が続いているかもしれないので残す
+    [InlineData(false, true, false)]   // 置いていない（CPU で動いていた）
+    [InlineData(false, false, false)]
+    public void ShouldClearGpuMarker_OnlyWhenMarkedAndWorkerExited(bool marked, bool workerExited, bool expected)
+    {
+        Assert.Equal(expected, TranscriptionService.ShouldClearGpuMarker(marked, workerExited));
+    }
+
+    [Theory]
+    [InlineData(true, true, false, true)]     // ライブ用を共有 → ライブ用の実行先（GPU）に従う
+    [InlineData(true, false, true, false)]    // ライブ用を共有 → ライブ用の実行先（CPU）に従う。頼んだかは見ない
+    [InlineData(false, false, true, true)]    // 2 つ目を作る → GPU を頼んだか
+    [InlineData(false, true, false, false)]
+    public void FileRunUsesGpu_FollowsSharedOrOwnFactory(
+        bool sharesLiveFactory, bool liveOnGpu, bool requestedGpu, bool expected)
+    {
+        Assert.Equal(expected, TranscriptionService.FileRunUsesGpu(sharesLiveFactory, liveOnGpu, requestedGpu));
+    }
+
     // --- 打ち切りで推論中にキャンセルしたときの例外 (T192 / REQ-TRX-LIVE-11) ---
     // Whisper.net は推論の途中でキャンセルされると WhisperProcessingException を投げることがある。
 

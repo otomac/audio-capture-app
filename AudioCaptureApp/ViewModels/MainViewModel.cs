@@ -23,6 +23,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly TranscriptionService _transcriptionService = new();
     private readonly SettingsService _settingsService = new();
 
+    /// <summary>GPU で推論している間だけ置く印（REQ-GPU-08）。起動時に取り出し、サービスへ渡す。</summary>
+    private readonly GpuInferenceMarker _gpuMarker = new();
+
     /// <summary>
     /// 話者ダイアライゼーション（REQ-TRX-DIA-03）。設定で無効なら <c>null</c> のままにする。
     /// 生成と破棄はここが持ち、<see cref="TranscriptionService"/> へは引数で貸すだけである
@@ -108,6 +111,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _settings = _settingsService.Load();
 
+        // REQ-GPU-08: 前回 GPU で推論している最中に終わっていたら（PC が固まった・強制終了した等）、今回は GPU を使わない。
+        // 設定ウィンドウの ViewModel が GPU 使用の設定を読む前に倒すこと
+        if (ShouldFallBackToCpu(_gpuMarker.TakeLeftover(), _settings.UseGpuForTranscription))
+        {
+            _settings.UseGpuForTranscription = false;
+            GpuFallbackNotice = GpuFallbackMessage;
+        }
+        _transcriptionService.GpuMarker = _gpuMarker;
+
         // REQ-REC-12 / REQ-CFG-10: 閾値・継続・クールダウンは起動時に固定（UI 無し）。ON/OFF だけが UI にある。
         // 設定ウィンドウの ViewModel が ON/OFF を写すときに判定器を触るので、子より先に作る。
         _autoStartTrigger = new AutoStartTrigger(new AutoStartOptions(
@@ -192,6 +204,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_settings.LastSelectedLoopbackDeviceId != null)
         {
             SelectedRenderDevice = RenderDevices.FirstOrDefault(d => d.DeviceId == _settings.LastSelectedLoopbackDeviceId);
+        }
+
+        // REQ-GPU-08: 倒した設定はすぐに保存する（このまま閉じても、次の起動で GPU に戻らないように）
+        if (GpuFallbackNotice != null)
+        {
+            try
+            {
+                SaveSettings();
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                // 保存できなくても今回の起動は CPU で動く。設定は次に保存できたときに書かれる
+            }
         }
 
         _initializing = false;
