@@ -192,7 +192,7 @@
                                        Foreground="{StaticResource Brush.Accent}"
                                        FontWeight="SemiBold"
                                        HorizontalAlignment="Center"/>
-                            <TextBlock Text="クリックして選択 — .wav / .mp3 はウィンドウのどこへ落としても開始"
+                            <TextBlock Text="クリックして選択 — .wav / .mp3 / .m4a はウィンドウのどこへ落としても開始"
                                        Style="{StaticResource Text.Caption}"
                                        HorizontalAlignment="Center" Margin="0,2,0,0"/>
                         </StackPanel>
