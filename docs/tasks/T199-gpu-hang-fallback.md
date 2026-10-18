@@ -1,6 +1,6 @@
 # T199 — （不具合）GPU で文字起こし中に PC 全体が固まる。繰り返さないよう、次の起動では GPU を使わない
 
-> **状態:** 進行中 — 2026-10-18
+> **状態:** 完了 — 2026-10-18
 > **台帳:** [docs/tasks/backlog.md](./backlog.md)
 > **関連:** [ADR-0007](../adr/0007-two-pass-live-transcription.md)「背景」（2026-09-28 の停止）、
 > [T182](./T182-provisional-pass-measurement.md)（09-29 の LiveKernelEvent 141 ×6、案 A の試走）、
@@ -180,3 +180,31 @@ Get-ChildItem C:\Windows\Minidump -ErrorAction SilentlyContinue | Select-Object 
 - 停止の引き金が GPU であること（§3.4）。§6 の記録で別の原因（音声ドライバーなど）と分かった場合、本タスクの対策は「GPU を不要に止める」ことになるので、
   T200 で見直す。
 - アプリが印を消すのは、正常な停止・正常な終了の経路だけであること（OS ごと止まったときは消せない）。
+
+---
+
+## 実行結果 (2026-10-18)
+
+### 品質ゲート
+
+このクラウド環境（Linux）に .NET SDK 10.0.112 を入れて G1 / G2 を実行した（T170 と同じく `-p:EnableWindowsTargeting=true`、`dotnet format` は環境変数 `EnableWindowsTargeting=true`）。
+G3 は WindowsDesktop のランタイムが無いため Linux では実行できず（testhost が `Microsoft.WindowsDesktop.App` を見つけられない）、CI（windows-latest）で確かめた。
+
+- `dotnet build AudioCaptureApp.slnx -c Debug` : 警告 0 件 / エラー 0 件（Linux、`--no-incremental`）
+- `dotnet format AudioCaptureApp.slnx --verify-no-changes`: 差分なし（終了コード 0、Linux）
+- `dotnet test`  : **527 件成功 / 0 件失敗 / 0 件スキップ**（CI。本タスクで追加したのは 20 件 — `GpuInferenceMarkerTests` 6・`ShouldClearGpuMarker` 4・`FileRunUsesGpu` 4・`ShouldFallBackToCpu` 4・`GpuFallbackMessage` 1・`ViewModelText` 1）
+
+CI は `build-desktop` の run 39124492925（windows-latest、workflow_dispatch、commit `cb222e6`）。同じ実行で G1 は警告 0 件 / エラー 0 件、G2 は成功。
+**CI は Release 構成**で、ゲートの規定（Debug）とは構成が違う（T170 と同じ）。
+
+### 確かめていないこと
+
+- **実機での動作**（Windows の画面・ダイアログの表示、`%APPDATA%` への印の書き込みと削除）。この環境では WPF を動かせない。
+  確かめ方: GPU で録音中にタスク マネージャーでアプリを終了 → 起動するとダイアログが出て、設定ウィンドウの「文字起こしに GPU を使用する」が OFF になっている。
+  OFF のまま録音・停止して閉じ、もう一度起動するとダイアログが出ない。
+- **GPU の停止そのものを防ぐものではない**（§3.4）。根本原因は T200。
+
+### 計画からの逸脱
+
+- テストを 2 つ足した（`DefaultPath_IsNextToSettings`・`GpuFallbackMessage_SaysWhatHappenedAndHowToUndo`）。§10 に反映済み。
+- 書けないときのテストは「印の置き場がディレクトリ」ではなく「フォルダを作るべき位置にファイルがある」で作った（`TranscriptionMetricsLogTests` と同じ作り方。Windows と Linux で同じ例外の型になる）。名前を `SetAndClear_WhenPathIsBlocked_DoNotThrow` にした。
