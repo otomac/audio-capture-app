@@ -380,9 +380,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         _meterTimer.Stop();
         _clockTimer.Stop();
-        FileTranscription.Dispose();
         _audioCaptureService.Dispose();
-        _transcriptionService.Dispose();
-        _speakerDiarizationService?.Dispose();
+        // ファイル文字起こしの中止を待たずに終了した場合（REQ-TRX-FILE-14 ③）、推論はまだ別スレッドで動いている。
+        // 推論中のネイティブ資源を破棄するとプロセスが落ちるので、使っているものは破棄せずプロセスの終了に任せる（T117 と同じ規則）
+        if (ShouldDisposeInferenceServices(IsTranscribingFile))
+        {
+            FileTranscription.Dispose();
+            _transcriptionService.Dispose();
+            _speakerDiarizationService?.Dispose();
+        }
     }
+
+    /// <summary>
+    /// 終了時に文字起こし・話者識別のサービスを破棄してよいか（REQ-TRX-FILE-14 ③）。
+    /// ファイル文字起こしがまだ動いていれば破棄しない。
+    /// </summary>
+    internal static bool ShouldDisposeInferenceServices(bool isTranscribingFile) => !isTranscribingFile;
 }

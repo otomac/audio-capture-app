@@ -40,8 +40,15 @@ public partial class MainWindow : Window, IDisposable
         _viewModel.StopConfirmationRequested += ConfirmStop;
         _viewModel.SilenceWarningRequested += ShowSilenceWarning;
         Closing += MainWindow_Closing;
-        Closed += (_, _) => Dispose();
+        Closed += (_, _) =>
+        {
+            _isClosed = true;
+            Dispose();
+        };
     }
+
+    /// <summary>閉じ終えたか。「待たずに終了」（REQ-TRX-FILE-14 ③）と中止の完了が前後しても二重に閉じないため。</summary>
+    private bool _isClosed;
 
     /// <summary>
     /// 進行中の作業があれば確認してから閉じる（REQ-REC-11 / REQ-TRX-FILE-14）。
@@ -67,6 +74,23 @@ public partial class MainWindow : Window, IDisposable
         {
             // 後始末の最中に × を押し直された。二重に走らせず、閉じるのだけを止める。
             e.Cancel = true;
+            // ファイル文字起こしの中止を待っているなら、待たずに終える道を出す（REQ-TRX-FILE-14 ③ / T212）
+            if (MainViewModel.ForceCloseConfirmationMessage(_viewModel.IsTranscribingFile) is { } forceMessage
+                && MessageBox.Show(this, forceMessage, "音声キャプチャ", MessageBoxButton.YesNo, MessageBoxImage.Warning)
+                    == MessageBoxResult.Yes
+                && _closeStage == CloseStage.ShuttingDown)
+            {
+                _closeStage = CloseStage.Confirmed;
+                // Closing の中では Close() を呼べないので、抜けてから閉じる。
+                // その前に中止が終わって閉じ終えていることがあるので、閉じていなければ閉じる
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    if (!_isClosed)
+                    {
+                        Close();
+                    }
+                });
+            }
             return;
         }
 
@@ -97,6 +121,11 @@ public partial class MainWindow : Window, IDisposable
 
         _closeStage = CloseStage.ShuttingDown;
         await _viewModel.ShutdownAsync();
+        if (_isClosed)
+        {
+            // 待っている間に「待たずに終了」を選ばれ、既に閉じている（REQ-TRX-FILE-14 ③）
+            return;
+        }
         _closeStage = CloseStage.Confirmed;
         Close();
     }

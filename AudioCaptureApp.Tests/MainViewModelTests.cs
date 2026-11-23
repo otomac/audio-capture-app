@@ -341,6 +341,50 @@ public class MainViewModelTests
         Assert.Null(message);
     }
 
+    // --- 中止を待っている間の終了 (REQ-TRX-FILE-14 / T212) ---
+
+    [Fact]
+    public void ForceCloseConfirmationMessage_WaitingForFileTranscription_OffersToQuitWithoutWaiting()
+    {
+        // 中止の完了を待っている間にもう一度閉じたら、待たずに終える道を出す（実測で 86 秒、何も起きなかった）
+        var message = MainViewModel.ForceCloseConfirmationMessage(isTranscribingFile: true);
+
+        Assert.NotNull(message);
+        Assert.Contains("待たずに終了しますか", message, StringComparison.Ordinal);
+        Assert.Contains("残ることがあります", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ForceCloseConfirmationMessage_NotTranscribingFile_ReturnsNull()
+    {
+        // 録音の停止処理中は「打ち切り」ボタンがあるので出さない
+        Assert.Null(MainViewModel.ForceCloseConfirmationMessage(isTranscribingFile: false));
+    }
+
+    [Fact]
+    public void ShutdownWaitingStatus_TellsHowToQuitWithoutWaiting()
+    {
+        Assert.Contains("中止を待っています", MainViewModel.ShutdownWaitingForFileTranscriptionStatus, StringComparison.Ordinal);
+        Assert.Contains("もう一度閉じると", MainViewModel.ShutdownWaitingForFileTranscriptionStatus, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]   // 推論がまだ動いている。破棄するとプロセスが落ちる（T117 と同じ規則）
+    public void ShouldDisposeInferenceServices_OnlyWhenFileTranscriptionFinished(bool isTranscribingFile, bool expected)
+    {
+        Assert.Equal(expected, MainViewModel.ShouldDisposeInferenceServices(isTranscribingFile));
+    }
+
+    [Fact]
+    public void MainStatusForCancel_PrefixesWhatIsBeingCancelled()
+    {
+        // ダイアログを閉じた後、メインウィンドウで何を待っているのか分かるようにする（REQ-TRX-FILE-14 ①）
+        var notice = FileTranscriptionViewModel.FileTranscriptionCancelNoticeFor(waitingForDiarization: true);
+
+        Assert.Equal($"ファイル文字起こし: {notice}", FileTranscriptionViewModel.MainStatusForCancel(notice));
+    }
+
     [Fact]
     public void CloseConfirmationMessage_Recording_AsksToStop()
     {
