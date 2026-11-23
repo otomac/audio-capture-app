@@ -83,8 +83,7 @@ try {
                 "  git switch develop`n" +
                 "  git pull --ff-only origin develop`n" +
                 "  git switch -c <feature|fix|maintenance>-<slug>`n`n" +
-                "既に変更を書いてしまっている場合も、未コミットのまま git switch -c すれば持ち越せます。" +
-                "ブランチ切替は不可逆な操作なので、実行前に依頼者の承認を取ること " +
+                "既に変更を書いてしまっている場合も、未コミットのまま git switch -c すれば持ち越せます " +
                 "(docs/harness/00-ways-of-working.md #ブランチ運用)。")
         }
     }

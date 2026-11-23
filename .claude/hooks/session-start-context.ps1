@@ -44,7 +44,7 @@ try {
     $lines.Add('   - `dotnet format AudioCaptureApp.slnx --verify-no-changes` (差分なし)')
     $lines.Add('   - `dotnet test AudioCaptureApp.slnx -c Debug` (全件成功)')
     $lines.Add('')
-    $lines.Add('git の commit / push / add は都度の明示的な依頼があるときだけ実行する。')
+    $lines.Add('git の add / commit / push / ブランチ作成は確認なしで行ってよい。PR 作成だけは都度の明示的な依頼があるときだけ行う。')
     $lines.Add('')
 
     # --- 横断ルール: ブランチ運用 ------------------------------------------
