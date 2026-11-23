@@ -1599,27 +1599,31 @@ public partial class TranscriptionService : IDisposable
                 break;
             }
 
-            foreach (var (_, state) in _sources)
-            {
-                if (token.IsCancellationRequested)
+            // ギャップで確定したチャンクが複数溜まっていることがあるため、
+            // 1 tick で 1 つではなく取り出せるだけ処理する。ただし音源ごとに手番を回す（REQ-TRX-LIVE-04 / T204）。
+            // 1 つの音源を取り出せる限り処理し続けると、実時間より遅れている音源から抜けられず、
+            // もう一方の音源が録音の間ずっと処理されない。
+            // _isRunning は必ず見ること。これが無いと停止要求後もバックログを全部捌き切るまで抜けず、
+            // StopSession がタイムアウトする（T117）。
+            ProcessRoundRobin(
+                _sources.Values.ToList(),
+                state =>
                 {
-                    break;
-                }
+                    var chunk = TakeNextChunk(
+                        state, _sessionClock.Elapsed, SilenceCut, LiveChunking, PendingBufferedSamples());
+                    if (chunk == null)
+                    {
+                        return false;
+                    }
 
-                // ギャップで確定したチャンクが複数溜まっていることがあるため、
-                // 1 tick で 1 つではなく取り出せるだけ処理する。
-                // ただし _isRunning を必ず見ること。これが無いと停止要求後も
-                // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
-                PendingChunk? chunk;
-                while (_isRunning && !token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(
-                           state, _sessionClock.Elapsed, SilenceCut, LiveChunking, PendingBufferedSamples())) != null)
-                {
                     // 停止要求が来ても、取り出したチャンクは最後の区間まで処理する（T184）。
                     // バッファからは既に消えているので、途中で抜けると残りの区間を捨てることになる。
                     ProcessChunkCounted(chunk, state, token);
-                }
-            }
+                    return true;
+                },
+                () => _isRunning && !token.IsCancellationRequested,
+                RoundRobinTurnBudget,
+                () => _sessionClock.Elapsed);
         }
 
         // 残りバッファを処理（キャンセルされていなければ）
@@ -1658,6 +1662,56 @@ public partial class TranscriptionService : IDisposable
                 if (tail != null)
                 {
                     ProcessChunkCounted(tail, state, token);
+                }
+            }
+        }
+    }
+
+    /// <summary>1 つの音源が 1 回の手番で処理を続けてよい時間の目安（REQ-TRX-LIVE-04 / T204）。</summary>
+    internal static readonly TimeSpan RoundRobinTurnBudget = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// 音源を順に回し、どの音源からも取り出せなくなるまで繰り返す（REQ-TRX-LIVE-04 / T204）。
+    /// 1 回の手番では、少なくとも 1 チャンク、使った時間が <paramref name="turnBudget"/> に達するまで続けて処理する。
+    /// </summary>
+    /// <remarks>
+    /// 発話のチャンクは 1 回で手番の時間を使い切るので、発話どうしなら 1 チャンクずつ交代する。
+    /// 無音のチャンクは Whisper を呼ばずほぼ 0 秒で済むので、溜まった分を 1 回の手番で片付けられる。
+    /// 1 チャンクずつ厳密に交代すると、無音の音源が重い音源と同じ速さでしか進めず、停止時の残りに無音が積み上がる（T204 の実測）。
+    /// </remarks>
+    /// <param name="sources">音源（登録順）。</param>
+    /// <param name="processOne">その音源から 1 チャンク取り出して処理する。取り出せなければ <c>false</c>。</param>
+    /// <param name="shouldContinue">続けてよいか（停止要求・キャンセルで <c>false</c>）。1 チャンクごとに見る。</param>
+    /// <param name="turnBudget">1 回の手番で処理を続けてよい時間。</param>
+    /// <param name="now">時計（テストで差し替える）。</param>
+    internal static void ProcessRoundRobin<T>(
+        IReadOnlyList<T> sources, Func<T, bool> processOne, Func<bool> shouldContinue,
+        TimeSpan turnBudget, Func<TimeSpan> now)
+    {
+        bool tookAny = true;
+        while (tookAny)
+        {
+            tookAny = false;
+            foreach (var source in sources)
+            {
+                var turnStart = now();
+                while (true)
+                {
+                    if (!shouldContinue())
+                    {
+                        return;
+                    }
+
+                    if (!processOne(source))
+                    {
+                        break;
+                    }
+
+                    tookAny = true;
+                    if (now() - turnStart >= turnBudget)
+                    {
+                        break;
+                    }
                 }
             }
         }

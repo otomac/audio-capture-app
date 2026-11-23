@@ -114,6 +114,109 @@ public class TranscriptionServiceTests
 
     private static readonly double Rms = SilenceCutOptions.Default.RmsThreshold;
 
+    // --- 音源ごとに交互に処理する (REQ-TRX-LIVE-04 / T204) ---
+
+    /// <summary>
+    /// 音源ごとの残りチャンク数と 1 チャンクの処理時間（秒）を持ち、処理した順に音源名を記録する。
+    /// 時計は処理時間の分だけ進む（実時間は使わない）。
+    /// </summary>
+    private static List<string> RunRoundRobin(
+        Dictionary<string, int> remaining, Dictionary<string, double> costSeconds,
+        Func<bool>? shouldContinue = null, Action<string, Dictionary<string, int>>? onProcessed = null)
+    {
+        var order = new List<string>();
+        var clock = TimeSpan.Zero;
+        TranscriptionService.ProcessRoundRobin(
+            remaining.Keys.ToList(),
+            source =>
+            {
+                if (remaining[source] == 0)
+                {
+                    return false;
+                }
+
+                remaining[source]--;
+                clock += TimeSpan.FromSeconds(costSeconds[source]);
+                order.Add(source);
+                onProcessed?.Invoke(source, remaining);
+                return true;
+            },
+            shouldContinue ?? (() => true),
+            TranscriptionService.RoundRobinTurnBudget,
+            () => clock);
+        return order;
+    }
+
+    [Fact]
+    public void ProcessRoundRobin_SpeechOnBothSources_AlternatesOneChunkEach()
+    {
+        // 発話のチャンクは 1 回で手番（1 秒）を使い切るので、1 チャンクずつ交代する
+        var order = RunRoundRobin(
+            new() { ["マイク"] = 2, ["スピーカー"] = 4 },
+            new() { ["マイク"] = 2.0, ["スピーカー"] = 2.0 });
+
+        Assert.Equal(["マイク", "スピーカー", "マイク", "スピーカー", "スピーカー", "スピーカー"], order);
+    }
+
+    [Fact]
+    public void ProcessRoundRobin_SourceFallingBehind_DoesNotStarveTheOther()
+    {
+        // スピーカーは処理するたびに次のチャンクが溜まる（実時間より遅れている）。取り出せる限り同じ音源を
+        // 処理し続けると、マイクに順番が回らない（T204 の実測で 144 秒分が未処理のまま停止を迎えた）
+        int refills = 0;
+        var order = RunRoundRobin(
+            new() { ["スピーカー"] = 1, ["マイク"] = 3 },
+            new() { ["スピーカー"] = 4.0, ["マイク"] = 2.0 },
+            onProcessed: (source, remaining) =>
+            {
+                if (source == "スピーカー" && refills < 10)
+                {
+                    remaining["スピーカー"]++;
+                    refills++;
+                }
+            });
+
+        Assert.Equal(["スピーカー", "マイク", "スピーカー", "マイク", "スピーカー", "マイク"], order.Take(6));
+    }
+
+    [Fact]
+    public void ProcessRoundRobin_SilentChunks_CatchUpWithinOneTurn()
+    {
+        // 無音のチャンクは Whisper を呼ばずほぼ 0 秒で済む。重い音源と 1 チャンクずつ交代させると、
+        // 無音の音源も同じ速さでしか進めず、停止時の残りに無音が積み上がる（T204 の実測で 78 秒分）
+        var order = RunRoundRobin(
+            new() { ["スピーカー"] = 2, ["マイク"] = 5 },
+            new() { ["スピーカー"] = 4.0, ["マイク"] = 0.0 });
+
+        Assert.Equal(["スピーカー", "マイク", "マイク", "マイク", "マイク", "マイク", "スピーカー"], order);
+    }
+
+    [Fact]
+    public void ProcessRoundRobin_ShortChunks_ShareTurnByTime()
+    {
+        // 1 チャンク 0.3 秒なら、手番の 1 秒に達する 4 チャンク目で交代する
+        var order = RunRoundRobin(
+            new() { ["マイク"] = 5, ["スピーカー"] = 5 },
+            new() { ["マイク"] = 0.3, ["スピーカー"] = 0.3 });
+
+        Assert.Equal(
+            ["マイク", "マイク", "マイク", "マイク", "スピーカー", "スピーカー", "スピーカー", "スピーカー", "マイク", "スピーカー"],
+            order);
+    }
+
+    [Fact]
+    public void ProcessRoundRobin_StopRequested_StopsBeforeNextChunk()
+    {
+        int calls = 0;
+        var order = RunRoundRobin(
+            new() { ["マイク"] = 5, ["スピーカー"] = 5 },
+            new() { ["マイク"] = 2.0, ["スピーカー"] = 2.0 },
+            shouldContinue: () => calls++ < 3);
+
+        // 3 回目の処理の後に停止要求が来たら、次のチャンクは取り出さない
+        Assert.Equal(["マイク", "スピーカー", "マイク"], order);
+    }
+
     [Fact]
     public void ChunkTakeCount_ReachedLiveChunk_TakesExactlyLiveChunk()
     {
