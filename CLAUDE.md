@@ -41,15 +41,16 @@ dotnet test   AudioCaptureApp.slnx -c Debug              # 全件成功
 
 1. `git switch develop` → `git pull --ff-only origin develop`
 2. `git switch -c <feature|fix|maintenance>-<slug>`（1 タスク = 1 ブランチ。起票もこのブランチで）
-3. **品質ゲート 3 つが全部緑になってから** `commit` → `push` → PR 作成（**宛先は `develop`**）
+3. **品質ゲート 3 つが全部緑になってから** `commit` → `push`。PR 作成（**宛先は `develop`**）は依頼されたときだけ
 
 詳細は [ブランチ運用](docs/harness/00-ways-of-working.md#ブランチ運用) と
 [10-workflow.md](docs/harness/10-workflow.md) の S0 / S8。
 
 ### 不可逆な操作
 
-`git commit` / `push` / `add` / ブランチ切替 / PR 作成は、**その都度**明示的に依頼されたときだけ行う。
-1 つの承認が別の操作の承認になることはない。
+- `git add` / `commit` / `push` / ブランチの作成・切替は**確認なしで行ってよい**（上の手順と品質ゲートには従う）。
+- **PR 作成だけは、その都度明示的に依頼されたときだけ行う。**
+- force push・`git reset --hard`・ファイル削除などの破壊的な操作は事前に確認する。
 
 ### ライブラリ追加は個別承認制
 

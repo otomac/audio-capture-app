@@ -12,12 +12,22 @@
       "PowerShell(git diff:*)",
       "PowerShell(git log:*)",
       "PowerShell(git show:*)",
+      "PowerShell(git add:*)",
+      "PowerShell(git commit:*)",
+      "PowerShell(git push:*)",
+      "PowerShell(git switch:*)",
+      "PowerShell(git pull:*)",
       "Bash(dotnet build:*)",
       "Bash(dotnet test:*)",
       "Bash(dotnet format:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git switch:*)",
+      "Bash(git pull:*)"
     ],
     "deny": [
       "Read(./**/.env)",

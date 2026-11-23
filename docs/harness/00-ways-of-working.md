@@ -114,7 +114,7 @@ BCL または最小限の自前実装を優先する。ライブラリが必要�
 
 1. **最新化** — `git switch develop` → `git pull --ff-only origin develop`
 2. **ブランチ作成** — `git switch -c <接頭辞>-<slug>`（下の接頭辞表に従う）
-3. **統合** — 品質ゲート G1/G2/G3 が **すべて緑になってから** `commit` → `push` → PR 作成（宛先は `develop`）
+3. **統合** — 品質ゲート G1/G2/G3 が **すべて緑になってから** `commit` → `push`。PR 作成（宛先は `develop`）は依頼されたときだけ
 
 | 接頭辞 | 使う場面 | 例 |
 |---|---|---|
@@ -132,17 +132,18 @@ BCL または最小限の自前実装を優先する。ライブラリが必要�
 どの時点が緑だったのかが履歴から失われる。
 
 **強制。** `develop` / `main` / `master` 上で `.cs` / `.xaml` を編集しようとすると
-`guard-source-edit.ps1` が **deny** で止める。`git switch` / `commit` / `push` / `gh pr create` は
-`protect-commands.ps1` が都度確認する。
+`guard-source-edit.ps1` が **deny** で止める。`gh pr create` は `protect-commands.ps1` が都度確認する。
 
-### 不可逆な操作は都度確認
+### 不可逆な操作の確認
 
-- `git commit` / `push` / `amend` / ブランチ切替 / PR 作成は、**その都度** 明示的な依頼があるときだけ行う。
-  1 つの承認（commit）は別の操作（push）の承認ではない。
+- `git add` / `commit` / `amend` / `push` / ブランチの作成・切替 / `pull` / `merge` / `rebase` は、
+  **確認なしで行ってよい**（利用者の決定 2026-11-23、T202）。ブランチ運用と品質ゲートの前提には従う。
+- **PR 作成は、その都度** 明示的な依頼があるときだけ行う。
 - force push、共有履歴の書き換え、`git reset --hard`、ファイル削除は事前確認必須。
 - 自分が作っていないファイルを削除・上書きするときは、先に中身を確認して申告する。
 
-**強制。** `protect-commands.ps1` が破壊的コマンドを `deny` / `ask` で止める。
+**強制。** `protect-commands.ps1` が破壊的コマンドと `gh pr create` を `deny` / `ask` で止める。
+確認なしの git 操作は `.claude/settings.json` の `allow` に載せてある。
 
 ### スコープを守る
 

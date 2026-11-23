@@ -6,10 +6,10 @@
     Bash / PowerShell ツールの実行直前にコマンド文字列を検査する。
 
       DENY : 復旧不能な破壊 (ルート/ホームの再帰削除)
-      ASK  : 復旧可能だが破壊的な操作、および全ての git 書き込み操作
-             (git は「都度確認」がこのプロジェクトの規範のため)
+      ASK  : 復旧可能だが破壊的な操作、および PR 作成
+             (commit / push / ブランチ作成は確認なし。PR 作成だけが都度確認 — T202)
 
-    規範: docs/harness/00-ways-of-working.md #不可逆な操作は都度確認
+    規範: docs/harness/00-ways-of-working.md #不可逆な操作の確認
 
 .NOTES
     フェイルオープン。例外時は exit 0 で素通しする。
@@ -81,32 +81,14 @@ try {
         }
     }
 
-    # --- ASK: git の書き込み操作は都度確認 ---------------------------------
-    $gitWrite = @{
-        '\bgit\s+commit\b'    = 'git commit'
-        '\bgit\s+push\b'      = 'git push'
-        '\bgit\s+add\b'       = 'git add'
-        '\bgit\s+merge\b'     = 'git merge'
-        '\bgit\s+rebase\b'    = 'git rebase'
-        '\bgit\s+switch\b'    = 'ブランチ切替 (git switch)'
-        '\bgh\s+pr\s+create'  = 'PR 作成'
-    }
-    foreach ($p in $gitWrite.Keys) {
-        if ($cmd -match $p) {
-            # 統合 (S8) に当たる操作には、品質ゲートの確認を添える
-            $gateNote = ''
-            if ($cmd -match '\bgit\s+(commit|push)\b' -or $cmd -match '\bgh\s+pr\s+create') {
-                $gateNote =
-                    "`n品質ゲート G1/G2/G3 が全て緑になっていることを確認してから統合すること" +
-                    " (緑でないうちはコミットしない)。PR の宛先は develop " +
-                    "(docs/harness/10-workflow.md S8)。"
-            }
-            Respond 'ask' (
-                "git の書き込み操作は都度の明示的な承認が必要です: $($gitWrite[$p])`n" +
-                "コマンド: $cmd`n" +
-                "1 つの操作の承認は、別の操作 (commit → push 等) の承認を意味しません " +
-                "(docs/harness/00-ways-of-working.md)。" + $gateNote)
-        }
+    # --- ASK: PR 作成は都度確認 --------------------------------------------
+    # git の commit / push / add / switch 等は確認なし (T202)
+    if ($cmd -match '\bgh\s+pr\s+create') {
+        Respond 'ask' (
+            "PR 作成は都度の明示的な依頼が必要です。`n" +
+            "コマンド: $cmd`n" +
+            "品質ゲート G1/G2/G3 が全て緑になっていること、PR の宛先が develop であることを確認すること " +
+            "(docs/harness/10-workflow.md S8)。")
     }
 
     Approve
