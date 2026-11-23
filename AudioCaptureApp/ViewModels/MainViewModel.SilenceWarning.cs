@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using AudioCaptureApp.Services;
 
@@ -17,11 +16,8 @@ public partial class MainViewModel
     /// <summary>判定器に渡した調整値。警告の文言に秒数を出すのに使う。</summary>
     private readonly SilenceWarningOptions _silenceWarningOptions;
 
-    /// <summary>前回の観測からの実時間を測る（REQ-REC-14）。</summary>
-    private readonly Stopwatch _silenceWarningClock = Stopwatch.StartNew();
-
     /// <summary>1 回の観測で足す経過の上限。UI スレッドが止まっていた時間をまとめて無音に数えないため。</summary>
-    private static readonly TimeSpan MaxSilenceObserveStep = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan MaxSilenceObserveStep = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// 無音が続いたことを利用者に知らせてほしい（REQ-REC-14）。引数は表示する文言。
@@ -39,19 +35,13 @@ public partial class MainViewModel
 
     /// <summary>
     /// レベルメーターの更新に相乗りして判定する（REQ-REC-14）。UI スレッドの 50ms タイマーから呼ばれる。
+    /// <paramref name="elapsed"/> は前回の更新からの実時間。DispatcherTimer は 50ms より遅れて回るため、
+    /// 名目値を足すと 10 秒の設定が 12.8 秒になった（T210 の実測）。止まっていた時間（スリープ等）は 1 秒までに抑える。
     /// </summary>
-    private void ObserveSilence(double micLevelDb, double loopbackLevelDb)
+    private void ObserveSilence(double micLevelDb, double loopbackLevelDb, TimeSpan elapsed)
     {
-        // 経過は名目の 50ms ではなく実時間で測る。DispatcherTimer は 50ms より遅れて回るため、
-        // 名目値を足すと 10 秒の設定が 12.8 秒になった（T210 の実測）。止まっていた時間（スリープ等）は 1 秒までに抑える。
-        var elapsed = _silenceWarningClock.Elapsed;
-        _silenceWarningClock.Restart();
-        if (elapsed > MaxSilenceObserveStep)
-        {
-            elapsed = MaxSilenceObserveStep;
-        }
-
-        if (!_silenceWarningTrigger.Observe(micLevelDb, loopbackLevelDb, elapsed, IsRecording && !IsStopping))
+        var step = ClampMeterStep(elapsed, MaxSilenceObserveStep);
+        if (!_silenceWarningTrigger.Observe(micLevelDb, loopbackLevelDb, step, IsRecording && !IsStopping))
         {
             return;
         }

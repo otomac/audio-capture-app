@@ -15,8 +15,11 @@ public partial class MainViewModel
     /// </summary>
     private readonly AutoStartTrigger _autoStartTrigger;
 
-    /// <summary>レベルメーターのタイマー間隔。判定器に渡す経過時間として使う。</summary>
-    private static readonly TimeSpan MeterTick = TimeSpan.FromMilliseconds(50);
+    /// <summary>
+    /// 1 回の観測で足す経過の上限（名目のタイマー間隔 2 回分）。UI スレッドが止まっていた間のレベルは
+    /// 最後の 1 回分しか見ていないため、長く足すと止まった直後の 1 回の大きな音だけで累積が満ちてしまう（REQ-REC-12）。
+    /// </summary>
+    internal static readonly TimeSpan MaxAutoStartObserveStep = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
     /// 判定の積算を 0 に戻す。「マイクの音量で録音を自動で開始する」（REQ-SETWIN-03 ⑥）の ON/OFF は
@@ -52,12 +55,15 @@ public partial class MainViewModel
 
     /// <summary>
     /// レベルメーターの更新に相乗りして判定する（REQ-REC-12）。UI スレッドの 50ms タイマーから呼ばれる。
+    /// <paramref name="elapsed"/> は前回の更新からの実時間。名目の 50ms を足すと、タイマーの遅れの分だけ
+    /// 累積・落ち込み許容・クールダウンがどれも長くなる（T214）。
     /// </summary>
-    private void ObserveAutoStart(double micLevelDb)
+    private void ObserveAutoStart(double micLevelDb, TimeSpan elapsed)
     {
         var canStart = CanAutoStartFor(
             Settings.AutoStartRecordingEnabled, IsNotBusy, SelectedCaptureDevice != null, IsModalDialogOpen);
-        if (!_autoStartTrigger.Observe(micLevelDb, MeterTick, canStart))
+        var step = ClampMeterStep(elapsed, MaxAutoStartObserveStep);
+        if (!_autoStartTrigger.Observe(micLevelDb, step, canStart))
         {
             return;
         }

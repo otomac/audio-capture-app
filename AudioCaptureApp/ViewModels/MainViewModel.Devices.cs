@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Windows.Threading;
 using AudioCaptureApp.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -127,14 +128,37 @@ public partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// レベルメーターの前回の更新からの実時間を測る（REQ-REC-12 / REQ-REC-14）。
+    /// タイマーは名目の 50ms より遅れて回るため、判定器には名目値ではなくこの実時間を渡す（T210 / T214）。
+    /// </summary>
+    private readonly Stopwatch _meterClock = Stopwatch.StartNew();
+
+    /// <summary>
+    /// 判定器に 1 回で渡す経過を <paramref name="max"/> までに抑える。UI スレッドが止まっていた時間
+    /// （スリープ・重い処理）をまとめて数えないため。上限は判定ごとに決める。
+    /// </summary>
+    internal static TimeSpan ClampMeterStep(TimeSpan elapsed, TimeSpan max)
+    {
+        if (elapsed < TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return elapsed > max ? max : elapsed;
+    }
+
     private void UpdateMeters()
     {
+        var elapsed = _meterClock.Elapsed;
+        _meterClock.Restart();
+
         MicLevelDb = PeakToDb(_audioCaptureService.MicPeakLevel);
         LoopbackLevelDb = PeakToDb(_audioCaptureService.LoopbackPeakLevel);
         // REQ-REC-12: 自動開始の判定はこのタイマーに相乗りする（スレッドを増やさない）
-        ObserveAutoStart(MicLevelDb);
+        ObserveAutoStart(MicLevelDb, elapsed);
         // REQ-REC-14: 無音の警告も同じタイマーで
-        ObserveSilence(MicLevelDb, LoopbackLevelDb);
+        ObserveSilence(MicLevelDb, LoopbackLevelDb, elapsed);
         // REQ-REC-07 / REQ-TRX-LIVE-11: 停止処理中の残り表示も同じタイマーで
         UpdateStoppingStatus();
     }

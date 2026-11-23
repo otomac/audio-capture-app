@@ -1002,4 +1002,62 @@ public class MainViewModelTests
     {
         Assert.False(FileTranscriptionViewModel.IsSupportedAudioExtension(path));
     }
+
+    // --- レベルメーターの経過時間 (T214 / REQ-REC-12 / REQ-REC-14) ---
+
+    [Fact]
+    public void ClampMeterStep_WithinMax_ReturnsElapsedAsIs()
+    {
+        // タイマーの実際の間隔（約 62.5ms）は名目の 50ms に丸めず、そのまま足す
+        var elapsed = TimeSpan.FromMilliseconds(62.5);
+
+        Assert.Equal(elapsed, MainViewModel.ClampMeterStep(elapsed, MainViewModel.MaxAutoStartObserveStep));
+        Assert.Equal(elapsed, MainViewModel.ClampMeterStep(elapsed, MainViewModel.MaxSilenceObserveStep));
+    }
+
+    [Fact]
+    public void ClampMeterStep_LongerThanMax_ReturnsMax()
+    {
+        var stalled = TimeSpan.FromSeconds(2.4);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(100), MainViewModel.ClampMeterStep(stalled, MainViewModel.MaxAutoStartObserveStep));
+        Assert.Equal(TimeSpan.FromSeconds(1), MainViewModel.ClampMeterStep(stalled, MainViewModel.MaxSilenceObserveStep));
+    }
+
+    [Fact]
+    public void ClampMeterStep_Negative_ReturnsZero()
+    {
+        Assert.Equal(TimeSpan.Zero, MainViewModel.ClampMeterStep(TimeSpan.FromMilliseconds(-1), MainViewModel.MaxAutoStartObserveStep));
+    }
+
+    [Fact]
+    public void AutoStartStep_AfterUiStall_OneLoudTickDoesNotFillSustain()
+    {
+        // UI スレッドが 2.4 秒止まった直後の 1 回が大きな音でも、それだけでは累積 1 秒に届かない
+        var trigger = new AutoStartTrigger(AutoStartOptions.Default);
+        var step = MainViewModel.ClampMeterStep(TimeSpan.FromSeconds(2.4), MainViewModel.MaxAutoStartObserveStep);
+
+        Assert.False(trigger.Observe(0.0, step, canStart: true));
+        Assert.Equal(TimeSpan.FromMilliseconds(100), trigger.Sustained);
+    }
+
+    [Fact]
+    public void AutoStartStep_RealTimerInterval_FiresAfterSustainInRealTime()
+    {
+        // 62.5ms ごとに回るタイマーで、累積 1 秒は 16 回目（1.0 秒）で満ちる。
+        // 名目の 50ms で数えていたときは 20 回目（実時間 1.25 秒）だった（T214）
+        var trigger = new AutoStartTrigger(AutoStartOptions.Default);
+        var step = MainViewModel.ClampMeterStep(TimeSpan.FromMilliseconds(62.5), MainViewModel.MaxAutoStartObserveStep);
+
+        var ticks = 0;
+        var fired = false;
+        while (!fired && ticks < 100)
+        {
+            ticks++;
+            fired = trigger.Observe(0.0, step, canStart: true);
+        }
+
+        Assert.True(fired);
+        Assert.Equal(16, ticks);
+    }
 }
