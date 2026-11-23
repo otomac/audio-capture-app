@@ -148,7 +148,8 @@ public sealed partial class FileTranscriptionViewModel
                 filePath, options, diarization, progress, token));
             if (result.Success)
             {
-                var txtPath = TranscriptionService.BuildTranscriptPath(filePath, MetadataMeetingName);
+                // 既存のファイルがあれば連番の別名になっている（REQ-TRX-FILE-05 / T208）
+                var txtPath = result.OutputPath ?? TranscriptionService.BuildTranscriptPath(filePath, MetadataMeetingName);
                 FileTranscriptionStatus = "完了";
                 _main.StatusMessage = $"文字起こし完了: {txtPath}";
                 _main.LastResultPath = txtPath;   // REQ-OPEN-01
@@ -246,9 +247,14 @@ public sealed partial class FileTranscriptionViewModel
         // 押したことは FileTranscriptionStatus ではなくフラグに残す。進捗行へ書いても
         // 直後の progress.Report が上書きしてしまい、画面上は何も起きていないように見える。
         FileTranscriptionCancelNotice = FileTranscriptionCancelNoticeFor(_isDiarizingFile);
+        // ダイアログを閉じた後は、メインウィンドウのステータスバーが唯一の手がかりになる（REQ-TRX-FILE-14 ① / T212）
+        _main.StatusMessage = MainStatusForCancel(FileTranscriptionCancelNotice);
         IsFileTranscriptionCancelRequested = true;
         _fileTranscriptionCts?.Cancel();
     }
+
+    /// <summary>中止を要求したときのメインウィンドウのステータス（REQ-TRX-FILE-14 ①）。</summary>
+    internal static string MainStatusForCancel(string cancelNotice) => $"ファイル文字起こし: {cancelNotice}";
 
     /// <summary>
     /// 中止を要求し、処理の完了を待つ（REQ-TRX-FILE-14）。アプリの終了時に親が呼ぶ。

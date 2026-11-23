@@ -122,6 +122,8 @@ sequenceDiagram
 
     Note over TS: 別スレッド (WhisperTranscription) が1秒毎にポーリング
     TS->>TS: 確定条件を満たしたソースを検出（上限到達（既定6秒。遅れているときは20秒） / 末尾に発話終了の無音（既定0.8秒） / 供給が5秒途絶）
+    Note over TS: 音源ごとに手番を回す（1 回の手番は 1 チャンク以上・約 1 秒まで。REQ-TRX-LIVE-04 / T204）
+    Note over TS: どの音源からも取り出せなくなるまで繰り返す
     TS->>TS: SplitVoicedRegions() で有声区間に分割
     loop 有声区間ごと
         opt 文脈プロンプトが有効で、用語集か直前の確定文がある（REQ-TRX-LIVE-19）
@@ -279,7 +281,7 @@ sequenceDiagram
         loop 有声区間ごと
             TS->>TS: WhisperProcessor.ProcessAsync(region)
             TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（startOffset + chunkOffset + 区間先頭のオフセット を基準に加算）
-            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
+            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt（既にあれば連番の別名。REQ-TRX-FILE-05）
         end
         TS->>TS: FlushAsync()
         TS-->>FVM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）

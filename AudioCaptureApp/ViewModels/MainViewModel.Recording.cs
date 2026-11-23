@@ -312,6 +312,19 @@ public partial class MainViewModel
     }
 
     /// <summary>
+    /// 終了のためにファイル文字起こしの中止を待っている間に、もう一度閉じようとしたときの確認（REQ-TRX-FILE-14 ③ / T212）。
+    /// 待っている対象がファイル文字起こしでなければ <c>null</c>（録音の停止処理中は「打ち切り」ボタンがあるため出さない）。
+    /// </summary>
+    internal static string? ForceCloseConfirmationMessage(bool isTranscribingFile)
+        => isTranscribingFile
+            ? "ファイル文字起こしの中止を待っています。\n中止の完了を待たずに終了しますか？\n\n作成中の出力ファイルが残ることがあります。"
+            : null;
+
+    /// <summary>終了のためにファイル文字起こしの中止を待っている間のステータス（REQ-TRX-FILE-14 ②）。</summary>
+    internal const string ShutdownWaitingForFileTranscriptionStatus =
+        "終了しています... ファイル文字起こしの中止を待っています（もう一度閉じると、待たずに終了できます）";
+
+    /// <summary>
     /// 進行中の作業を畳んでから戻る（REQ-REC-11 / REQ-TRX-FILE-14）。
     /// 呼び出し元（<c>MainWindow.MainWindow_Closing</c>）はこれを待ってから <c>Close()</c> を呼び直す。
     /// </summary>
@@ -323,7 +336,10 @@ public partial class MainViewModel
     {
         if (IsTranscribingFile)
         {
-            await FileTranscription.CancelAndWaitAsync();
+            // 中止の要求は CancelAndWaitAsync の中で同期的に済む。その後で待っていることを出す（REQ-TRX-FILE-14 ②）
+            var cancelled = FileTranscription.CancelAndWaitAsync();
+            StatusMessage = ShutdownWaitingForFileTranscriptionStatus;
+            await cancelled;
         }
 
         if (IsStopping)

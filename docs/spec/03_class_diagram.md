@@ -105,6 +105,7 @@ classDiagram
         event LiveTranscriptRequested
         event SettingsRequested
         event RecordingMetadataRequested
+        event SilenceWarningRequested
     }
 
     class SettingsViewModel {
@@ -303,6 +304,7 @@ classDiagram
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
         +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
+        +BuildAvailableTranscriptPath(string, string?, Func~string,bool~) string$
         +TryGetAudioDuration(string, out TimeSpan) bool$
         +AudioContextFor(double) int$
         +NextProvisionalInterval(double, ProvisionalOptions) double$
@@ -423,6 +425,7 @@ classDiagram
         <<sealed record>>
         +FileTranscriptionOutcome Outcome
         +string? Message
+        +string? OutputPath
     }
 
     class TranscriptionLanguage {
@@ -491,6 +494,20 @@ classDiagram
         +Observe(double, TimeSpan, bool) bool
         +Reset()
         +NotifyStopped()
+    }
+
+    class SilenceWarningOptions {
+        <<sealed record>>
+        +bool Enabled
+        +TimeSpan Duration
+        +double ThresholdDb
+    }
+
+    class SilenceWarningTrigger {
+        -TimeSpan _silentFor
+        -bool _warned
+        +Observe(double, double, TimeSpan, bool) bool
+        +Reset()
     }
 
     class SpeakerCountOption {
@@ -654,6 +671,8 @@ classDiagram
     FileTranscriptionViewModel ..> RecordingMetadataFile : 既存の JSON の読み込み・更新
     RecordingMetadataFile ..> RecordingMetadata : 書き出す・読み込む
     AutoStartTrigger "1" --> "1" AutoStartOptions
+    MainViewModel "1" --> "1" SilenceWarningTrigger : メーターの 50ms タイマーで Observe（REQ-REC-14）
+    SilenceWarningTrigger "1" --> "1" SilenceWarningOptions
 
     MainViewModel "1" --> "0..1" SpeakerDiarizationService : 設定で有効なときだけ生成し Dispose する
 

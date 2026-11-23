@@ -133,6 +133,8 @@ public partial class MainViewModel
         LoopbackLevelDb = PeakToDb(_audioCaptureService.LoopbackPeakLevel);
         // REQ-REC-12: 自動開始の判定はこのタイマーに相乗りする（スレッドを増やさない）
         ObserveAutoStart(MicLevelDb);
+        // REQ-REC-14: 無音の警告も同じタイマーで
+        ObserveSilence(MicLevelDb, LoopbackLevelDb);
         // REQ-REC-07 / REQ-TRX-LIVE-11: 停止処理中の残り表示も同じタイマーで
         UpdateStoppingStatus();
     }
