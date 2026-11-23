@@ -159,12 +159,45 @@ public class AudioCaptureService : IDisposable
             devices.Add(new AudioDevice
             {
                 DeviceId = device.ID,
-                FriendlyName = device.FriendlyName,
+                FriendlyName = ReadFriendlyName(device),
                 IsDefault = device.ID == defaultId
             });
             device.Dispose();
         }
         return devices;
+    }
+
+    /// <summary>
+    /// デバイスの表示名を読む。NAudio の <see cref="MMDevice.FriendlyName"/> と同じ値（無ければ "Unknown"）を返す。
+    /// </summary>
+    /// <remarks>
+    /// NAudio の <see cref="MMDevice.FriendlyName"/> は、プロパティのキー（1 台に 170 前後）を「あるか」と「値」で 2 回なめ、
+    /// 1 キーごとに件数も取り直すため、1 台に 50〜500ms かかる。デバイス 7 台で 1.7 秒、起動時の UI スレッドが止まっていた（T215）。
+    /// キーで直接読む <c>IPropertyStore.GetValue</c> は NAudio の内部にあるため、件数を 1 回だけ取り、キーを 1 回だけなめる。
+    /// </remarks>
+    private static string ReadFriendlyName(MMDevice device)
+    {
+        var store = device.Properties;
+        var index = IndexOfKey(store.Count, store.Get, PropertyKeys.PKEY_Device_FriendlyName);
+        return index >= 0 && store.GetValue(index).Value is string name ? name : "Unknown";
+    }
+
+    /// <summary>
+    /// <paramref name="keyAt"/> で 0 番から順にキーを読み、<paramref name="key"/> と一致した位置を返す（無ければ -1）。
+    /// 各キーは 1 回ずつしか読まず、見つけたら止める。
+    /// </summary>
+    internal static int IndexOfKey(int count, Func<int, PropertyKey> keyAt, PropertyKey key)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            var k = keyAt(i);
+            if (k.formatId == key.formatId && k.propertyId == key.propertyId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     // --- マイク常時モニター ---
