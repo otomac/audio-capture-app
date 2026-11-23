@@ -31,5 +31,6 @@
 | [0004](./0004-speaker-id-assignment-strategy.md) | 話者 ID の付け方を sherpa-onnx に任せ続ける（自前クラスタリングは今回採らない） | 承認済み | 2026-08-23 |
 | [0005](./0005-mainviewmodel-split.md) | `MainViewModel` を分割するか（ADR-0002 の再評価） | 置換済み（→ 0008） | 2026-08-27 |
 | [0006](./0006-mainviewmodel-split-reevaluation.md) | `MainViewModel` 分割の再評価（契機①②到達。案 D を続け、案 A は T170 へ） | 置換済み（→ 0008） | 2026-09-22 |
-| [0007](./0007-two-pass-live-transcription.md) | ライブ文字起こしを速報パスと確定パスの 2 段にする（速報は CPU 専用の別スレッドで並列。案 B） | 承認済み | 2026-10-11 |
+| [0007](./0007-two-pass-live-transcription.md) | ライブ文字起こしを速報パスと確定パスの 2 段にする（速報は CPU 専用の別スレッドで並列。案 B） | 置換済み（→ 0009） | 2026-10-11 |
 | [0008](./0008-per-window-viewmodels.md) | ウィンドウごとに ViewModel を持たせ、`MainViewModel` を親にする | 承認済み | 2026-09-29 |
+| [0009](./0009-single-pass-light-model-live-transcription.md) | ライブ文字起こしを「軽量モデル × 短い区切り」の 1 段にする（small-q5_1 × 6 秒 × 0.8 秒。速報パスは既定 OFF） | 承認済み | 2026-11-23 |
