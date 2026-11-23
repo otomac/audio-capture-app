@@ -64,7 +64,7 @@
 
                         <!-- REQ-SETWIN-03 ② / REQ-MODELWIN-07: 登録済みモデル（REQ-CFG-08）のエイリアスから選ぶ。
                              パスの直接選択は置かない（登録は「モデル管理…」）。 -->
-                        <TextBlock Text="Whisper モデル（ライブ文字起こし）" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
+                        <TextBlock Text="Whisper モデル（ライブ文字起こし。推奨: small-q5_1）" Style="{StaticResource Text.Label}" Margin="0,0,0,4"/>
                         <Grid Margin="0,0,0,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>

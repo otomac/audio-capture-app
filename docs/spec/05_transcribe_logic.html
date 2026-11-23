@@ -208,7 +208,7 @@ footer p { margin: 4px 0; }
     <dt>読み手</dt>
     <dd>このアプリを使う人。数式や信号処理の知識は要りません。時間の流れ、マイクとスピーカーの違い、速報と確定の違いが分かれば読めます。</dd>
     <dt>基準</dt>
-    <dd>2026-10-17 時点の <code>develop</code>（789d56d）のコード。実測値は各タスクの記録（T163・T182・T191 など）から引いています。</dd>
+    <dd>2026-10-17 時点の <code>develop</code>（789d56d）のコード。ライブの区切り・推奨モデル・速報の既定は 2026-11-23 の T200 / T201（ADR-0009）に合わせて直しました。実測値は各タスクの記録（T163・T182・T191・T199 など）から引いています。</dd>
     <dt>位置づけ</dt>
     <dd>要件の定義は <a href="./01_requirements.md">01_requirements.md</a> が持ち、この章はそれを利用者の目線でまとめ直したものです。数値が食い違ったら、コード → 01 の順に確かめてこの章を直します。各節の末尾に対応する要件の番号を添えています。</dd>
   </dl>
@@ -235,13 +235,13 @@ footer p { margin: 4px 0; }
   <h2><span class="no">1</span>全体像：3 つの経路</h2>
   <p>文字起こしの経路は 3 つあります。録音中に動くのが<strong>確定パス</strong>と<strong>速報パス</strong>、録音済みのファイルに使うのが<strong>ファイル文字起こし</strong>です。</p>
   <ul class="facts">
-    <li><strong>確定パス（録音中）</strong>：マイクとスピーカーの音声を、最大 10 秒（遅れているときは 20 秒）のまとまり（チャンク）に区切って文字にします。結果は文字起こしウィンドウの行一覧に出て、録音と同じ名前の <code>.txt</code> に追記されます。<strong>ファイルに残るのはこの経路の文字だけです。</strong></li>
-    <li><strong class="prov">速報パス（録音中）</strong>：まだ確定していない、話している最中の音声を約 1 秒ごとに粗く文字にして、文字起こしウィンドウ下部の字幕帯に出します。確定パスがその部分を文字にし終えると、速報は消えます。ファイルには書きません。</li>
+    <li><strong>確定パス（録音中）</strong>：マイクとスピーカーの音声を、最大 6 秒（遅れているときは 20 秒）のまとまり（チャンク）に区切って文字にします。結果は文字起こしウィンドウの行一覧に出て、録音と同じ名前の <code>.txt</code> に追記されます。<strong>ファイルに残るのはこの経路の文字だけです。</strong></li>
+    <li><strong class="prov">速報パス（録音中・既定は OFF）</strong>：まだ確定していない、話している最中の音声を約 1 秒ごとに粗く文字にして、文字起こしウィンドウ下部の字幕帯に出します。確定パスがその部分を文字にし終えると、速報は消えます。ファイルには書きません。</li>
     <li><strong>ファイル文字起こし</strong>：録音済みの音声ファイルを、先頭から 20 秒ずつ文字にして <code>.transcript.txt</code> に書きます。必要なら話者識別（話者1・話者2…の区別）を加えます。</li>
   </ul>
 
   <figure>
-    <div class="fig-scroll"><svg viewBox="0 0 960 376" class="fig" role="img" aria-label="全体の流れ。マイクとスピーカーの音声は 16 kHz モノラルに変換され、両方が確定パス（ライブ用モデル、GPU）へ、既定ではスピーカーだけが速報パス（速報用モデル、CPU）へ渡る。確定パスは行一覧と .txt へ、速報パスは字幕帯へ出し、確定パスは確定した所の速報を消す。音声ファイルは 20 秒ずつファイル文字起こしへ渡り、.transcript.txt へ書き出される。">
+    <div class="fig-scroll"><svg viewBox="0 0 960 376" class="fig" role="img" aria-label="全体の流れ。マイクとスピーカーの音声は 16 kHz モノラルに変換され、両方が確定パス（ライブ用モデル、GPU）へ、速報を ON にしたときはスピーカーだけが（既定）速報パス（速報用モデル、CPU）へ渡る（速報の既定は OFF）。確定パスは行一覧と .txt へ、速報パスは字幕帯へ出し、確定パスは確定した所の速報を消す。音声ファイルは 20 秒ずつファイル文字起こしへ渡り、.transcript.txt へ書き出される。">
 <defs><marker id="ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="g-head"/></marker></defs>
 <text x="91" y="14" class="t t-s t-m t-cap" text-anchor="middle">音声</text>
 <text x="276" y="14" class="t t-s t-m t-cap" text-anchor="middle">変換</text>
@@ -265,10 +265,10 @@ footer p { margin: 4px 0; }
 <text x="276" y="332" class="t" text-anchor="middle">に変換</text>
 <rect x="416" y="24" width="240" height="100" rx="4" class="f-box-conf"/>
 <text x="536" y="62" class="t t-b" text-anchor="middle">確定パス</text>
-<text x="536" y="78" class="t t-s" text-anchor="middle">ライブ用モデル（既定 small）</text>
+<text x="536" y="78" class="t t-s" text-anchor="middle">ライブ用モデル（推奨 small-q5_1）</text>
 <text x="536" y="94" class="t t-s t-m" text-anchor="middle">GPU（使えなければ CPU）</text>
 <rect x="416" y="160" width="240" height="72" rx="4" class="f-box-prov"/>
-<text x="536" y="184" class="t t-b t-i" text-anchor="middle">速報パス</text>
+<text x="536" y="184" class="t t-b t-i" text-anchor="middle">速報パス（既定 OFF）</text>
 <text x="536" y="200" class="t t-s" text-anchor="middle">速報用モデル（推奨 base）</text>
 <text x="536" y="216" class="t t-s t-m" text-anchor="middle">常に CPU・4 スレッド</text>
 <rect x="416" y="272" width="240" height="96" rx="4" class="f-box-conf"/>
@@ -313,24 +313,24 @@ footer p { margin: 4px 0; }
   </figure>
 
   <h3>速報と確定の違い</h3>
-  <p>同じ音声を、2 つのモデルが別々に読みます。速報は早くて粗い下書き、確定は遅れて出る清書です。速報が確定に書き換わるのではなく、確定が出た範囲の速報が消えて、確定の行が残ります。</p>
+  <p>速報を ON にすると、同じ音声を 2 つのモデルが別々に読みます（既定は OFF で、確定だけが動きます）。速報は早くて粗い下書き、確定は遅れて出る清書です。速報が確定に書き換わるのではなく、確定が出た範囲の速報が消えて、確定の行が残ります。</p>
   <div class="tbl">
     <table class="versus">
       <thead><tr><th scope="col"></th><th scope="col">速報</th><th scope="col">確定</th></tr></thead>
       <tbody>
         <tr><th scope="row">役目</th><td>話している最中に、何を話しているかの見当を付ける</td><td>記録として残す文を作る</td></tr>
-        <tr><th scope="row">画面に出るまで</th><td>話してから 1〜2 秒（実測 p50 1.16〜1.23 秒、p95 1.91〜2.02 秒）</td><td>区切りが来て、処理が終わってから。話し続けていれば約 10 秒ごと</td></tr>
-        <tr><th scope="row">区切りの単位</th><td>句（声の切れ目 0.6 秒、または 8 秒で区切る）</td><td>チャンク（10 秒たまる、または 2 秒の無音で区切る）</td></tr>
-        <tr><th scope="row">モデル</th><td>速報用モデル（推奨 base）</td><td>ライブ用モデル（既定 small）</td></tr>
+        <tr><th scope="row">画面に出るまで</th><td>話してから 1〜2 秒（実測 p50 1.16〜1.23 秒、p95 1.91〜2.02 秒）</td><td>区切りが来て、処理が終わってから。話し続けていれば約 6 秒ごと。実測で話してから p50 4.9 秒・p95 8.0 秒（T199）</td></tr>
+        <tr><th scope="row">区切りの単位</th><td>句（声の切れ目 0.6 秒、または 8 秒で区切る）</td><td>チャンク（6 秒たまる、または 0.8 秒の無音で区切る）</td></tr>
+        <tr><th scope="row">モデル</th><td>速報用モデル（推奨 base）</td><td>ライブ用モデル（推奨 small-q5_1）</td></tr>
         <tr><th scope="row">計算する場所</th><td>常に CPU（4 スレッド）</td><td>GPU（使えなければ CPU）</td></tr>
         <tr><th scope="row">出る所</th><td>文字起こしウィンドウの字幕帯（最大 4 件）</td><td>行一覧と <code>.txt</code></td></tr>
         <tr><th scope="row">ファイルに残るか</th><td>残らない</td><td>残る</td></tr>
         <tr><th scope="row">既定の音源</th><td>スピーカーだけ</td><td>マイクとスピーカーの両方</td></tr>
-        <tr><th scope="row">動かすには</th><td>「録音中に速報を出す」が ON（既定）で、速報用モデルを選ぶ（既定は未選択）</td><td>「録音中にライブ文字起こしする」を ON にする（既定は OFF）</td></tr>
+        <tr><th scope="row">動かすには</th><td>「録音中に速報を出す」を ON にし（既定は OFF）、速報用モデルを選ぶ（既定は未選択）</td><td>「録音中にライブ文字起こしする」を ON にする（既定は OFF）</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="reqs">要件：REQ-TRX-LIVE-01 / 15 / 18、REQ-TRX-FILE-05、REQ-LIVEVIEW-10、ADR-0007</p>
+  <p class="reqs">要件：REQ-TRX-LIVE-01 / 15 / 18、REQ-TRX-FILE-05、REQ-LIVEVIEW-10、REQ-CFG-12、ADR-0007 / 0009</p>
 </section>
 
 <!-- ============================================================ 2 -->
@@ -344,8 +344,8 @@ footer p { margin: 4px 0; }
         <tr>
           <th scope="row">ライブ用</th>
           <td>確定パス</td>
-          <td><code>%APPDATA%\AudioCaptureApp\models\ggml-small.bin</code></td>
-          <td>設定ウィンドウ「Whisper モデル（ライブ文字起こし）」</td>
+          <td><code>%APPDATA%\AudioCaptureApp\models\ggml-small.bin</code>（推奨は small-q5_1）</td>
+          <td>設定ウィンドウ「Whisper モデル（ライブ文字起こし。推奨: small-q5_1）」</td>
           <td>「文字起こしに GPU を使用する」が ON で GPU が使えれば GPU、それ以外は CPU</td>
           <td>選んであれば起動時に読み込み、載せたままにする。ライブ文字起こしが OFF でも載せる（ファイル文字起こしで共有するため）</td>
         </tr>
@@ -378,7 +378,7 @@ footer p { margin: 4px 0; }
   </div>
 
   <h3>Whisper モデルの登録</h3>
-  <p>モデルのファイルはアプリに同梱していません。Whisper のモデルは whisper.cpp の <code>models/download-ggml-model.cmd</code> などで取得し、話者識別のモデルは sherpa-onnx の配布元から取得します（手順は README）。ライブ用・速報用・ファイル用は、どれも設定ウィンドウの「モデル管理…」で登録した一覧から、付けた名前で選びます。一覧の並び順がドロップダウンの並び順になります。登録するときはファイルがあるかだけを確かめ、Whisper として読み込めるかは、選んで読み込んだときに分かります。同じ名前・同じファイルの二重登録はできません。</p>
+  <p>モデルのファイルはアプリに同梱していません。Whisper のモデルは whisper.cpp の <code>models/download-ggml-model.cmd</code> などで取得し（ライブ用の推奨の small-q5_1 なら <code>download-ggml-model.cmd small-q5_1</code>。モデル管理のダイアログにも書いてあります）、話者識別のモデルは sherpa-onnx の配布元から取得します（手順は README）。ライブ用・速報用・ファイル用は、どれも設定ウィンドウの「モデル管理…」で登録した一覧から、付けた名前で選びます。一覧の並び順がドロップダウンの並び順になります。登録するときはファイルがあるかだけを確かめ、Whisper として読み込めるかは、選んで読み込んだときに分かります。同じ名前・同じファイルの二重登録はできません。</p>
 
   <h3>大きさと質の目安</h3>
   <p>モデルは大きいほど質が上がり、遅くなります。下の文字誤り率は、実際の会議音声（15.8 分）を使った厳しい条件での値で、普段の録音での質を約束するものではありません。</p>
@@ -388,7 +388,8 @@ footer p { margin: 4px 0; }
       <tbody>
         <tr><th scope="row">tiny</th><td class="num">約 75 MB</td><td>速報にも使わない</td><td>60% 超。幻聴を除いても読めない（T182）</td></tr>
         <tr><th scope="row">base</th><td class="num">約 142 MB</td><td>速報用の推奨</td><td>46.4%（速報の条件。幻聴の除去後。T182）</td></tr>
-        <tr><th scope="row">small</th><td class="num">487 MB</td><td>ライブ用の既定</td><td>34.7%。文脈プロンプトありで 31.7%（確定パス・GPU。T182）</td></tr>
+        <tr><th scope="row">small-q5_1</th><td class="num">約 190 MB</td><td>ライブ用の推奨（small を 5 ビットに縮めたもの）</td><td>36.1%（確定パス・GPU・6 秒 / 0.8 秒の区切り。以前の構成（small・10 秒 / 2 秒）は同じ条件で 30.5%。T199）</td></tr>
+        <tr><th scope="row">small</th><td class="num">487 MB</td><td>ライブ用の既定のパス（以前の推奨）</td><td>34.7%。文脈プロンプトありで 31.7%（確定パス・GPU。T182）</td></tr>
         <tr><th scope="row">large-v3-turbo</th><td class="num">1.6 GB</td><td>ファイル用に選ぶ大きなモデルの例</td><td>未測定</td></tr>
       </tbody>
     </table>
@@ -397,7 +398,7 @@ footer p { margin: 4px 0; }
     <p>文字誤り率は、100 文字のうち何文字が正解と違うかを表します。31.7% なら 100 文字に 32 文字ほどの誤りです。</p>
     <p>ライブ用の small を GPU に載せたまま、ファイル用に large-v3-turbo を 2 つ目として載せても、6 GB の GPU に収まりました（処理中 2,995 MiB、終わると 1,437 MiB に戻る。RTX 3050 6GB、T163）。</p>
   </div>
-  <p class="reqs">要件：REQ-TRX-01 / 04、REQ-CFG-04 / 08 / 09 / 12、REQ-TRX-FILE-17、REQ-TRX-DIA-01 / 03 / 08 / 10、REQ-MODELWIN-05</p>
+  <p class="reqs">要件：REQ-TRX-01 / 04、REQ-CFG-04 / 08 / 09 / 12、REQ-TRX-FILE-17、REQ-TRX-DIA-01 / 03 / 08 / 10、REQ-MODELWIN-05 / 07 / 09、ADR-0009</p>
 </section>
 
 <!-- ============================================================ 3 -->
@@ -406,7 +407,7 @@ footer p { margin: 4px 0; }
   <p>録音を始めると、マイクとスピーカーの音声は<strong>別々の音源</strong>として、それぞれ独立に区切られ、文字にされます。図 2 は 30 秒間の例です。横軸は録音を始めてからの秒数です。</p>
 
   <figure>
-    <div class="fig-scroll"><svg viewBox="0 0 960 274" class="fig" role="img" aria-label="録音中 30 秒間のタイムライン。スピーカーの確定チャンクは 0〜10 秒と 10〜20 秒が上限 10 秒で、20〜24 秒が無音 2 秒で区切られる。速報の句は 0.8〜7.5 秒、8.8〜16.8 秒（8 秒で区切る）、16.8〜21.5 秒。マイクは 0〜20 秒が無音だけで捨てられ、20〜27 秒が無音 2 秒で確定する。マイクに速報は出ない。">
+    <div class="fig-scroll"><svg viewBox="0 0 960 274" class="fig" role="img" aria-label="録音中 30 秒間のタイムライン。スピーカーの確定チャンクは 0〜6 秒が上限 6 秒、6〜9 秒が無音 0.8 秒、9〜15 秒と 15〜21 秒が上限 6 秒（話の途中でも切る）、21〜23 秒が無音 0.8 秒で区切られる。速報の句（速報を ON にしたとき）は 0.8〜7.5 秒、8.8〜16.8 秒（8 秒で区切る）、16.8〜21.5 秒。マイクは 0〜18 秒が無音だけで捨てられ、18〜24 秒が上限 6 秒、24〜26 秒が無音 0.8 秒で確定する。マイクに速報は出ない。">
 <line x1="150" y1="24" x2="930" y2="24" class="g-axis"/>
 <line x1="150" y1="24" x2="150" y2="29" class="g-axis"/>
 <text x="150" y="19" class="t t-s t-m" text-anchor="middle">0</text>
@@ -441,48 +442,58 @@ footer p { margin: 4px 0; }
 <line x1="930" y1="24" x2="930" y2="29" class="g-axis"/>
 <text x="930" y="19" class="t t-s t-m" text-anchor="middle">30</text>
 <text x="940" y="19" class="t t-s t-m">秒</text>
-<line x1="410" y1="30" x2="410" y2="266" class="g-guide"/>
-<line x1="670" y1="30" x2="670" y2="266" class="g-guide"/>
 <text x="0" y="54" class="t t-b t-spk">スピーカー（相手の声）</text>
 <text x="140" y="79" class="t t-m" text-anchor="end">声</text>
 <text x="140" y="107" class="t t-m" text-anchor="end">速報の句</text>
 <text x="140" y="135" class="t t-m" text-anchor="end">確定</text>
 <rect x="176" y="66" width="169" height="18" rx="3" class="f-voice-spk"/>
 <rect x="384" y="66" width="325" height="18" rx="3" class="f-voice-spk"/>
-<line x1="709" y1="63" x2="761" y2="63" class="g-dim"/>
+<line x1="345" y1="63" x2="365.8" y2="63" class="g-dim"/>
+<line x1="345" y1="60" x2="345" y2="66" class="g-dim"/>
+<line x1="365.8" y1="60" x2="365.8" y2="66" class="g-dim"/>
+<text x="355.4" y="59" class="t t-s t-m" text-anchor="middle">無音 0.8 秒</text>
+<line x1="709" y1="63" x2="729.8" y2="63" class="g-dim"/>
 <line x1="709" y1="60" x2="709" y2="66" class="g-dim"/>
-<line x1="761" y1="60" x2="761" y2="66" class="g-dim"/>
-<text x="735" y="59" class="t t-s t-m" text-anchor="middle">無音 2 秒</text>
+<line x1="729.8" y1="60" x2="729.8" y2="66" class="g-dim"/>
+<text x="719.4" y="59" class="t t-s t-m" text-anchor="middle">無音 0.8 秒</text>
 <rect x="171.8" y="94" width="172.2" height="18" rx="3" class="f-prov"/>
 <text x="178.8" y="107" class="t t-s t-i">句1</text>
 <rect x="379.8" y="94" width="206" height="18" rx="3" class="f-prov"/>
 <text x="386.8" y="107" class="t t-s t-i">句2（8 秒で区切る）</text>
 <rect x="587.8" y="94" width="120.2" height="18" rx="3" class="f-prov"/>
 <text x="594.8" y="107" class="t t-s t-i">句3</text>
-<rect x="151" y="122" width="258" height="18" rx="3" class="f-conf-spk"/>
-<text x="158" y="135" class="t t-s">上限 10 秒</text>
-<rect x="411" y="122" width="258" height="18" rx="3" class="f-conf-spk"/>
-<text x="418" y="135" class="t t-s">上限 10 秒</text>
-<rect x="671" y="122" width="102" height="18" rx="3" class="f-conf-spk"/>
-<text x="678" y="135" class="t t-s">無音 2 秒</text>
+<rect x="151" y="122" width="154" height="18" rx="3" class="f-conf-spk"/>
+<text x="158" y="135" class="t t-s">上限 6 秒</text>
+<rect x="307" y="122" width="76" height="18" rx="3" class="f-conf-spk"/>
+<text x="314" y="135" class="t t-s">無音 0.8 秒</text>
+<rect x="385" y="122" width="154" height="18" rx="3" class="f-conf-spk"/>
+<text x="392" y="135" class="t t-s">上限 6 秒</text>
+<rect x="541" y="122" width="154" height="18" rx="3" class="f-conf-spk"/>
+<text x="548" y="135" class="t t-s">上限 6 秒</text>
+<rect x="697" y="122" width="50" height="18" rx="3" class="f-conf-spk"/>
+<text x="704" y="135" class="t t-s">無音</text>
 <text x="0" y="174" class="t t-b t-mic">マイク（自分の声）</text>
 <text x="140" y="199" class="t t-m" text-anchor="end">声</text>
 <text x="140" y="227" class="t t-m" text-anchor="end">速報の句</text>
 <text x="140" y="255" class="t t-m" text-anchor="end">確定</text>
 <rect x="722" y="186" width="78" height="18" rx="3" class="f-voice-mic"/>
-<line x1="800" y1="183" x2="852" y2="183" class="g-dim"/>
+<line x1="800" y1="183" x2="820.8" y2="183" class="g-dim"/>
 <line x1="800" y1="180" x2="800" y2="186" class="g-dim"/>
-<line x1="852" y1="180" x2="852" y2="186" class="g-dim"/>
-<text x="826" y="179" class="t t-s t-m" text-anchor="middle">無音 2 秒</text>
-<text x="158" y="227" class="t t-s t-m">なし（既定ではスピーカーだけに出す）</text>
-<rect x="151" y="242" width="258" height="18" rx="3" class="f-skip"/>
-<text x="158" y="255" class="t t-s t-m">無音だけ → Whisper に渡さない</text>
-<rect x="411" y="242" width="258" height="18" rx="3" class="f-skip"/>
-<text x="418" y="255" class="t t-s t-m">無音だけ → Whisper に渡さない</text>
-<rect x="671" y="242" width="180" height="18" rx="3" class="f-conf-mic"/>
-<text x="678" y="255" class="t t-s">無音 2 秒</text>
+<line x1="820.8" y1="180" x2="820.8" y2="186" class="g-dim"/>
+<text x="810.4" y="179" class="t t-s t-m" text-anchor="middle">無音 0.8 秒</text>
+<text x="158" y="227" class="t t-s t-m">なし（速報を ON にしても、既定ではスピーカーだけに出す）</text>
+<rect x="151" y="242" width="154" height="18" rx="3" class="f-skip"/>
+<text x="158" y="255" class="t t-s t-m">無音だけ → 渡さない</text>
+<rect x="307" y="242" width="154" height="18" rx="3" class="f-skip"/>
+<text x="314" y="255" class="t t-s t-m">無音だけ → 渡さない</text>
+<rect x="463" y="242" width="154" height="18" rx="3" class="f-skip"/>
+<text x="470" y="255" class="t t-s t-m">無音だけ → 渡さない</text>
+<rect x="619" y="242" width="154" height="18" rx="3" class="f-conf-mic"/>
+<text x="626" y="255" class="t t-s">上限 6 秒</text>
+<rect x="775" y="242" width="50" height="18" rx="3" class="f-conf-mic"/>
+<text x="782" y="255" class="t t-s">無音</text>
 </svg></div>
-    <figcaption>図 2　スピーカーは 1.0〜7.5 秒と 9.0〜21.5 秒、マイクは 22.0〜25.0 秒に声がある例。確定パスはスピーカーを 10 秒たまるたびに区切り（話の途中でも切る）、話し終えて 2 秒の無音が続いた 24 秒でも区切る。7.5〜9.0 秒の間（1.5 秒）は 2 秒に満たないので区切らない。マイクの 0〜20 秒は無音だけなので Whisper を呼ばずに捨てる。速報の句は声に沿って開き、0.6 秒の無音か 8 秒で閉じる。速報は既定でスピーカーにだけ出る。</figcaption>
+    <figcaption>図 2　スピーカーは 1.0〜7.5 秒と 9.0〜21.5 秒、マイクは 22.0〜25.0 秒に声がある例。確定パスは 1 秒ごとに確かめるので、区切りは秒の切れ目に来る。スピーカーは 6 秒たまるたびに区切り（話の途中でも切る）、話し終えて 0.8 秒以上の無音が続いたときにも区切る — 7.5〜9.0 秒の間（1.5 秒）で 9 秒に、21.5 秒に話し終えた後の 23 秒に区切る。マイクの 0〜18 秒は無音だけなので Whisper を呼ばずに捨てる。マイクの声は 24 秒の上限で途中で切れ、続きは 0.8 秒の無音の後の 26 秒で区切る。速報の句は速報を ON にしたときだけ出る（既定は OFF）。句は声に沿って開き、0.6 秒の無音か 8 秒で閉じ、既定ではスピーカーにだけ出る。</figcaption>
   </figure>
 
   <h3>行の時刻の決まり方</h3>
@@ -511,18 +522,18 @@ footer p { margin: 4px 0; }
     <table>
       <thead><tr><th scope="col">きっかけ</th><th scope="col">区切る長さ</th><th scope="col">遅れているとき</th><th scope="col" class="req">要件</th></tr></thead>
       <tbody>
-        <tr><th scope="row">10 秒分たまった</th><td>先頭の 10 秒。話の途中でも切る</td><td>20 秒分たまったら 20 秒で切る</td><td class="req">REQ-TRX-LIVE-10</td></tr>
-        <tr><th scope="row">話し終えて 2 秒の無音が続いた</th><td>たまった全部。中に声が 1 つも無いときは使わない</td><td>使わない（20 秒たまるまで待つ）</td><td class="req">REQ-TRX-LIVE-13</td></tr>
+        <tr><th scope="row">6 秒分たまった</th><td>先頭の 6 秒。話の途中でも切る</td><td>20 秒分たまったら 20 秒で切る</td><td class="req">REQ-TRX-LIVE-10</td></tr>
+        <tr><th scope="row">話し終えて 0.8 秒の無音が続いた</th><td>たまった全部。中に声が 1 つも無いときは使わない</td><td>使わない（20 秒たまるまで待つ）</td><td class="req">REQ-TRX-LIVE-13</td></tr>
         <tr><th scope="row">音声が 5 秒以上届いていない</th><td>たまった全部（0.2 秒未満は持ち越す）</td><td>同じ</td><td class="req">REQ-TRX-LIVE-12</td></tr>
         <tr><th scope="row">音声が 0.5 秒より長く途切れて再開した</th><td>途切れる前まで。20 秒を超えていれば 20 秒ずつ</td><td>同じ</td><td class="req">REQ-TRX-LIVE-07</td></tr>
         <tr><th scope="row">録音を止めた</th><td>残り全部（0.2 秒以上あれば）</td><td>同じ</td><td class="req">REQ-TRX-LIVE-05 / 11</td></tr>
       </tbody>
     </table>
   </div>
-  <p>「2 秒の無音」は、<code>settings.json</code> の <code>SilenceMergeGapSeconds</code>（既定 2.0）と同じ値です。次の節の無音カットで「声と声をつなぐ間」に使う値と共通なので、確定のチャンクには発話がちょうど 1 つ入る形になります。</p>
+  <p>「6 秒」と「0.8 秒」は、<code>settings.json</code> の <code>LiveChunkMaxSeconds</code>（既定 6.0）と <code>LiveEndpointSilenceSeconds</code>（既定 0.8）で変えられます。以前は 10 秒と 2 秒（次の節の無音カットで「声と声をつなぐ間」に使う <code>SilenceMergeGapSeconds</code> と同じ値）でしたが、話してから確定の行が出るまで 8 秒ほどかかっていたため短くしました（ADR-0009。実測で p50 8.3 秒 → 4.9 秒）。0.8 秒は無音カットの 2.0 秒とは別の値なので、0.8 秒以上 2 秒未満の間を挟む 2 つの発話は、別々の行になることがあります。</p>
 
   <h4>遅れているとき</h4>
-  <p>マイクとスピーカーの、まだ文字にしていない音声の合計が <strong>60 秒分以上</strong>になると「遅れている」とみなします。このときは 1 回に 20 秒ずつまとめて処理し、2 秒の無音での区切りを使いません。短く区切るほど音声 1 秒あたりの処理が割高になり（実測：20 秒の入力で音声 1 秒あたり 0.181 秒、5 秒の入力で 0.381 秒）、遅れがさらに広がるためです。目安として、RTX 3050 で small を GPU で動かしたときは実時間の約 5.5 倍の速さで処理できました（T175）。ただし、会議アプリが GPU を使っていると追いつかないことがあります。録音中に遅れが 60 秒以上になると、ステータスバーに「文字起こしが N 秒遅れています」（2 分以上は「N 分」）と出ます。</p>
+  <p>マイクとスピーカーの、まだ文字にしていない音声の合計が <strong>60 秒分以上</strong>になると「遅れている」とみなします。このときは 1 回に 20 秒ずつまとめて処理し、0.8 秒の無音での区切りを使いません。短く区切るほど音声 1 秒あたりの処理が割高になり（実測：20 秒の入力で音声 1 秒あたり 0.181 秒、5 秒の入力で 0.381 秒）、遅れがさらに広がるためです。目安として、RTX 3050 で small を GPU で動かしたときは実時間の約 5.5 倍の速さで処理できました（T175）。ただし、会議アプリが GPU を使っていると追いつかないことがあります。録音中に遅れが 60 秒以上になると、ステータスバーに「文字起こしが N 秒遅れています」（2 分以上は「N 分」）と出ます。</p>
 
   <h3>4.2　無音カット</h3>
   <p>チャンクを Whisper に渡す前に、声の無い所を取り除きます。無音を渡すと、Whisper が「ご視聴ありがとうございました」のような、音声に無い文を作ってしまうためです（幻聴）。</p>
@@ -602,11 +613,11 @@ footer p { margin: 4px 0; }
 <text x="895.2" y="197" class="t t-s">区間2</text>
 <text x="813.2" y="197" class="t t-s t-m" text-anchor="end">0.8 秒 → 末尾に無音を足して 1 秒</text>
 </svg></div>
-    <figcaption>図 3　10 秒のチャンクの例。0.6〜2.4 秒と 2.7〜3.0 秒の声は間が 0.3 秒なのでつながる。6.0 秒の物音（0.1 秒）は前後と 2 秒以上離れていてつながらず、0.2 秒続く声を含まないので捨てる。8.6〜9.0 秒の声は余白を付けて 0.8 秒になり、1 秒に満たないので末尾に無音を足して 1 秒にする。Whisper は区間 1 と区間 2 の 2 回呼ばれる。</figcaption>
+    <figcaption>図 3　10 秒のチャンクの例（録音中は普通 6 秒までだが、遅れているときやファイル文字起こしではこのような長いチャンクになる）。0.6〜2.4 秒と 2.7〜3.0 秒の声は間が 0.3 秒なのでつながる。6.0 秒の物音（0.1 秒）は前後と 2 秒以上離れていてつながらず、0.2 秒続く声を含まないので捨てる。8.6〜9.0 秒の声は余白を付けて 0.8 秒になり、1 秒に満たないので末尾に無音を足して 1 秒にする。Whisper は区間 1 と区間 2 の 2 回呼ばれる。</figcaption>
   </figure>
   <ol class="steps">
     <li>0.1 秒ごとに音の大きさ（RMS）を測り、<strong>0.01</strong> 以上なら「声」とします。0.01 は最大音量の 100 分の 1（−40 dB）です。チャンク全体の平均で判定しないので、長い無音の中の短い発話も拾えます。</li>
-    <li>声と声の間が <strong>2.0 秒未満</strong>ならつないで 1 つの区間にします（息継ぎで発話を切らないため）。</li>
+    <li>声と声の間が <strong>2.0 秒未満</strong>ならつないで 1 つの区間にします（息継ぎで発話を切らないため）。録音中は 0.8 秒の無音でチャンクを区切る（4.1）ので、この値がよく効くのはファイル文字起こしと、遅れているとき（20 秒ずつ）です。</li>
     <li><strong>0.2 秒以上</strong>続く声を 1 つも含まない区間は捨てます（咳払いやクリック音）。</li>
     <li>残った区間の前後に <strong>0.2 秒</strong>の余白を付けます（語頭と語尾を削らないため）。余白で触れ合った区間はつなぎます。</li>
     <li>余白を付けた区間の合計がチャンクの <strong>90% 以上</strong>なら、分けてもほとんど削れないので、チャンク全体を 1 つの区間として渡します。</li>
@@ -634,12 +645,12 @@ footer p { margin: 4px 0; }
 
   <h3>4.5　録音を止めるとき</h3>
   <ol class="steps">
-    <li>まず速報を止めます（最大 <strong>10 秒</strong>待ちます）。</li>
+    <li>速報が動いていれば、まず速報を止めます（最大 <strong>10 秒</strong>待ちます）。</li>
     <li>次に、まだ文字にしていない音声をすべて処理し終えるまで待ちます。待つ時間に上限はありません。音声ファイル（MP3）はすでに保存されているので、文字起こしだけを取りこぼさないためです。</li>
     <li>停止を押した時点で残りが <strong>60 秒分以上</strong>あれば、「すべて処理してから停止しますか？」と確認します。「いいえ」なら残りを文字にせずに止めます（音声ファイルは残ります）。</li>
     <li>待っている間も「打ち切り」で止められます。残りは捨て、処理中の Whisper が抜けるのを最大 <strong>10 秒</strong>待ちます。</li>
   </ol>
-  <p class="reqs">要件：REQ-TRX-05 / 06 / 07 / 08 / 09 / 10、REQ-TRX-LIVE-04 / 05 / 07 / 10〜14 / 19 / 20、REQ-CFG-06 / 13、REQ-REC-07</p>
+  <p class="reqs">要件：REQ-TRX-05 / 06 / 07 / 08 / 09 / 10、REQ-TRX-LIVE-04 / 05 / 07 / 10〜14 / 19 / 20、REQ-CFG-06 / 13 / 15、REQ-REC-07、ADR-0009</p>
 </section>
 
 <!-- ============================================================ 5 -->
@@ -647,10 +658,10 @@ footer p { margin: 4px 0; }
   <h2><span class="no">5</span>速報パス：話している最中の下書き</h2>
 
   <h3>5.1　動く条件</h3>
-  <p>次の 3 つがそろったときだけ動きます。速報用モデルは既定では選ばれていないので、<strong>選ぶまでは速報は出ません</strong>。</p>
+  <p>次の 3 つがそろったときだけ動きます。<strong>既定では「録音中に速報を出す」が OFF で、速報用モデルも選ばれていないので、速報は出ません</strong>（ADR-0009。議事録に残る確定の行を早く出すほうを選んだため）。</p>
   <ol class="steps">
     <li>メインウィンドウの「録音中にライブ文字起こしする」が ON（既定は OFF）</li>
-    <li>設定ウィンドウの「録音中に速報を出す」が ON（既定は ON）</li>
+    <li>設定ウィンドウの「録音中に速報を出す」が ON（既定は OFF）</li>
     <li>設定ウィンドウで速報用モデルを選んである（既定は未選択。推奨は base）</li>
   </ol>
   <p>速報を出す音源は、既定ではスピーカーだけです。<code>settings.json</code> の <code>ProvisionalSources</code> で、マイクだけ（<code>mic</code>）や両方（<code>both</code>）にできます。両方に出すと 1 回の更新でモデルを 2 回呼ぶことになり、実測では遅れが目標（p50 1.2 秒・p95 2.0 秒）に届きませんでした。</p>
@@ -870,7 +881,9 @@ footer p { margin: 4px 0; }
       <thead><tr><th scope="col">値（既定）</th><th scope="col">確定の区切り</th><th scope="col">無音カット（録音中・ファイル）</th><th scope="col">速報の句</th></tr></thead>
       <tbody>
         <tr><th scope="row"><code>SilenceRmsThreshold</code>（0.01）</th><td>末尾の無音の判定</td><td>声かどうかの判定</td><td>声かどうかの判定</td></tr>
-        <tr><th scope="row"><code>SilenceMergeGapSeconds</code>（2.0）</th><td>話し終えたとみなす無音の長さ</td><td>声と声をつなぐ間</td><td>効かない（句は 0.6 秒で閉じる）</td></tr>
+        <tr><th scope="row"><code>SilenceMergeGapSeconds</code>（2.0）</th><td>効かない（区切りは <code>LiveEndpointSilenceSeconds</code>）</td><td>声と声をつなぐ間</td><td>効かない（句は 0.6 秒で閉じる）</td></tr>
+        <tr><th scope="row"><code>LiveEndpointSilenceSeconds</code>（0.8）</th><td>話し終えたとみなす無音の長さ</td><td>効かない</td><td>効かない</td></tr>
+        <tr><th scope="row"><code>LiveChunkMaxSeconds</code>（6.0）</th><td>遅れていないときの上限</td><td>効かない</td><td>効かない（句は 8 秒で閉じる）</td></tr>
         <tr><th scope="row"><code>VoicedPaddingSeconds</code>（0.2）</th><td>効かない</td><td>区間の前後の余白</td><td>効かない（句の前置き 0.2 秒は別の固定値）</td></tr>
         <tr><th scope="row">ライブ文字起こしの言語（日本語）</th><td colspan="2">確定パスの言語</td><td>速報の言語</td></tr>
         <tr><th scope="row">「文字起こしに GPU を使用する」（ON）</th><td colspan="2">確定パスとファイル文字起こしの計算場所</td><td>効かない（常に CPU）</td></tr>
@@ -880,10 +893,11 @@ footer p { margin: 4px 0; }
   <p>下は変えたときの動きの見込みです。コードの規則から読める範囲で、実際の音声では確かめていません。</p>
   <ul class="facts">
     <li><code>SilenceRmsThreshold</code> を上げると、小さな声が無音として捨てられやすくなります。下げると、物音や空調の音まで声とみなし、幻聴が出やすくなります。速報の句も同じ基準で開くので、字幕の出方も変わります。</li>
-    <li><code>SilenceMergeGapSeconds</code> を 1.0 に下げると、確定は 1 秒の無音で区切られるので行が早く出ますが、細切れになり Whisper を呼ぶ回数が増えます。0 にすると、1 秒ごとの確認のたびに末尾がわずかでも無音なら区切り、無音カットも声どうしを一切つながなくなるので、細切れの行が大量に出ます。</li>
+    <li><code>LiveChunkMaxSeconds</code> を 10、<code>LiveEndpointSilenceSeconds</code> を 2.0 に戻すと、以前（ADR-0007）の区切りになります。行は長くまとまりますが、確定の行が出るまで遅くなります（実測で p50 4.9 秒 → 8.3 秒。T199）。<code>LiveEndpointSilenceSeconds</code> を 0 にすると、1 秒ごとの確認のたびに末尾がわずかでも無音なら区切るので、細切れの行が大量に出ます。</li>
+    <li><code>SilenceMergeGapSeconds</code> を下げると、無音カットが声どうしをつながなくなり、区間が細切れになって Whisper を呼ぶ回数が増えます。0 にすると一切つなぎません。</li>
     <li><code>ProvisionalMaxPhraseSeconds</code> を伸ばすと字幕 1 件が長くなり、1 回の読み直しも重くなります。上限の 25 秒は、Whisper が一度に読む範囲（30 秒）に収まる長さです。</li>
   </ul>
-  <p class="reqs">要件：REQ-CFG-06 / 12、REQ-TRX-06 / 09、REQ-TRX-LIVE-13 / 16 / 17</p>
+  <p class="reqs">要件：REQ-CFG-06 / 12 / 15、REQ-TRX-06 / 09、REQ-TRX-LIVE-10 / 13 / 16 / 17</p>
 </section>
 
 <!-- ============================================================ 10 -->
@@ -897,10 +911,10 @@ footer p { margin: 4px 0; }
       <thead><tr><th scope="col">画面の項目</th><th scope="col">場所</th><th scope="col">既定</th><th scope="col">選べる値</th><th scope="col">いつ効くか</th><th scope="col"><code>settings.json</code> のキー</th><th scope="col" class="req">要件</th></tr></thead>
       <tbody>
         <tr><th scope="row">録音中にライブ文字起こしする</th><td>メイン</td><td>OFF</td><td>ON / OFF</td><td><span class="when">次の録音から</span></td><td><code>TranscriptionEnabled</code></td><td class="req">REQ-TRX-LIVE-01</td></tr>
-        <tr><th scope="row">Whisper モデル（ライブ文字起こし）</th><td>設定</td><td><code>ggml-small.bin</code></td><td>登録した一覧から</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>WhisperModelPath</code>（実パス）</td><td class="req">REQ-CFG-04、REQ-MODELWIN-07</td></tr>
+        <tr><th scope="row">Whisper モデル（ライブ文字起こし）</th><td>設定</td><td><code>ggml-small.bin</code></td><td>登録した一覧から（推奨 small-q5_1）</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>WhisperModelPath</code>（実パス）</td><td class="req">REQ-CFG-04 / 08、REQ-MODELWIN-07</td></tr>
         <tr><th scope="row">ライブ文字起こしの言語</th><td>設定</td><td>日本語</td><td>日本語 / 英語</td><td><span class="when">次の録音から</span></td><td><code>LiveTranscriptionLanguage</code>（<code>ja</code>）</td><td class="req">REQ-TRX-LIVE-14</td></tr>
         <tr><th scope="row">文字起こしに GPU を使用する</th><td>設定</td><td>ON</td><td>ON / OFF（GPU が無ければ OFF で固定）</td><td><span class="when now">すぐ</span>（読み込み直す）</td><td><code>UseGpuForTranscription</code></td><td class="req">REQ-GPU-01〜04</td></tr>
-        <tr><th scope="row">録音中に速報を出す</th><td>設定</td><td>ON</td><td>ON / OFF</td><td><span class="when">次の録音から</span></td><td><code>LiveProvisionalEnabled</code></td><td class="req">REQ-CFG-12</td></tr>
+        <tr><th scope="row">録音中に速報を出す</th><td>設定</td><td>OFF</td><td>ON / OFF</td><td><span class="when">次の録音から</span></td><td><code>LiveProvisionalEnabled</code></td><td class="req">REQ-CFG-12</td></tr>
         <tr><th scope="row">速報用モデル</th><td>設定</td><td>未選択</td><td>登録した一覧から（推奨 base）</td><td><span class="when">次の録音から</span></td><td><code>ProvisionalWhisperModelName</code></td><td class="req">REQ-CFG-12</td></tr>
         <tr><th scope="row">用語集</th><td>設定</td><td>空</td><td>1 行 1 語。先頭から 120 文字分を使う</td><td><span class="when">次の録音から</span></td><td><code>TranscriptionGlossary</code></td><td class="req">REQ-CFG-13</td></tr>
         <tr><th scope="row">モデル管理…</th><td>設定</td><td>—</td><td>名前とモデルファイル（<code>.bin</code>）の組</td><td><span class="when now">すぐ</span></td><td><code>WhisperModelList</code></td><td class="req">REQ-CFG-08</td></tr>
@@ -925,8 +939,10 @@ footer p { margin: 4px 0; }
       <tbody>
         <tr class="group"><th colspan="5" scope="rowgroup">無音と区切り（いずれも <span class="when boot">次の起動から</span>）</th></tr>
         <tr><th scope="row"><code>SilenceRmsThreshold</code></th><td class="num">0.01</td><td class="num">0.0〜1.0</td><td>0.1 秒ごとの音の大きさがこれ以上なら声。0.01 は最大音量の 100 分の 1（−40 dB）。確定の区切り・無音カット・速報の句に効く</td><td class="req">REQ-CFG-06、REQ-TRX-06</td></tr>
-        <tr><th scope="row"><code>SilenceMergeGapSeconds</code></th><td class="num">2.0</td><td class="num">0.0〜20.0</td><td>これより短い間はつなぐ。確定パスでは、末尾にこの長さの無音が続いたら話し終えたとみなして区切る</td><td class="req">REQ-CFG-06、REQ-TRX-LIVE-13</td></tr>
+        <tr><th scope="row"><code>SilenceMergeGapSeconds</code></th><td class="num">2.0</td><td class="num">0.0〜20.0</td><td>これより短い間はつなぐ（無音カット。録音中・ファイルとも）。録音中の区切りには使わない（<code>LiveEndpointSilenceSeconds</code>）</td><td class="req">REQ-CFG-06、REQ-TRX-09</td></tr>
         <tr><th scope="row"><code>VoicedPaddingSeconds</code></th><td class="num">0.2</td><td class="num">0.0〜5.0</td><td>声の区間の前後に付ける余白（秒）</td><td class="req">REQ-CFG-06</td></tr>
+        <tr><th scope="row"><code>LiveChunkMaxSeconds</code></th><td class="num">6.0</td><td class="num">2.0〜20.0</td><td>録音中、遅れていないときのチャンクの上限（秒）。話し続けていても、この長さごとに確定の行が出る。遅れているときは 20 秒</td><td class="req">REQ-CFG-15、REQ-TRX-LIVE-10</td></tr>
+        <tr><th scope="row"><code>LiveEndpointSilenceSeconds</code></th><td class="num">0.8</td><td class="num">0.0〜20.0</td><td>録音中、末尾にこの長さの無音が続いたら話し終えたとみなして区切る（秒）。遅れているときは使わない</td><td class="req">REQ-CFG-15、REQ-TRX-LIVE-13</td></tr>
         <tr class="group"><th colspan="5" scope="rowgroup">速報（いずれも <span class="when boot">次の起動から</span>）</th></tr>
         <tr><th scope="row"><code>ProvisionalIntervalSeconds</code></th><td class="num">1.0</td><td class="num">0.5〜4.0</td><td>呼び出しの間隔の下限（秒）</td><td class="req">REQ-CFG-12、REQ-TRX-LIVE-16</td></tr>
         <tr><th scope="row"><code>ProvisionalDutyCap</code></th><td class="num">1.0</td><td class="num">0.1〜1.0</td><td>速報に使ってよい時間の割合。次の間隔＝かかった時間÷この値（4 秒まで）</td><td class="req">REQ-CFG-12、REQ-TRX-LIVE-16</td></tr>
@@ -963,7 +979,7 @@ footer p { margin: 4px 0; }
         <tr><th scope="row">行頭から消す丸括弧書き</th><td>空白を含まない 1〜10 文字</td><td class="req">REQ-TRX-LIVE-20</td></tr>
         <tr class="group"><th colspan="3" scope="rowgroup">確定パス</th></tr>
         <tr><th scope="row">区切りを確かめる間隔</th><td>1 秒</td><td class="req">REQ-TRX-LIVE-04</td></tr>
-        <tr><th scope="row">チャンクの上限</th><td>10 秒（遅れているときは 20 秒）</td><td class="req">REQ-TRX-LIVE-10</td></tr>
+        <tr><th scope="row">遅れているときのチャンクの上限</th><td>20 秒（遅れていないときは <code>LiveChunkMaxSeconds</code>）</td><td class="req">REQ-TRX-LIVE-10</td></tr>
         <tr><th scope="row">遅れているとみなす量</th><td>まだ文字にしていない音声の合計が 60 秒分以上</td><td class="req">REQ-TRX-LIVE-13</td></tr>
         <tr><th scope="row">届かないとみなす時間</th><td>5 秒</td><td class="req">REQ-TRX-LIVE-12</td></tr>
         <tr><th scope="row">途切れとみなす時間</th><td>0.5 秒より長い</td><td class="req">REQ-TRX-LIVE-07</td></tr>
@@ -997,7 +1013,7 @@ footer p { margin: 4px 0; }
   <div class="tbl">
     <table>
       <tbody>
-        <tr><th scope="row">チャンク</th><td>確定パスが 1 回にまとめて扱う音声のひと区切り。録音中は最大 10 秒（遅れているとき 20 秒）、ファイルでは 20 秒。</td></tr>
+        <tr><th scope="row">チャンク</th><td>確定パスが 1 回にまとめて扱う音声のひと区切り。録音中は最大 6 秒（遅れているとき 20 秒）、ファイルでは 20 秒。</td></tr>
         <tr><th scope="row">区間</th><td>チャンクの中から、声のある所だけを抜き出したもの。Whisper にはこの単位で渡す。</td></tr>
         <tr><th scope="row">句</th><td>速報パスが 1 回に読み直す声のかたまり。最大 8 秒。</td></tr>
         <tr><th scope="row">セグメント</th><td>Whisper が返す文のひと区切り。1 つの区間から複数返ることがあり、1 つが 1 行になる。</td></tr>

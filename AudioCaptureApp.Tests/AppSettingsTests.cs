@@ -22,6 +22,9 @@ public class AppSettingsTests
         Assert.Equal(0.01, settings.SilenceRmsThreshold);
         Assert.Equal(2.0, settings.SilenceMergeGapSeconds);
         Assert.Equal(0.2, settings.VoicedPaddingSeconds);
+        // ライブの区切りは T199 で合格した構成（REQ-CFG-15 / ADR-0009）
+        Assert.Equal(6.0, settings.LiveChunkMaxSeconds);
+        Assert.Equal(0.8, settings.LiveEndpointSilenceSeconds);
         // 話者ダイアライゼーションは既定で無効（REQ-TRX-DIA-03）。
         Assert.False(settings.SpeakerDiarizationEnabled);
         Assert.Contains("diarization", settings.SpeakerSegmentationModelPath, StringComparison.Ordinal);
@@ -41,8 +44,8 @@ public class AppSettingsTests
         Assert.Equal(10.0, settings.AutoStartCooldownSeconds);
         // 計測ログは既定で書かない（REQ-CFG-12）
         Assert.False(settings.TranscriptionMetricsLogEnabled);
-        // 速報は既定で ON（利用者の判断 2026-10-11）。ただし速報用モデルは未選択なので、そのままでは動かない（REQ-CFG-12）
-        Assert.True(settings.LiveProvisionalEnabled);
+        // 速報は既定で OFF（REQ-CFG-12 / ADR-0009。以前は ON）。速報用モデルも未選択
+        Assert.False(settings.LiveProvisionalEnabled);
         Assert.Null(settings.ProvisionalWhisperModelName);
         // T182 の実測で合格した組み合わせ
         Assert.Equal(1.0, settings.ProvisionalIntervalSeconds);
@@ -71,6 +74,9 @@ public class AppSettingsTests
             SilenceRmsThreshold = 0.02,
             SilenceMergeGapSeconds = 1.5,
             VoicedPaddingSeconds = 0.3,
+            LiveChunkMaxSeconds = 10.0,
+            LiveEndpointSilenceSeconds = 2.0,
+            LiveProvisionalEnabled = true,
             SpeakerDiarizationEnabled = true,
             SpeakerSegmentationModelPath = @"C:\models\seg.onnx",
             SpeakerEmbeddingModelPath = @"C:\models\emb.onnx",
@@ -92,6 +98,9 @@ public class AppSettingsTests
         Assert.Equal(original.SilenceRmsThreshold, deserialized.SilenceRmsThreshold);
         Assert.Equal(original.SilenceMergeGapSeconds, deserialized.SilenceMergeGapSeconds);
         Assert.Equal(original.VoicedPaddingSeconds, deserialized.VoicedPaddingSeconds);
+        Assert.Equal(original.LiveChunkMaxSeconds, deserialized.LiveChunkMaxSeconds);
+        Assert.Equal(original.LiveEndpointSilenceSeconds, deserialized.LiveEndpointSilenceSeconds);
+        Assert.Equal(original.LiveProvisionalEnabled, deserialized.LiveProvisionalEnabled);
         Assert.Equal(original.SpeakerDiarizationEnabled, deserialized.SpeakerDiarizationEnabled);
         Assert.Equal(original.SpeakerSegmentationModelPath, deserialized.SpeakerSegmentationModelPath);
         Assert.Equal(original.SpeakerEmbeddingModelPath, deserialized.SpeakerEmbeddingModelPath);
@@ -154,5 +163,20 @@ public class AppSettingsTests
         Assert.Equal(Math.Min(4, Environment.ProcessorCount), settings.SpeakerDiarizationThreads);
         // 既存の settings.json に自動開始のキーは無い。OFF のままであること
         Assert.False(settings.AutoStartRecordingEnabled);
+        // 既存の settings.json にライブの区切りのキーは無い。新しい既定で読む（REQ-CFG-15。T200 の既定案）
+        Assert.Equal(6.0, settings.LiveChunkMaxSeconds);
+        Assert.Equal(0.8, settings.LiveEndpointSilenceSeconds);
+        // 速報の導入前の settings.json にはキーが無い。新しい既定（OFF）で読む（REQ-CFG-12）
+        Assert.False(settings.LiveProvisionalEnabled);
+    }
+
+    [Fact]
+    public void JsonDeserialization_SavedProvisionalTrue_IsKept()
+    {
+        // 既定を OFF にしても、保存済みの true は書き換えない（T201 の既定案）
+        var settings = JsonSerializer.Deserialize<AppSettings>("{\"LiveProvisionalEnabled\":true}");
+
+        Assert.NotNull(settings);
+        Assert.True(settings.LiveProvisionalEnabled);
     }
 }

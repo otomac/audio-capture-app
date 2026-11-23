@@ -94,11 +94,23 @@ public class AppSettings
     /// <summary>有声とみなす 100ms 窓の RMS 下限（-40dB 相当）。UI からは変更できない。</summary>
     public double SilenceRmsThreshold { get; set; } = 0.01;
 
-    /// <summary>これ未満の無音を挟む有声区間どうしは結合する（秒）。UI からは変更できない。</summary>
+    /// <summary>
+    /// これ未満の無音を挟む有声区間どうしは結合する（秒。チャンク内の区間分け）。UI からは変更できない。
+    /// ライブの発話終了の判定には使わない（<see cref="LiveEndpointSilenceSeconds"/>。ADR-0009）。
+    /// </summary>
     public double SilenceMergeGapSeconds { get; set; } = 2.0;
 
     /// <summary>有声区間の前後に付ける余白（秒）。UI からは変更できない。</summary>
     public double VoicedPaddingSeconds { get; set; } = 0.2;
+
+    // ---- ライブの確定パスの区切り（REQ-CFG-15、ADR-0009）----
+    // いずれも UI からは変更できない。キーが無い古い設定もこの既定で読む（ADR-0007 の構成に戻すなら 10 / 2.0）。
+
+    /// <summary>遅れていないときのチャンクの上限（秒、2〜20）。既定 6.0（T199 の実測で合格した構成）。</summary>
+    public double LiveChunkMaxSeconds { get; set; } = 6.0;
+
+    /// <summary>末尾にこの長さの無音が続いたら発話が終わったとみなして確定する（秒、0〜20）。既定 0.8。</summary>
+    public double LiveEndpointSilenceSeconds { get; set; } = 0.8;
 
     // ---- 話者ダイアライゼーション（REQ-TRX-DIA-*、ADR-0003）----
     // いずれも UI からは変更できない。settings.json を直接編集して設定する。
@@ -143,10 +155,11 @@ public class AppSettings
     // ---- 速報（REQ-CFG-12 / REQ-TRX-LIVE-15〜17、ADR-0007）----
 
     /// <summary>
-    /// 録音中に速報を出すか。既定は ON（利用者の判断 2026-10-11）。速報用モデル（<see cref="ProvisionalWhisperModelName"/>）が
+    /// 録音中に速報を出すか。既定は OFF（ADR-0009。確定パスだけの 1 段の構成にしたため。以前は ON）。
+    /// 既存の settings.json に保存された値は書き換えない。速報用モデル（<see cref="ProvisionalWhisperModelName"/>）が
     /// 未選択なら、ON でも速報は動かない。UI は設定ウィンドウ。
     /// </summary>
-    public bool LiveProvisionalEnabled { get; set; } = true;
+    public bool LiveProvisionalEnabled { get; set; }
 
     /// <summary>
     /// 速報用モデルの名前（<see cref="WhisperModelList"/> の <c>ModelName</c>）。既定は <c>null</c>（未選択）。

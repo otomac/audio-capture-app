@@ -165,7 +165,7 @@ Styles/Controls.xaml"]
 | ループバックキャプチャコールバック | `WasapiLoopbackCapture.DataAvailable`（NAudio 内部スレッド） | スピーカー音声をバッファへ追加、ピークレベル算出、（録音中は）文字起こしバッファへ追加 |
 | `AudioMixerWriter` | `AudioCaptureService.WriterLoop`（録音中のみ起動する専用 `Thread`） | 20ms 周期でミキサーから読み出し、MP3 へストリーミング書き込み |
 | `WhisperTranscription` | `TranscriptionService.TranscriptionLoop`（ライブ文字起こしセッション中のみ起動する専用 `Thread`） | 1 秒周期で各音声ソースのバッファを確認し、閾値到達分を Whisper で処理 |
-| `ProvisionalTranscription` | `TranscriptionService` の速報ループ（速報が有効なライブ文字起こしセッション中のみ起動する専用 `Thread`。優先度 `BelowNormal`） | 既定 1 秒周期で、まだ確定していない音声を句単位で速報用モデル（**CPU・4 スレッド**）に掛け、速報を通知する（REQ-TRX-LIVE-15〜17）。有声判定もこのスレッドで行う（キャプチャのコールバックは写しへコピーするだけ）。**GPU には触れない**（REQ-GPU-06）。停止時は確定の吐き切りより先に止める（REQ-TRX-LIVE-11） |
+| `ProvisionalTranscription` | `TranscriptionService` の速報ループ（速報を ON にしたライブ文字起こしセッション中のみ起動する専用 `Thread`。**速報の既定は OFF** なので、既定では起動しない — REQ-CFG-12、ADR-0009。優先度 `BelowNormal`） | 既定 1 秒周期で、まだ確定していない音声を句単位で速報用モデル（**CPU・4 スレッド**）に掛け、速報を通知する（REQ-TRX-LIVE-15〜17）。有声判定もこのスレッドで行う（キャプチャのコールバックは写しへコピーするだけ）。**GPU には触れない**（REQ-GPU-06）。停止時は確定の吐き切りより先に止める（REQ-TRX-LIVE-11） |
 | ハードウェアミュート通知 | `AudioEndpointVolume.OnVolumeNotification`（OS コールバック） | OS 側のミュート変更をアプリへ通知（非 UI スレッド） |
 | `Task.Run` ワーカー | `MainViewModel.StopRecordingAsync` / `SettingsViewModel.TryLoadWhisperModel` / `FileTranscriptionViewModel.RunFileTranscriptionAsync` | 録音停止・モデルロード・ファイル文字起こしなど時間のかかる処理を UI スレッドから退避 |
 | sherpa-onnx ネイティブ推論 | `SpeakerDiarizationService.Diarize`（上記 `Task.Run` ワーカーから同期的に呼ぶ） | 話者ダイアライゼーション。`OfflineSpeakerDiarization` はスレッド安全性が保証されていないため、`lock` で 1 度に 1 呼び出しへ直列化する（REQ-TRX-DIA-10） |
@@ -195,8 +195,8 @@ flowchart LR
 flowchart LR
     MicBuf2["マイクコールバック"] -->|"AddSamples(Mic)"| SrcMic["SourceState (Mic)\nダウンミックス+LPF+リサンプル"]
     LoopBuf2["スピーカーコールバック"] -->|"AddSamples(Speaker)"| SrcSpk["SourceState (Speaker)"]
-    SrcMic -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper1["WhisperProcessor"]
-    SrcSpk -->|"10秒分（遅れているときは20秒分）たまったら"| Whisper2["WhisperProcessor"]
+    SrcMic -->|"上限（既定6秒分・遅れているときは20秒分）か\n発話終了の無音（既定0.8秒）で"| Whisper1["WhisperProcessor"]
+    SrcSpk -->|"上限（既定6秒分・遅れているときは20秒分）か\n発話終了の無音（既定0.8秒）で"| Whisper2["WhisperProcessor"]
     Whisper1 --> Txt["*.txt (同名, 追記)"]
     Whisper2 --> Txt
 ```

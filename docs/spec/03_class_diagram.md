@@ -274,6 +274,7 @@ classDiagram
         -Thread _thread
         +bool IsModelLoaded
         +SilenceCutOptions SilenceCut
+        +LiveChunkOptions LiveChunking
         +string LiveLanguage
         +bool MetricsLogEnabled
         +long CurrentSessionId
@@ -392,6 +393,13 @@ classDiagram
         +double MergeGapSeconds
         +double PaddingSeconds
         +SilenceCutOptions Default$
+    }
+
+    class LiveChunkOptions {
+        <<sealed record>>
+        +double MaxChunkSeconds
+        +double EndpointSilenceSeconds
+        +LiveChunkOptions Default$
     }
 
     class FileTranscriptionProgress {
@@ -534,6 +542,8 @@ classDiagram
         +double SilenceRmsThreshold
         +double SilenceMergeGapSeconds
         +double VoicedPaddingSeconds
+        +double LiveChunkMaxSeconds
+        +double LiveEndpointSilenceSeconds
         +bool SpeakerDiarizationEnabled
         +string SpeakerSegmentationModelPath
         +string SpeakerEmbeddingModelPath
@@ -625,6 +635,7 @@ classDiagram
 
     TranscriptionService "1" --> "*" AudioSourceType : キー
     TranscriptionService "1" --> "1" SilenceCutOptions : SilenceCut
+    TranscriptionService "1" --> "1" LiveChunkOptions : LiveChunking
     TranscriptionService ..> VoicedRegion : SplitVoicedRegions が返す
     TranscriptionService ..> SpeakerDiarizationService : TranscribeFileAsync の引数（保持も破棄もしない）
     TranscriptionService ..> TranscriptDiarizationMerger : Merge を呼ぶ

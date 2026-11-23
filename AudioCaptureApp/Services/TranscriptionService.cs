@@ -75,7 +75,7 @@ public sealed record TranscriptionLanguage(string Code, string DisplayName);
 /// </summary>
 /// <remarks>
 /// Whisper が扱う 99 言語をすべて並べることはしない。
-/// **自動判定はファイル側にのみ置く** — ライブ経路は 20 秒チャンク（REQ-TRX-LIVE-10）で
+/// **自動判定はファイル側にのみ置く** — ライブ経路は最大 6 秒（遅れているときは 20 秒）のチャンク（REQ-TRX-LIVE-10）で
 /// 言語検出が誤りやすいと考えられるが、その誤検出率を実測していないためである。
 /// 設定値は手編集され得るので、`SilenceCutOptions` などと同じく必ず正規化して使う。
 /// </remarks>
@@ -283,17 +283,6 @@ public partial class TranscriptionService : IDisposable
     private const int BufferThresholdSamples = TargetRate * 20; // 20秒分
 
     /// <summary>
-    /// ライブ文字起こしで、遅れていないときのチャンクの上限（10 秒分。REQ-TRX-LIVE-10、T190）。
-    /// 遅れているときは <see cref="BufferThresholdSamples"/>（20 秒分）に戻す。
-    /// </summary>
-    /// <remarks>
-    /// 話し続けていると末尾無音の契機（REQ-TRX-LIVE-13）が来ないため、確定はこの上限ごとにしか出ない。
-    /// 20 秒では遅すぎるので 10 秒にする。1 回の呼び出しが短いほど割高になる（音声 1 秒あたり 20 秒入力 0.181 秒 /
-    /// 5 秒入力 0.381 秒）ので、遅れているときは処理能力を優先して 20 秒に戻す。
-    /// </remarks>
-    internal const int LiveChunkSamples = TargetRate * 10;
-
-    /// <summary>
     /// 音声の供給が途切れたと判定する閾値。これを超えるギャップを検出したら、
     /// そこまでのバッファを 1 チャンクとして確定し、次チャンクの基準時刻を打ち直す。
     /// </summary>
@@ -385,6 +374,17 @@ public partial class TranscriptionService : IDisposable
 
     /// <summary>無音カットの調整値。MainViewModel が設定から反映する。</summary>
     public SilenceCutOptions SilenceCut { get; set; } = SilenceCutOptions.Default;
+
+    /// <summary>
+    /// ライブの確定パスの区切り（遅れていないときの上限と発話終了の無音。REQ-CFG-15、ADR-0009）。
+    /// MainViewModel が設定から反映する。ポーリングのたびに読む。
+    /// </summary>
+    /// <remarks>
+    /// 話し続けていると発話終了の契機（REQ-TRX-LIVE-13）が来ないため、確定は上限ごとにしか出ない。
+    /// 上限を短くすると確定は早く出るが、1 回の呼び出しが短いほど割高になる（音声 1 秒あたり 20 秒入力 0.181 秒 /
+    /// 5 秒入力 0.381 秒）ので、遅れているときは処理能力を優先して 20 秒（<see cref="BufferThresholdSamples"/>）に戻す。
+    /// </remarks>
+    public LiveChunkOptions LiveChunking { get; set; } = LiveChunkOptions.Default;
 
     /// <summary>
     /// ライブ文字起こしの言語（REQ-TRX-LIVE-14）。MainViewModel が設定から反映する。
@@ -1579,7 +1579,8 @@ public partial class TranscriptionService : IDisposable
                 // バックログを全部捌き切るまで抜けず、StopSession がタイムアウトする（T117）。
                 PendingChunk? chunk;
                 while (_isRunning && !token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut, PendingBufferedSamples())) != null)
+                       && (chunk = TakeNextChunk(
+                           state, _sessionClock.Elapsed, SilenceCut, LiveChunking, PendingBufferedSamples())) != null)
                 {
                     // 停止要求が来ても、取り出したチャンクは最後の区間まで処理する（T184）。
                     // バッファからは既に消えているので、途中で抜けると残りの区間を捨てることになる。
@@ -1595,7 +1596,8 @@ public partial class TranscriptionService : IDisposable
             {
                 PendingChunk? chunk;
                 while (!token.IsCancellationRequested
-                       && (chunk = TakeNextChunk(state, _sessionClock.Elapsed, SilenceCut, PendingBufferedSamples())) != null)
+                       && (chunk = TakeNextChunk(
+                           state, _sessionClock.Elapsed, SilenceCut, LiveChunking, PendingBufferedSamples())) != null)
                 {
                     // 排出処理。打ち切りたいときは token をキャンセルする（StopSession の「打ち切り」）。
                     ProcessChunkCounted(chunk, state, token);
@@ -1651,18 +1653,22 @@ public partial class TranscriptionService : IDisposable
     /// 確定済みチャンクを 1 つ取り出す。無ければバッファから 1 チャンク切り出す。
     /// どちらも無ければ <c>null</c>。
     /// </summary>
+    /// <param name="options">有声判定の閾値（<see cref="SilenceCutOptions.RmsThreshold"/>）だけを使う。</param>
+    /// <param name="chunking">
+    /// 遅れていないときの上限と発話終了の無音（REQ-CFG-15）。<see cref="SilenceCutOptions.MergeGapSeconds"/> は使わない（ADR-0009）。
+    /// </param>
     /// <param name="pendingSamples">
     /// 全ソースの確定待ちの合計（<see cref="PendingBufferedSamples"/>）。遅れているかの判定に使う（REQ-TRX-LIVE-13）。
     /// </param>
     /// <remarks>
     /// 遅れの判定に <paramref name="state"/> 自身の分だけを使ってはいけない（T183）。確定済みチャンクは
-    /// 先に返すので判定時には残っておらず、未確定バッファも上限（10 秒分または 20 秒分）以上なら先に上限で切り出すため、
+    /// 先に返すので判定時には残っておらず、未確定バッファも上限（<paramref name="chunking"/> の上限または 20 秒分）以上なら先に上限で切り出すため、
     /// 判定時の自ソース分は常に 20 秒未満で、60 秒の閾値に届かない。
     /// <paramref name="pendingSamples"/> はこの錠の外で数えて渡す。中で数えると
     /// <see cref="PendingSeconds"/>（<c>_sourcesLock</c> → 各ソースの錠）と錠の順序が逆になる。
     /// </remarks>
     internal static PendingChunk? TakeNextChunk(
-        SourceState state, TimeSpan nowElapsed, SilenceCutOptions options, long pendingSamples)
+        SourceState state, TimeSpan nowElapsed, SilenceCutOptions options, LiveChunkOptions chunking, long pendingSamples)
     {
         lock (state.BufferLock)
         {
@@ -1684,7 +1690,8 @@ public partial class TranscriptionService : IDisposable
                 state.Pcm16kBuffer.Count,
                 nowElapsed - state.BufferEndElapsed,
                 TrailingSilenceSamples(state.Pcm16kBuffer, options.RmsThreshold),
-                SecondsToSamples(options.MergeGapSeconds),
+                SecondsToSamples(chunking.EndpointSilenceSeconds),
+                SecondsToSamples(chunking.MaxChunkSeconds),
                 pendingSamples >= BacklogSuppressEndpointingSamples);
             if (take == 0)
             {
@@ -1750,7 +1757,13 @@ public partial class TranscriptionService : IDisposable
     /// 末尾の連続無音サンプル数。バッファ全体が無音なら <c>null</c>
     /// （<see cref="TrailingSilenceSamples"/> の戻り値）。
     /// </param>
-    /// <param name="endpointSilenceSamples">発話が終わったとみなす末尾無音の長さ。</param>
+    /// <param name="endpointSilenceSamples">
+    /// 発話が終わったとみなす末尾無音の長さ（<see cref="LiveChunkOptions.EndpointSilenceSeconds"/>。REQ-TRX-LIVE-13）。
+    /// </param>
+    /// <param name="liveChunkSamples">
+    /// 遅れていないときの上限（<see cref="LiveChunkOptions.MaxChunkSeconds"/>。REQ-TRX-LIVE-10）。
+    /// <see cref="BufferThresholdSamples"/> より大きければ <see cref="BufferThresholdSamples"/> で切る。
+    /// </param>
     /// <param name="behind">
     /// 文字起こしが遅れているか（全ソースの滞留が <see cref="BacklogSuppressEndpointingSamples"/> 以上。REQ-TRX-LIVE-13）。
     /// </param>
@@ -1758,8 +1771,8 @@ public partial class TranscriptionService : IDisposable
     /// 契機は 3 つあり、この優先順で判定する。
     /// <list type="number">
     /// <item>上限までたまった → 上限の分だけ切り出す（1 回の Whisper 呼び出しを
-    /// 際限なく長くしないための上限。T117）。上限は遅れていなければ <see cref="LiveChunkSamples"/>（10 秒分）、
-    /// 遅れていれば <see cref="BufferThresholdSamples"/>（20 秒分。T190）。</item>
+    /// 際限なく長くしないための上限。T117）。上限は遅れていなければ <paramref name="liveChunkSamples"/>（既定 6 秒分。
+    /// T190 で 20 → 10 秒、ADR-0009 で 10 → 6 秒）、遅れていれば <see cref="BufferThresholdSamples"/>（20 秒分）。</item>
     /// <item>末尾に <paramref name="endpointSilenceSamples"/> 以上の無音が積まれ、かつ
     /// バッファ内に有声窓がある → 発話が終わったとみなしてバッファ全部を切り出す（T129）。</item>
     /// <item>供給が <see cref="StaleSupplyIdle"/> 以上途絶えている → バッファ全部を切り出す（T120）。</item>
@@ -1771,10 +1784,10 @@ public partial class TranscriptionService : IDisposable
     /// <para>
     /// 2 が無いと、マイクは無音でも WASAPI がサンプルを供給し続けるため
     /// ギャップ分割（<see cref="ShouldSplitOnGap"/>）も 3 も発火せず、出力粒度が上限で固定になる。
-    /// 保持時間に <see cref="SilenceCutOptions.MergeGapSeconds"/> と同じ値を渡すのは、
-    /// それが <see cref="SplitVoicedRegions"/> で「発話の切れ目」を定義している値そのものだからで、
-    /// 揃えれば確定チャンクは有声区間ちょうど 1 個を含む形になり、Whisper の呼び出し回数は
-    /// この契機の導入前と変わらない。
+    /// 保持時間は <see cref="SplitVoicedRegions"/> の <see cref="SilenceCutOptions.MergeGapSeconds"/>（2.0 秒）とは別の値
+    /// （<see cref="LiveChunkOptions.EndpointSilenceSeconds"/>、既定 0.8 秒）である（ADR-0009）。以前は揃えて
+    /// 確定チャンクが有声区間ちょうど 1 個を含む形にしていたが、話し終えてから確定まで 2 秒待つことになるため、
+    /// ライブだけ短くした。0.8〜2.0 秒の間を挟む発話は別々のチャンクに分かれうる。
     /// </para>
     /// <para>
     /// バッファ全体が無音（<paramref name="trailingSilenceSamples"/> が <c>null</c>）なら
@@ -1792,10 +1805,14 @@ public partial class TranscriptionService : IDisposable
         TimeSpan supplyIdle,
         int? trailingSilenceSamples,
         int endpointSilenceSamples,
+        int liveChunkSamples,
         bool behind = false)
     {
-        // REQ-TRX-LIVE-10: 遅れていなければ 10 秒、遅れていれば 20 秒で切る（T190）。
-        int limit = behind ? BufferThresholdSamples : LiveChunkSamples;
+        // REQ-TRX-LIVE-10: 遅れていなければ設定の上限（既定 6 秒）、遅れていれば 20 秒で切る（T190 / ADR-0009）。
+        // 設定は LiveChunkOptions で 2〜20 秒に収めてあるが、0 以下で毎回 0 サンプルを返す事故を防ぐため、ここでも収める。
+        int limit = behind
+            ? BufferThresholdSamples
+            : Math.Clamp(liveChunkSamples, MinWhisperSamples, BufferThresholdSamples);
         if (bufferedSampleCount >= limit)
         {
             return limit;
@@ -1814,7 +1831,7 @@ public partial class TranscriptionService : IDisposable
         // null（＝全体が無音）はここで確定しない。1 で切り出され、有声区間 0 件として捨てられる。
         // 末尾無音が測れている＝有声窓が 1 つ以上あるので、最小長は自動的に満たす
         // （有声 100ms + 無音 > 0.2 秒）ため MinTailSamples は見ない。
-        // 0 サンプルを弾くのは、MergeGapSeconds に 0 を設定されたときに
+        // 0 サンプルを弾くのは、LiveEndpointSilenceSeconds に 0 を設定されたときに
         // 有声のまま（発話の途中で）毎ポーリング確定してしまうのを防ぐため。
         if (trailingSilenceSamples is int trailingSilence
             && trailingSilence > 0 && trailingSilence >= endpointSilenceSamples)

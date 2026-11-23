@@ -136,6 +136,9 @@
                 </TextBlock>
 
                 <TextBlock Text="登録時にはファイルがあることだけを確認します。モデルとして読み込めるかどうかは、実際に選んだときに分かります。"
+                           Style="{StaticResource Text.Caption}" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                <!-- REQ-MODELWIN-09 / REQ-CFG-08: ライブ用の推奨モデルの案内（ADR-0009）。自動で入手・登録はしない -->
+                <TextBlock Text="ライブ文字起こしの推奨は small-q5_1 です（whisper.cpp の models\download-ggml-model.cmd small-q5_1 で入手できます）。"
                            Style="{StaticResource Text.Caption}" Margin="0,0,0,8" TextWrapping="Wrap"/>
 
                 <!-- 主ボタン 1 つがモードで切り替わる。選択中に「追加」を押せる状態を作らない（T172） -->
