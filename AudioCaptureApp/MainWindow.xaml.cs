@@ -38,6 +38,7 @@ public partial class MainWindow : Window, IDisposable
         _viewModel.SettingsRequested += ShowSettings;
         _viewModel.RecordingMetadataRequested += ShowRecordingMetadata;
         _viewModel.StopConfirmationRequested += ConfirmStop;
+        _viewModel.SilenceWarningRequested += ShowSilenceWarning;
         Closing += MainWindow_Closing;
         Closed += (_, _) => Dispose();
     }
@@ -117,6 +118,27 @@ public partial class MainWindow : Window, IDisposable
         {
             _viewModel.IsModalDialogOpen = false;
         }
+    }
+
+    /// <summary>
+    /// 無音が続いたときの警告（REQ-REC-14）。録音は止めない。
+    /// 要求はレベルメーターのタイマーの中から来るので、タイマーの処理を抜けてから出す
+    /// （タイマーの中で入れ子のメッセージループを回さない）。
+    /// </summary>
+    private void ShowSilenceWarning(string message)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            _viewModel.IsModalDialogOpen = true;
+            try
+            {
+                MessageBox.Show(this, message, "音声キャプチャ", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                _viewModel.IsModalDialogOpen = false;
+            }
+        });
     }
 
     /// <summary>

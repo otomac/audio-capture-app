@@ -115,6 +115,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.AutoStartSustainSeconds,
             _settings.AutoStartCooldownSeconds,
             _settings.AutoStartDipGraceSeconds));
+        _silenceWarningOptions = new SilenceWarningOptions(
+            _settings.SilenceWarningSeconds,
+            _settings.SilenceWarningThresholdDb);
+        _silenceWarningTrigger = new SilenceWarningTrigger(_silenceWarningOptions);
 
         // 子 ViewModel は設定を読んだ直後に作る。以降の初期化（ライブ文字起こしの ON/OFF など）が子を使うため。
         Settings = new SettingsViewModel(this);

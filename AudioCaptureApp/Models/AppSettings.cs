@@ -85,6 +85,17 @@ public class AppSettings
     /// <summary>録音が止まってからこの秒数は自動開始しない（0〜600）。UI からは変更できない。</summary>
     public double AutoStartCooldownSeconds { get; set; } = 10.0;
 
+    // ---- 無音の警告（REQ-REC-14 / REQ-CFG-16）----
+
+    /// <summary>
+    /// 録音中にマイクとスピーカーの両方が無音のままこの秒数続いたら警告する（10〜3600）。
+    /// 0 以下なら警告しない。UI からは変更できない。
+    /// </summary>
+    public double SilenceWarningSeconds { get; set; } = 60.0;
+
+    /// <summary>無音とみなすレベル（dB、−59〜−20）。この値未満を無音とする。UI からは変更できない。</summary>
+    public double SilenceWarningThresholdDb { get; set; } = -50.0;
+
     /// <summary>
     /// 参加者（REQ-META-04）の並び替えで最後に回すメールドメイン（REQ-CFG-11）。既定は空＝無し。
     /// 特定の組織に紐づく値をソースに持ち込まないため、設定で与える。UI からは変更できない。

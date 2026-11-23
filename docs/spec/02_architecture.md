@@ -139,7 +139,7 @@ Styles/Controls.xaml"]
   - `SettingsViewModel.OnMainPropertyChanged` — 親の `IsNotBusy` の変化を、設定ウィンドウの表示と操作の可否へ中継する。
 
   再評価の契機は、①1 つの ViewModel の全ファイル合計が 1,500 行を超えたとき、②中継が 3 か所目になったとき（ADR-0008 規則 8）。
-- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`, `AutoStartTrigger`, `RecordingMetadataFile`（static））
+- **Service層**（`Services/AudioCaptureService`, `TranscriptionService`, `SpeakerDiarizationService`, `TranscriptDiarizationMerger`, `SettingsService`, `AutoStartTrigger`, `SilenceWarningTrigger`, `RecordingMetadataFile`（static））
   NAudio・Whisper.net・ファイル I/O など外部リソースを直接操作する。ViewModel から独立してテスト可能な static ヘルパー（`BytesToFloats` / `CalculatePeak` / `SplitVoicedRegions` など）を公開し、`AudioCaptureApp.Tests` から `InternalsVisibleTo` 経由で検証する。
 - **Model層**（`Models/AudioDevice`, `RecordingSession`, `AppSettings`, `WhisperModelEntry`, `RecordingMetadata`, `SpeakerSegment` / `TranscriptSegment` / `SpeakerAttributedSegment`）
   可変・不変データを保持する POCO。ロジックを持たない。
