@@ -190,7 +190,11 @@ public enum FileTranscriptionOutcome
 /// </summary>
 /// <param name="Outcome">結末。</param>
 /// <param name="Message"><see cref="FileTranscriptionOutcome.ModelLoadFailed"/> のときの理由。それ以外は <c>null</c>。</param>
-public sealed record FileTranscriptionResult(FileTranscriptionOutcome Outcome, string? Message = null)
+/// <param name="OutputPath">
+/// <see cref="FileTranscriptionOutcome.Completed"/> のときに書き出したファイル（連番の別名を含む。REQ-TRX-FILE-05）。それ以外は <c>null</c>。
+/// </param>
+public sealed record FileTranscriptionResult(
+    FileTranscriptionOutcome Outcome, string? Message = null, string? OutputPath = null)
 {
     /// <summary>最後まで書き出せたか。</summary>
     public bool Success => Outcome == FileTranscriptionOutcome.Completed;
@@ -886,7 +890,8 @@ public partial class TranscriptionService : IDisposable
             factory = loaded;
         }
 
-        string outputPath = BuildTranscriptPath(audioFilePath, options.MeetingName);
+        // 前の結果を上書きしない（REQ-TRX-FILE-05 / T208）
+        string outputPath = BuildAvailableTranscriptPath(audioFilePath, options.MeetingName, File.Exists);
         var startOffset = options.StartOffset;
         var language = options.Language;
         try
@@ -901,7 +906,9 @@ public partial class TranscriptionService : IDisposable
                     factory, audioFilePath, outputPath, startOffset, language, options.KnownSpeakerCount,
                     diarization, progress, ct);
             var ok = await work.ConfigureAwait(false);
-            return new FileTranscriptionResult(ok ? FileTranscriptionOutcome.Completed : FileTranscriptionOutcome.Failed);
+            return ok
+                ? new FileTranscriptionResult(FileTranscriptionOutcome.Completed, OutputPath: outputPath)
+                : new FileTranscriptionResult(FileTranscriptionOutcome.Failed);
         }
         catch (OperationCanceledException)
         {
@@ -1420,6 +1427,32 @@ public partial class TranscriptionService : IDisposable
     /// </summary>
     internal static string BuildTranscriptPath(string audioFilePath, string? meetingName)
         => RecordingMetadataFile.WithMeetingName(BuildTranscriptPath(audioFilePath), meetingName);
+
+    /// <summary>
+    /// 既存のファイルを上書きしない出力パス（REQ-TRX-FILE-05 / T208）。
+    /// <see cref="BuildTranscriptPath(string, string?)"/> の名前が空いていればそれを、
+    /// 埋まっていれば `a.transcript (2).txt`、`(3)`… のうち空いている最小の番号を返す。
+    /// 番号を `.transcript` と `.txt` の間に入れるのは、stem を変えずにメタデータ JSON を同じものに保つため（REQ-META-01）。
+    /// </summary>
+    /// <param name="exists">パスが既に使われているか（本番は <see cref="File.Exists(string?)"/>）。</param>
+    internal static string BuildAvailableTranscriptPath(string audioFilePath, string? meetingName, Func<string, bool> exists)
+    {
+        var path = BuildTranscriptPath(audioFilePath, meetingName);
+        if (!exists(path))
+        {
+            return path;
+        }
+
+        var withoutTxt = Path.ChangeExtension(path, null);   // a.transcript.txt → a.transcript
+        for (var number = 2; ; number++)
+        {
+            var candidate = $"{withoutTxt} ({number.ToString(CultureInfo.InvariantCulture)}).txt";
+            if (!exists(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
 
     /// <summary>
     /// 音声ファイルの作成日時・最終更新日時を読む（REQ-TRX-FILE-15 の②③）。

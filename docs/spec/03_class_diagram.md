@@ -303,6 +303,7 @@ classDiagram
         +SplitVoicedRegions(float[], SilenceCutOptions) IReadOnlyList~VoicedRegion~
         +AppendTranscriptLines(string, IReadOnlyList~string~) string
         +BuildTranscriptPath(string) string
+        +BuildAvailableTranscriptPath(string, string?, Func~string,bool~) string$
         +TryGetAudioDuration(string, out TimeSpan) bool$
         +AudioContextFor(double) int$
         +NextProvisionalInterval(double, ProvisionalOptions) double$
@@ -423,6 +424,7 @@ classDiagram
         <<sealed record>>
         +FileTranscriptionOutcome Outcome
         +string? Message
+        +string? OutputPath
     }
 
     class TranscriptionLanguage {

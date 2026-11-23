@@ -94,6 +94,40 @@ public class RecordingMetadataFileTests
             RecordingMetadataFile.BuildMetadataPath(audio), RecordingMetadataFile.BuildMetadataPath(transcript));
     }
 
+    // --- 既存の文字起こし結果を上書きしない (REQ-TRX-FILE-05 / T208) ---
+
+    [Fact]
+    public void BuildAvailableTranscriptPath_Free_ReturnsPlainName()
+    {
+        Assert.Equal(@"C:\in\a_定例.transcript.txt",
+            TranscriptionService.BuildAvailableTranscriptPath(@"C:\in\a.m4a", "定例", _ => false));
+    }
+
+    [Fact]
+    public void BuildAvailableTranscriptPath_Taken_ReturnsSmallestFreeNumber()
+    {
+        // (2) も埋まっていれば (3)。(4) が空いていても飛ばさず最小の番号を使う
+        var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            @"C:\in\a.transcript.txt",
+            @"C:\in\a.transcript (2).txt",
+        };
+
+        Assert.Equal(@"C:\in\a.transcript (3).txt",
+            TranscriptionService.BuildAvailableTranscriptPath(@"C:\in\a.mp3", null, taken.Contains));
+    }
+
+    [Fact]
+    public void BuildAvailableTranscriptPath_Numbered_SharesMetadataPathWithPlainName()
+    {
+        // 番号は stem の後ろに入るので、メタデータ JSON は番号の無い結果・音声と同じものを指す（REQ-META-01）
+        var audio = @"C:\out\20260922_100000_定例.mp3";
+        var numbered = TranscriptionService.BuildAvailableTranscriptPath(audio, "定例", path => !path.Contains('(', StringComparison.Ordinal));
+
+        Assert.Equal(@"C:\out\20260922_100000_定例.transcript (2).txt", numbered);
+        Assert.Equal(RecordingMetadataFile.BuildMetadataPath(audio), RecordingMetadataFile.BuildMetadataPath(numbered));
+    }
+
     // --- 実施日時の既定 (REQ-REC-13) ---
 
     [Fact]

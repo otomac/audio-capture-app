@@ -255,7 +255,7 @@ flowchart TB
 | 録音ファイル | `<OutputFolder>\yyyyMMdd_HHmmss.mp3`（既定 `%USERPROFILE%\Documents\AudioCapture`）。メタデータの会議名があれば停止後に `yyyyMMdd_HHmmss_会議名.mp3` へ改名 | `AudioCaptureService.StartRecording` / `RenameSessionFiles` |
 | ライブ文字起こし結果 | 録音ファイルと同名の `.txt` | `TranscriptionService.StartSession` |
 | 文字起こしの計測ログ（既定は書かない） | `%APPDATA%\AudioCaptureApp\logs\metrics_yyyyMMdd_HHmmss.tsv`（録音ごと。数値だけで本文は書かない。REQ-CFG-12） | `TranscriptionMetricsLog`（`TranscriptionMetricsLogEnabled` が `true` のときだけ） |
-| ファイル文字起こし結果 | `{入力ファイル名}[_会議名].transcript.txt` | `TranscriptionService.BuildTranscriptPath` |
+| ファイル文字起こし結果 | `{入力ファイル名}[_会議名].transcript.txt`。既にあれば `.transcript (2).txt` のように連番を付ける（REQ-TRX-FILE-05） | `TranscriptionService.BuildAvailableTranscriptPath` |
 | 録音のメタデータ | 音声（改名後）または `.transcript.txt` と同名の `.json`（`会議名` / `実施日時` / `参加者`）。ファイル文字起こしでは入力ファイルと同じ stem の `.json` を読み込み、既存の `.json` は更新する（REQ-TRX-FILE-19） | `RecordingMetadataFile.Write` / `TryRead` / `Update` |
 | Whisper モデル | 既定 `%APPDATA%\AudioCaptureApp\models\ggml-small.bin`（ユーザー変更可）。登録一覧は `settings.json` の `WhisperModelList` | `AppSettings.WhisperModelPath` / `WhisperModelList` |
 

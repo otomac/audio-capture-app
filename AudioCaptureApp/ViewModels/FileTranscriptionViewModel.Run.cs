@@ -148,7 +148,8 @@ public sealed partial class FileTranscriptionViewModel
                 filePath, options, diarization, progress, token));
             if (result.Success)
             {
-                var txtPath = TranscriptionService.BuildTranscriptPath(filePath, MetadataMeetingName);
+                // 既存のファイルがあれば連番の別名になっている（REQ-TRX-FILE-05 / T208）
+                var txtPath = result.OutputPath ?? TranscriptionService.BuildTranscriptPath(filePath, MetadataMeetingName);
                 FileTranscriptionStatus = "完了";
                 _main.StatusMessage = $"文字起こし完了: {txtPath}";
                 _main.LastResultPath = txtPath;   // REQ-OPEN-01

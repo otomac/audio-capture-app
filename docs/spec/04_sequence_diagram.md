@@ -279,7 +279,7 @@ sequenceDiagram
         loop 有声区間ごと
             TS->>TS: WhisperProcessor.ProcessAsync(region)
             TS->>TS: セグメント毎に [時刻][ラベル]テキスト を整形（startOffset + chunkOffset + 区間先頭のオフセット を基準に加算）
-            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt
+            TS->>TS: StreamWriter.WriteLineAsync(line) → {入力ファイル名}.transcript.txt（既にあれば連番の別名。REQ-TRX-FILE-05）
         end
         TS->>TS: FlushAsync()
         TS-->>FVM: progress.Report("処理中", processed, total) ※ファイル先頭基準（startOffset を足さない）
