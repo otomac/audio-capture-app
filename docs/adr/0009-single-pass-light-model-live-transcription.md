@@ -114,11 +114,11 @@ T199 の実測（案 A と今の構成。今の構成は速報なしで測った
 
 本 ADR の承認時には仕様を変えない。次は後続タスクで、実装の前に直す（法 2）。
 
-- [ ] `docs/spec/01_requirements.md` — REQ-TRX-LIVE-04 / 10 / 13（遅れていないときの上限と、ライブの発話終了の無音を設定にする）、
+- [x] `docs/spec/01_requirements.md` — REQ-TRX-LIVE-04 / 10 / 13（遅れていないときの上限と、ライブの発話終了の無音を設定にする）、
   REQ-CFG に 2 つの設定を新設（既定 6 秒 / 0.8 秒）、REQ-CFG-06（ライブと共用しないことを明記）、REQ-CFG-08 / REQ-MODELWIN（small-q5_1 を推奨として案内）— T200。
   REQ-CFG-12（速報の既定を OFF）・REQ-TRX-LIVE-15 — T201
-- [ ] `docs/spec/02_architecture.md` — §4 スレッド表の `ProvisionalTranscription` を「速報を ON にしたときだけ起動（既定 OFF）」に — T201
-- [ ] `docs/spec/03_class_diagram.md` — 新しい設定のメンバー — T200
-- [ ] `docs/harness/20-architecture-standards.md` — 変更なし（GPU 推論は 1 本の列のまま。スレッドの種類も減らさない）
-- [ ] `CLAUDE.md` — 変更なし（3 層構成・依存方向・ライブラリは変えない）
+- [x] `docs/spec/02_architecture.md` — §4 スレッド表の `ProvisionalTranscription` を「速報を ON にしたときだけ起動（既定 OFF）」に — T201
+- [x] `docs/spec/03_class_diagram.md` — 新しい設定のメンバー — T200（T200 / T201 で反映。2026-11-23。あわせて 04 のラベル・05 の値と図 2・REQ-CFG-15 / REQ-MODELWIN-09 の新設も行った）
+- [x] `docs/harness/20-architecture-standards.md` — 変更なし（GPU 推論は 1 本の列のまま。スレッドの種類も減らさない）
+- [x] `CLAUDE.md` — 変更なし（3 層構成・依存方向・ライブラリは変えない）
 - [x] `docs/adr/0007-two-pass-live-transcription.md` / `docs/adr/README.md` — 本 ADR の承認時に 0007 を「置換済み（→ 0009）」にした（T199 の C2。2026-11-23）

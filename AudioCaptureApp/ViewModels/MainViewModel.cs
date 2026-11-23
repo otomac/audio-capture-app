@@ -131,6 +131,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.SilenceRmsThreshold,
             _settings.SilenceMergeGapSeconds,
             _settings.VoicedPaddingSeconds);
+        // REQ-CFG-15: ライブの区切り（遅れていないときの上限・発話終了の無音）。UI 無し・起動時に固定
+        _transcriptionService.LiveChunking = new LiveChunkOptions(
+            _settings.LiveChunkMaxSeconds,
+            _settings.LiveEndpointSilenceSeconds);
         // REQ-CFG-12: 計測ログと速報の調整値。読まれるのは録音開始時（StartSession）だけ
         _transcriptionService.MetricsLogEnabled = _settings.TranscriptionMetricsLogEnabled;
         _transcriptionService.ProvisionalEnabled = _settings.LiveProvisionalEnabled;
