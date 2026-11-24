@@ -1,4 +1,5 @@
 using AudioCaptureApp.Services;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 namespace AudioCaptureApp.Tests;
@@ -188,5 +189,52 @@ public class AudioCaptureServiceTests
     {
         // 定数が仕様（REQ-LVL-05 の 200ms）から動いていないことを固定する
         Assert.Equal(200, AudioCaptureService.LoopbackSilenceTimeoutMs);
+    }
+
+    // --- デバイスの表示名の読み方 (T215) ---
+
+    private static readonly Guid OtherFormat = new("11111111-2222-3333-4444-555555555555");
+
+    [Fact]
+    public void IndexOfKey_Found_ReturnsIndexAndStopsScanning()
+    {
+        var keys = new[]
+        {
+            new PropertyKey(OtherFormat, 1),
+            PropertyKeys.PKEY_Device_FriendlyName,
+            new PropertyKey(OtherFormat, 2),
+        };
+        var reads = new List<int>();
+
+        var index = AudioCaptureService.IndexOfKey(keys.Length, i => { reads.Add(i); return keys[i]; }, PropertyKeys.PKEY_Device_FriendlyName);
+
+        Assert.Equal(1, index);
+        Assert.Equal([0, 1], reads);
+    }
+
+    [Fact]
+    public void IndexOfKey_NotFound_ReturnsMinusOneAfterReadingEachKeyOnce()
+    {
+        var keys = Enumerable.Range(0, 170).Select(i => new PropertyKey(OtherFormat, i)).ToArray();
+        var reads = new List<int>();
+
+        var index = AudioCaptureService.IndexOfKey(keys.Length, i => { reads.Add(i); return keys[i]; }, PropertyKeys.PKEY_Device_FriendlyName);
+
+        Assert.Equal(-1, index);
+        Assert.Equal(Enumerable.Range(0, 170), reads);
+    }
+
+    [Fact]
+    public void IndexOfKey_MatchesBothFormatIdAndPropertyId()
+    {
+        var target = PropertyKeys.PKEY_Device_FriendlyName;
+        var keys = new[]
+        {
+            new PropertyKey(target.formatId, target.propertyId + 1),
+            new PropertyKey(OtherFormat, target.propertyId),
+            target,
+        };
+
+        Assert.Equal(2, AudioCaptureService.IndexOfKey(keys.Length, i => keys[i], target));
     }
 }
