@@ -216,8 +216,11 @@ dotnet run --project AudioCaptureApp
 ### 発行（スタンドアローン .exe）
 
 ```bash
-dotnet publish AudioCaptureApp/AudioCaptureApp.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o publish
+dotnet publish AudioCaptureApp/AudioCaptureApp.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
+
+`publish` には `AudioCaptureApp.exe` のほかに `runtimes\`（Whisper の実行ランタイム）と `libmp3lame.*.dll` ができます。
+どちらも exe と同じフォルダに置いたまま使ってください（exe だけを移すと文字起こしと MP3 の保存が動きません）。
 
 ## 設定ファイル
 

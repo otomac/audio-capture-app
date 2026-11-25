@@ -12,7 +12,7 @@
 | 話者ダイアライゼーション | sherpa-onnx 1.13.5（`org.k2fsa.sherpa.onnx`、ネイティブランタイムは win-x64 のみ同梱）。ファイル文字起こし経路でのみ使用し、既定は無効（[ADR-0003](../adr/0003-speaker-diarization-with-sherpa-onnx.md)） |
 | 設定永続化 | System.Text.Json（`settings.json`） |
 | テスト | xUnit（`AudioCaptureApp.Tests`） |
-| 配布 | win-x64 の self-contained 発行（.NET ランタイム同梱の zip）。同梱ランタイムのうち `System.Net.Mail.dll` は未使用のため除外する（ウイルスバスターがメールクライアント機能として警告するため。T180）。**`System.Net.Mail` 名前空間は使わない** — 使うなら `AudioCaptureApp.csproj` の除外ターゲットを外すこと。zip の直下（`AudioCaptureApp.exe` と同じ階層）には発行物に加えて `VERSION` と `README.md` を同梱する（T189）。`VERSION` はリポジトリ直下のファイルで、リリースバージョンを 1 行で書く（リリースタグ `release_<バージョン>` の `<バージョン>` 部分。例 `2026.09.23`）。`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI が失敗する |
+| 配布 | win-x64 の self-contained 発行（.NET ランタイム同梱の zip）。**単一ファイル**（`PublishSingleFile` + `IncludeNativeLibrariesForSelfExtract`）で発行し、zip の直下には `AudioCaptureApp.exe` のほか、**exe に入れないもの**だけを置く（T205）: Whisper.net のネイティブランタイム `runtimes\`（cuda / vulkan / CPU の win-x64 だけ。Whisper.net はアプリのフォルダの `runtimes\` から探すため、exe に入れると読み込めない）と、LAME の `libmp3lame.*.dll`（LGPL。差し替えられる別ファイルのまま置く）。それ以外のネイティブ DLL（sherpa-onnx・onnxruntime・WPF）は exe に入り、初回起動時に `%TEMP%\.net\AudioCaptureApp\` へ展開される。win-x64 以外のランタイム（linux-x64・win-arm64・win-x86）は発行しない。同梱ランタイムのうち `System.Net.Mail.dll` は未使用のため除外する（ウイルスバスターがメールクライアント機能として警告するため。T180）。**`System.Net.Mail` 名前空間は使わない** — 使うなら `AudioCaptureApp.csproj` の除外ターゲットを外すこと。zip の直下（`AudioCaptureApp.exe` と同じ階層）には発行物に加えて `VERSION` と `README.md` を同梱する（T189）。`VERSION` はリポジトリ直下のファイルで、リリースバージョンを 1 行で書く（リリースタグ `release_<バージョン>` の `<バージョン>` 部分。例 `2026.09.23`）。`release_*` タグのビルドでは `VERSION` がタグと一致しなければ CI が失敗する |
 
 ## 2. レイヤー構成
 

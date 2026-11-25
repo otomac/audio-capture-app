@@ -64,10 +64,24 @@
     </ItemGroup>
   </Target>
 
-  <!-- PublishSingleFile 時: 不要な runtimes (arm64/x86) と .pdb を削除 -->
+  <!--
+    PublishSingleFile 時（T205）: Whisper.net のネイティブランタイム（runtimes\...）は exe に入れず、exe の隣に置く。
+    Whisper.net はアプリのフォルダの runtimes\ からランタイムを探すため、exe に入れて一時フォルダへ展開させると
+    見つけられず、モデルを読み込めない（実測）。CUDA / Vulkan の DLL は 100MB を超え、初回起動の展開も遅くなる。
+    win-x64 以外（linux-x64・win-arm64・win-x86）のランタイムは使わないので発行しない。
+    LAME（libmp3lame.*.dll、LGPL）も exe に入れず、今までどおり差し替えられる別ファイルのまま隣に置く。
+  -->
+  <Target Name="KeepNativeRuntimesBesideSingleFile" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes')) And !$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Contains('win-x64'))" />
+      <ResolvedFileToPublish Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('runtimes')) Or $([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').StartsWith('libmp3lame'))">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
+  <!-- PublishSingleFile 時: .pdb を削除 -->
   <Target Name="CleanPublishOutput" AfterTargets="Publish" Condition="'$(PublishSingleFile)' == 'true'">
-    <RemoveDir Directories="$(PublishDir)runtimes\win-arm64" />
-    <RemoveDir Directories="$(PublishDir)runtimes\win-x86" />
     <Delete Files="$(PublishDir)AudioCaptureApp.pdb" />
   </Target>
 

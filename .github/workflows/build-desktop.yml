@@ -95,6 +95,8 @@ jobs:
           /p:CoverletOutput="./TestResults/coverage/"
           /p:CoverletOutputFormat="cobertura"
 
+      # 単一ファイルで発行する (T205)。Whisper の runtimes\ と libmp3lame.*.dll だけは exe に入れず隣に置く
+      # (AudioCaptureApp.csproj の KeepNativeRuntimesBesideSingleFile)。
       - name: Publish desktop app
         shell: pwsh
         run: >
@@ -102,6 +104,8 @@ jobs:
           -c $env:CONFIGURATION
           -r $env:RUNTIME
           --self-contained $env:SELF_CONTAINED
+          /p:PublishSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
           /p:DebugType=None
           /p:DebugSymbols=false
           -o "./publish"
